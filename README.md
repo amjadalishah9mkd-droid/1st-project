@@ -1,14 +1,43 @@
-# 1st Project
+# CampusOS
 
-A small, dependency-free web application configured for Alloy development sessions.
+Unified digital platform for colleges — admins, teachers and students in one
+professional SaaS workspace. Built per the **CampusOS Final Technical
+Blueprint v1.0** (the source of truth for architecture decisions).
 
-## Run with Alloy Compose
+## Stack
+
+- **Web**: Next.js (App Router), React, TypeScript, Tailwind CSS — `apps/web` (port 3000)
+- **API**: NestJS REST (`/api/v1`), TypeScript — `apps/api` (port 4000)
+- **Database**: PostgreSQL 16 + Prisma ORM (port 5432)
+- **Shared**: `packages/shared` — Zod schemas, enums, permission matrix, event contracts
+
+## Run (Alloy / Docker)
 
 ```sh
+bash .alloy/populate-env.sh
 docker compose -f docker-compose.alloy.yaml up -d
 ```
 
-The application listens on port `3000`. In an Alloy session, open the preview at
-`http://localhost:8080`.
+The API container installs dependencies, builds the shared package, applies
+Prisma migrations, runs the system + demo seeds and starts in watch mode. The
+web app starts once shared artifacts exist. In an Alloy session, open the
+preview at `http://localhost:8080`.
 
-The service exposes a health check at `http://localhost:3000/health`.
+- Web: `http://localhost:3000` (login at `/login`)
+- API health: `http://localhost:4000/api/v1/health`
+
+## Demo accounts (development only)
+
+| Role | Email | Password |
+|---|---|---|
+| Admin | `admin@campusos.dev` | `CampusOS!demo1` |
+| Teacher | `teacher@campusos.dev` | `CampusOS!demo1` |
+| Student | `student@campusos.dev` | `CampusOS!demo1` |
+
+Sign-in is delivered in Milestone M1 (Authentication & Access).
+
+## Milestone status
+
+- **M0 — Foundation**: complete (monorepo, full schema + migration, seeds,
+  API bootstrap with envelopes + health, web shell + login page, Docker/Alloy)
+- M1+ — pending approval per blueprint §13

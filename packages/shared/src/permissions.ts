@@ -1,0 +1,175 @@
+import { PermissionScope, RoleKey } from './enums';
+
+/**
+ * Permission catalog (Blueprint §5).
+ * These keys are seeded into the `Permission` table and referenced by
+ * `RolePermission` rows. All authorization flows through
+ * PolicyService.can(user, key, context) — never hardcoded role checks.
+ */
+export const PERMISSIONS = {
+  USERS_MANAGE: 'users.manage',
+  USERS_READ: 'users.read',
+  ACADEMICS_MANAGE: 'academics.manage',
+  ACADEMICS_READ: 'academics.read',
+  ENROLLMENT_MANAGE: 'enrollment.manage',
+  TIMETABLE_MANAGE: 'timetable.manage',
+  TIMETABLE_READ: 'timetable.read',
+  ATTENDANCE_RECORD: 'attendance.record',
+  ATTENDANCE_READ: 'attendance.read',
+  ASSIGNMENTS_MANAGE: 'assignments.manage',
+  ASSIGNMENTS_READ: 'assignments.read',
+  ASSIGNMENTS_SUBMIT: 'assignments.submit',
+  ASSIGNMENTS_GRADE: 'assignments.grade',
+  EXAMS_MANAGE: 'exams.manage',
+  MARKS_ENTER: 'marks.enter',
+  RESULTS_PUBLISH: 'results.publish',
+  RESULTS_READ: 'results.read',
+  FEES_MANAGE: 'fees.manage',
+  FEES_READ: 'fees.read',
+  COMMUNITY_PARTICIPATE: 'community.participate',
+  COMMUNITY_GROUPS_CREATE: 'community.groups.create',
+  COMMUNITY_SOCIETIES_MANAGE: 'community.societies.manage',
+  COMMUNITY_EVENTS_CREATE: 'community.events.create',
+  COMMUNITY_REPORT: 'community.report',
+  MODERATION_ACT: 'moderation.act',
+  ANNOUNCEMENTS_CREATE: 'announcements.create',
+  SETTINGS_MANAGE: 'settings.manage',
+  DASHBOARD_ADMIN: 'dashboard.admin',
+  DASHBOARD_TEACHER: 'dashboard.teacher',
+  DASHBOARD_STUDENT: 'dashboard.student',
+} as const;
+
+export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
+
+export const PERMISSION_DESCRIPTIONS: Record<PermissionKey, string> = {
+  'users.manage': 'Create, update, archive and suspend user accounts',
+  'users.read': 'View user directories and profiles',
+  'academics.manage':
+    'Manage departments, courses, academic years, terms and sections',
+  'academics.read': 'View academic structure',
+  'enrollment.manage': 'Enroll/withdraw students and assign teachers to sections',
+  'timetable.manage': 'Create and edit timetable slots',
+  'timetable.read': 'View timetables',
+  'attendance.record': 'Take and edit attendance for class sessions',
+  'attendance.read': 'View attendance records and summaries',
+  'assignments.manage': 'Create, edit, publish and delete assignments',
+  'assignments.read': 'View assignments',
+  'assignments.submit': 'Submit work for assignments',
+  'assignments.grade': 'Grade assignment submissions',
+  'exams.manage': 'Create and schedule exams and papers',
+  'marks.enter': 'Enter and edit draft marks',
+  'results.publish': 'Publish exam results (locks marks)',
+  'results.read': 'View exam results',
+  'fees.manage': 'Manage fee structures, invoices and payments',
+  'fees.read': 'View fee invoices and payment history',
+  'community.participate': 'Post, comment, like and RSVP in the community',
+  'community.groups.create': 'Create community groups',
+  'community.societies.manage': 'Charter, edit and archive societies',
+  'community.events.create': 'Create campus-wide events',
+  'community.report': 'Report community content',
+  'moderation.act': 'Act on reports: remove, warn, suspend, restore',
+  'announcements.create': 'Publish announcements',
+  'settings.manage': 'Manage college settings, terms and grade bands',
+  'dashboard.admin': 'View the admin dashboard',
+  'dashboard.teacher': 'View the teacher dashboard',
+  'dashboard.student': 'View the student dashboard',
+};
+
+export interface RolePermissionGrant {
+  role: RoleKey;
+  permission: PermissionKey;
+  scope: PermissionScope;
+}
+
+/**
+ * Role → permission → scope matrix (Blueprint §5). Seeded into RolePermission.
+ * Absence of a row means denied.
+ */
+export const ROLE_PERMISSION_MATRIX: RolePermissionGrant[] = [
+  // ── ADMIN ──────────────────────────────────────────────
+  { role: 'ADMIN', permission: 'users.manage', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'users.read', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'academics.manage', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'academics.read', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'enrollment.manage', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'timetable.manage', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'timetable.read', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'attendance.record', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'attendance.read', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'assignments.manage', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'assignments.read', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'assignments.grade', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'exams.manage', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'marks.enter', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'results.publish', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'results.read', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'fees.manage', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'fees.read', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'community.participate', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'community.groups.create', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'community.societies.manage', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'community.events.create', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'community.report', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'moderation.act', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'announcements.create', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'settings.manage', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'dashboard.admin', scope: 'ALL' },
+
+  // ── TEACHER ────────────────────────────────────────────
+  { role: 'TEACHER', permission: 'users.read', scope: 'ASSIGNED' },
+  { role: 'TEACHER', permission: 'academics.read', scope: 'ALL' },
+  { role: 'TEACHER', permission: 'timetable.read', scope: 'OWN' },
+  { role: 'TEACHER', permission: 'attendance.record', scope: 'ASSIGNED' },
+  { role: 'TEACHER', permission: 'attendance.read', scope: 'ASSIGNED' },
+  { role: 'TEACHER', permission: 'assignments.manage', scope: 'ASSIGNED' },
+  { role: 'TEACHER', permission: 'assignments.read', scope: 'ASSIGNED' },
+  { role: 'TEACHER', permission: 'assignments.grade', scope: 'ASSIGNED' },
+  { role: 'TEACHER', permission: 'marks.enter', scope: 'ASSIGNED' },
+  { role: 'TEACHER', permission: 'results.read', scope: 'ASSIGNED' },
+  { role: 'TEACHER', permission: 'community.participate', scope: 'ALL' },
+  { role: 'TEACHER', permission: 'community.groups.create', scope: 'ALL' },
+  { role: 'TEACHER', permission: 'community.events.create', scope: 'ALL' },
+  { role: 'TEACHER', permission: 'community.report', scope: 'ALL' },
+  { role: 'TEACHER', permission: 'announcements.create', scope: 'ASSIGNED' },
+  { role: 'TEACHER', permission: 'dashboard.teacher', scope: 'OWN' },
+
+  // ── STUDENT ────────────────────────────────────────────
+  { role: 'STUDENT', permission: 'users.read', scope: 'OWN' },
+  { role: 'STUDENT', permission: 'academics.read', scope: 'OWN' },
+  { role: 'STUDENT', permission: 'timetable.read', scope: 'OWN' },
+  { role: 'STUDENT', permission: 'attendance.read', scope: 'OWN' },
+  { role: 'STUDENT', permission: 'assignments.read', scope: 'OWN' },
+  { role: 'STUDENT', permission: 'assignments.submit', scope: 'OWN' },
+  { role: 'STUDENT', permission: 'results.read', scope: 'OWN' },
+  { role: 'STUDENT', permission: 'fees.read', scope: 'OWN' },
+  { role: 'STUDENT', permission: 'community.participate', scope: 'OWN' },
+  { role: 'STUDENT', permission: 'community.groups.create', scope: 'ALL' },
+  { role: 'STUDENT', permission: 'community.report', scope: 'ALL' },
+  { role: 'STUDENT', permission: 'dashboard.student', scope: 'OWN' },
+];
+
+/**
+ * Route → required permission map (Blueprint §8).
+ * Single source of truth for the Next.js middleware (redirects) and the
+ * sidebar builder (visibility). Longest-prefix match wins.
+ */
+export const ROUTE_PERMISSIONS: Record<string, PermissionKey | null> = {
+  '/dashboard': null, // any authenticated user; content is role-dispatched
+  '/students': 'users.read',
+  '/teachers': 'users.read',
+  '/departments': 'academics.manage',
+  '/courses': 'academics.read',
+  '/sections': 'academics.read',
+  '/timetable': 'timetable.read',
+  '/attendance': 'attendance.read',
+  '/assignments': 'assignments.read',
+  '/exams': 'marks.enter',
+  '/results': 'results.read',
+  '/fees': 'fees.read',
+  '/community': 'community.participate',
+  '/moderation': 'moderation.act',
+  '/announcements': null,
+  '/notifications': null,
+  '/settings': 'settings.manage',
+  '/profile': null,
+};

@@ -1,0 +1,23 @@
+{
+  "name": "campusos",
+  "private": true,
+  "version": "0.1.0",
+  "description": "CampusOS — unified college management platform",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build:shared": "npm run build -w @campusos/shared",
+    "dev:api": "npm run start:dev -w @campusos/api",
+    "dev:web": "npm run dev -w @campusos/web",
+    "prisma:generate": "npm run prisma:generate -w @campusos/api",
+    "prisma:migrate": "npm run prisma:migrate -w @campusos/api",
+    "prisma:deploy": "npm run prisma:deploy -w @campusos/api",
+    "db:seed": "npm run db:seed -w @campusos/api",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
