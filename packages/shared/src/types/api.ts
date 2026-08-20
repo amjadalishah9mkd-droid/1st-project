@@ -46,6 +46,36 @@ export interface CurrentUser {
   permissions: PermissionGrant[];
 }
 
+/** Extended /me payload: profile + college + role profile + live counters. */
+export interface MePayload extends CurrentUser {
+  college: { id: string; name: string; code: string };
+  teacherProfile: {
+    id: string;
+    employeeNo: string;
+    designation: string;
+    departmentId: string;
+    departmentName: string;
+  } | null;
+  studentProfile: {
+    id: string;
+    admissionNo: string;
+    rollNo: string;
+    batch: string;
+    departmentId: string;
+    departmentName: string;
+    status: string;
+  } | null;
+  counters: {
+    unreadNotifications: number;
+  };
+}
+
+/** Payload of POST /auth/login and /auth/refresh. */
+export interface AuthPayload {
+  accessToken: string;
+  user: MePayload;
+}
+
 /** Health endpoint payload. */
 export interface HealthStatus {
   status: 'ok';

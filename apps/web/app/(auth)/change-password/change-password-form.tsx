@@ -2,20 +2,14 @@
 
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { loginSchema } from '@campusos/shared';
+import { changePasswordSchema } from '@campusos/shared';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSession } from '@/components/providers/session-provider';
-import { ApiError } from '@/lib/api/client';
+import { apiFetch, ApiError } from '@/lib/api/client';
 
-/**
- * Login form (M1).
- * Client-side validation runs against the shared `loginSchema` — the exact
- * schema the API validates with. On success the access token is held in
- * memory only; the refresh token arrives as an httpOnly cookie.
- */
-export function LoginForm() {
-  const { login } = useSession();
+export function ChangePasswordForm() {
+  const { user, status, refreshUser, logout } = useSession();
   const router = useRouter();
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -26,9 +20,9 @@ export function LoginForm() {
     setFormError(null);
 
     const formData = new FormData(event.currentTarget);
-    const result = loginSchema.safeParse({
-      email: formData.get('email'),
-      password: formData.get('password'),
+    const result = changePasswordSchema.safeParse({
+      currentPassword: formData.get('currentPassword'),
+      newPassword: formData.get('newPassword'),
     });
     if (!result.success) {
       const errors: Record<string, string> = {};
@@ -42,35 +36,55 @@ export function LoginForm() {
     setFieldErrors({});
     setSubmitting(true);
     try {
-      const user = await login(result.data);
-      router.push(user.mustChangePassword ? '/change-password' : '/dashboard');
+      await apiFetch('/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify(result.data),
+      });
+      await refreshUser();
+      router.push('/dashboard');
     } catch (error) {
       setFormError(
         error instanceof ApiError
           ? error.message
-          : 'Unable to sign in. Please try again.',
+          : 'Unable to change password. Please try again.',
       );
       setSubmitting(false);
     }
   }
 
+  if (status === 'loading') {
+    return (
+      <p className="mt-8 text-sm text-ink-muted" role="status">
+        Restoring your session…
+      </p>
+    );
+  }
+
+  if (status === 'unauthenticated') {
+    router.push('/login');
+    return null;
+  }
+
   return (
     <form onSubmit={handleSubmit} className="mt-8 flex flex-col gap-5" noValidate>
+      {user ? (
+        <p className="text-sm text-ink-muted">
+          Signed in as <span className="font-medium text-ink">{user.email}</span>
+        </p>
+      ) : null}
       <Input
-        label="Email"
-        name="email"
-        type="email"
-        placeholder="you@college.edu"
-        autoComplete="email"
-        error={fieldErrors.email}
+        label="Current password"
+        name="currentPassword"
+        type="password"
+        autoComplete="current-password"
+        error={fieldErrors.currentPassword}
       />
       <Input
-        label="Password"
-        name="password"
+        label="New password"
+        name="newPassword"
         type="password"
-        placeholder="••••••••••"
-        autoComplete="current-password"
-        error={fieldErrors.password}
+        autoComplete="new-password"
+        error={fieldErrors.newPassword}
       />
 
       {formError ? (
@@ -83,8 +97,15 @@ export function LoginForm() {
       ) : null}
 
       <Button type="submit" disabled={submitting}>
-        {submitting ? 'Signing in…' : 'Sign in'}
+        {submitting ? 'Saving…' : 'Change password'}
       </Button>
+      <button
+        type="button"
+        onClick={() => void logout()}
+        className="text-sm text-ink-muted underline-offset-2 hover:text-ink hover:underline"
+      >
+        Sign out instead
+      </button>
     </form>
   );
 }

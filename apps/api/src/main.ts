@@ -1,5 +1,7 @@
+import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
+import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { EnvelopeInterceptor } from './common/interceptors/envelope.interceptor';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
@@ -11,6 +13,9 @@ async function bootstrap(): Promise<void> {
 
   // Blueprint §7: all routes served under /api/v1
   app.setGlobalPrefix('api/v1');
+
+  // Refresh tokens travel as httpOnly cookies (Blueprint §9)
+  app.use(cookieParser());
 
   // Uniform success envelope + uniform error envelope (Blueprint §7)
   app.useGlobalInterceptors(new EnvelopeInterceptor());

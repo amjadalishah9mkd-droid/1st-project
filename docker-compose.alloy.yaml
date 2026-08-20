@@ -31,6 +31,8 @@ services:
       IS_ALLOY: ${IS_ALLOY:-false}
       NPM_CONFIG_FUND: "false"
       NPM_CONFIG_AUDIT: "false"
+    env_file:
+      - apps/api/.env
     depends_on:
       postgres:
         condition: service_healthy

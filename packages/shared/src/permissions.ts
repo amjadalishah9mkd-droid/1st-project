@@ -173,3 +173,37 @@ export const ROUTE_PERMISSIONS: Record<string, PermissionKey | null> = {
   '/settings': 'settings.manage',
   '/profile': null,
 };
+
+/**
+ * Longest-prefix route → permission resolution.
+ * Returns undefined when the path is not governed by the map.
+ */
+export function matchRoutePermission(
+  pathname: string,
+): PermissionKey | null | undefined {
+  let match: string | undefined;
+  for (const prefix of Object.keys(ROUTE_PERMISSIONS)) {
+    if (
+      (pathname === prefix || pathname.startsWith(`${prefix}/`)) &&
+      (!match || prefix.length > match.length)
+    ) {
+      match = prefix;
+    }
+  }
+  return match === undefined ? undefined : ROUTE_PERMISSIONS[match];
+}
+
+/**
+ * Role-level grant lookup against the seeded matrix.
+ * This is the same single source that seeds RolePermission — the frontend
+ * middleware uses it as a routing hint only; the API resolves authorization
+ * from the database on every request.
+ */
+export function roleHasPermission(
+  role: RoleKey,
+  permission: PermissionKey,
+): boolean {
+  return ROLE_PERMISSION_MATRIX.some(
+    (grant) => grant.role === role && grant.permission === permission,
+  );
+}
