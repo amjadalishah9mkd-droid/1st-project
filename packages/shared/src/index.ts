@@ -3,4 +3,7 @@ export * from './permissions';
 export * from './events';
 export * from './schemas/common';
 export * from './schemas/auth';
+export * from './schemas/people';
+export * from './schemas/academics';
 export * from './types/api';
+export * from './types/academics';

@@ -155,8 +155,8 @@ export const ROLE_PERMISSION_MATRIX: RolePermissionGrant[] = [
  */
 export const ROUTE_PERMISSIONS: Record<string, PermissionKey | null> = {
   '/dashboard': null, // any authenticated user; content is role-dispatched
-  '/students': 'users.read',
-  '/teachers': 'users.read',
+  '/students': 'users.manage', // directory management pages are admin surfaces;
+  '/teachers': 'users.manage', // teachers reach rosters via the section hub
   '/departments': 'academics.manage',
   '/courses': 'academics.read',
   '/sections': 'academics.read',

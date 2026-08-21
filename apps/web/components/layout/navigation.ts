@@ -19,7 +19,12 @@ export interface NavItem {
  */
 const IMPLEMENTED_ROUTES: Array<{ href: string; label: string }> = [
   { href: '/dashboard', label: 'Dashboard' },
-  // M2+: students, teachers, departments, courses, sections, …
+  { href: '/students', label: 'Students' },
+  { href: '/teachers', label: 'Teachers' },
+  { href: '/departments', label: 'Departments' },
+  { href: '/courses', label: 'Courses' },
+  { href: '/sections', label: 'Sections' },
+  // M3+: timetable, attendance, assignments, exams, …
 ];
 
 export function navItemsFor(

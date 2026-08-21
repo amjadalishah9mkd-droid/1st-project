@@ -80,6 +80,21 @@ export class PolicyService {
     this.grantCache.clear();
   }
 
+  /**
+   * Returns the scope granted to the user's role for a permission, or null
+   * when denied. Services use this to self-scope list queries per the
+   * OWN/ASSIGNED list-level contract.
+   */
+  async scopeFor(
+    user: AuthenticatedUser,
+    permissionKey: PermissionKey,
+  ): Promise<PermissionScope | null> {
+    if (user.status !== 'ACTIVE') return null;
+    const grants = await this.grantsForRole(user.role);
+    return grants.find((entry) => entry.key === permissionKey)?.scope ?? null;
+  }
+
+
   async can(
     user: AuthenticatedUser,
     permissionKey: PermissionKey,

@@ -5,11 +5,12 @@ import { HealthModule } from './health/health.module';
 import { AuditModule } from './audit/audit.module';
 import { AccessModule } from './access/access.module';
 import { AuthModule } from './auth/auth.module';
+import { UsersModule } from './users/users.module';
+import { AcademicsModule } from './academics/academics.module';
 
 /**
- * Module graph through M1: infrastructure + auth & access.
- * Feature modules (users, academics, …) are added per milestone as defined
- * in Blueprint §6/§13 — none are stubbed here.
+ * Module graph through M2: infrastructure + auth/access + academic core.
+ * Remaining feature modules are added per milestone (Blueprint §6/§13).
  */
 @Module({
   imports: [
@@ -18,6 +19,8 @@ import { AuthModule } from './auth/auth.module';
     AuditModule,
     AccessModule,
     AuthModule,
+    UsersModule,
+    AcademicsModule,
     HealthModule,
   ],
 })
