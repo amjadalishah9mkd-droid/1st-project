@@ -24,7 +24,9 @@ const IMPLEMENTED_ROUTES: Array<{ href: string; label: string }> = [
   { href: '/departments', label: 'Departments' },
   { href: '/courses', label: 'Courses' },
   { href: '/sections', label: 'Sections' },
-  // M3+: timetable, attendance, assignments, exams, …
+  { href: '/timetable', label: 'Timetable' },
+  { href: '/attendance', label: 'Attendance' },
+  // M4+: assignments, exams, …
 ];
 
 export function navItemsFor(

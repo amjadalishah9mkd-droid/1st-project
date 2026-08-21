@@ -7,10 +7,14 @@ import { AccessModule } from './access/access.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { AcademicsModule } from './academics/academics.module';
+import { EventsModule } from './events/events.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { TimetableModule } from './timetable/timetable.module';
+import { AttendanceModule } from './attendance/attendance.module';
 
 /**
- * Module graph through M2: infrastructure + auth/access + academic core.
- * Remaining feature modules are added per milestone (Blueprint §6/§13).
+ * Module graph through M3: infrastructure + auth/access + academic core +
+ * timetable & attendance + event-driven notification rows.
  */
 @Module({
   imports: [
@@ -21,6 +25,10 @@ import { AcademicsModule } from './academics/academics.module';
     AuthModule,
     UsersModule,
     AcademicsModule,
+    EventsModule,
+    NotificationsModule,
+    TimetableModule,
+    AttendanceModule,
     HealthModule,
   ],
 })

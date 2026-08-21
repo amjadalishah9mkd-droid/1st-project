@@ -3,13 +3,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import type {
-  SectionOverview,
-  StudentItem,
-  TeacherItem,
+import {
+  createSlotSchema,
+  type SectionOverview,
+  type StudentItem,
+  type TeacherItem,
 } from '@campusos/shared';
 import { apiFetch, ApiError } from '@/lib/api/client';
 import { useOptions } from '@/lib/hooks/use-list';
+import { formValues, useZodForm } from '@/lib/hooks/use-zod-form';
 import { useSession } from '@/components/providers/session-provider';
 import { useToast } from '@/components/providers/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
@@ -17,6 +19,7 @@ import { EmptyState, ErrorState, Skeleton } from '@/components/data/data-table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog, Dialog } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 
 const DAY_NAMES = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -26,6 +29,7 @@ export default function SectionHubPage() {
   const params = useParams<{ id: string }>();
   const { hasPermission } = useSession();
   const canEnroll = hasPermission('enrollment.manage');
+  const canManageTimetable = hasPermission('timetable.manage');
   const { toast } = useToast();
   const [overview, setOverview] = useState<SectionOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +37,8 @@ export default function SectionHubPage() {
   const [tab, setTab] = useState<Tab>('roster');
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
+  const [slotOpen, setSlotOpen] = useState(false);
+  const [slotRemoval, setSlotRemoval] = useState<{ id: string; label: string } | null>(null);
   const [removal, setRemoval] = useState<
     | { kind: 'student'; id: string; name: string }
     | { kind: 'teacher'; id: string; name: string }
@@ -128,15 +134,19 @@ export default function SectionHubPage() {
             </button>
           ))}
         </div>
-        {canEnroll ? (
+        {canEnroll || canManageTimetable ? (
           <div className="flex gap-2 pb-2">
-            {tab === 'roster' ? (
+            {tab === 'roster' && canEnroll ? (
               <Button size="sm" onClick={() => setEnrollOpen(true)}>
                 Enroll student
               </Button>
-            ) : tab === 'teachers' ? (
+            ) : tab === 'teachers' && canEnroll ? (
               <Button size="sm" onClick={() => setAssignOpen(true)}>
                 Assign teacher
+              </Button>
+            ) : tab === 'timetable' && canManageTimetable ? (
+              <Button size="sm" onClick={() => setSlotOpen(true)}>
+                Add slot
               </Button>
             ) : null}
           </div>
@@ -220,7 +230,11 @@ export default function SectionHubPage() {
         ) : overview.timetableSlots.length === 0 ? (
           <EmptyState
             title="No timetable yet"
-            message="Weekly slots for this section are managed in the timetable module (Milestone M3)."
+            message={
+              canManageTimetable
+                ? 'Add weekly slots for this section.'
+                : 'Weekly slots for this section have not been scheduled yet.'
+            }
           />
         ) : (
           <ul className="divide-y divide-line">
@@ -230,7 +244,23 @@ export default function SectionHubPage() {
                 <span>
                   {slot.startTime} – {slot.endTime}
                 </span>
-                <span className="text-ink-muted">{slot.room ?? overview.room ?? ''}</span>
+                <span className="flex-1 text-ink-muted">
+                  {slot.room ?? overview.room ?? ''}
+                </span>
+                {canManageTimetable ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      setSlotRemoval({
+                        id: slot.id,
+                        label: `${DAY_NAMES[slot.dayOfWeek]} ${slot.startTime}–${slot.endTime}`,
+                      })
+                    }
+                  >
+                    Delete
+                  </Button>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -277,6 +307,43 @@ export default function SectionHubPage() {
         </>
       ) : null}
 
+      {canManageTimetable ? (
+        <>
+          <AddSlotDialog
+            open={slotOpen}
+            sectionId={params.id}
+            defaultRoom={overview.room}
+            onClose={() => setSlotOpen(false)}
+            onDone={() => {
+              setSlotOpen(false);
+              toast('Slot added');
+              load();
+            }}
+          />
+          <ConfirmDialog
+            open={slotRemoval !== null}
+            title="Delete slot"
+            message={`Delete the ${slotRemoval?.label} slot? Slots with existing sessions cannot be deleted.`}
+            confirmLabel="Delete"
+            onConfirm={async () => {
+              if (!slotRemoval) return;
+              try {
+                await apiFetch(`/timetable/slots/${slotRemoval.id}`, {
+                  method: 'DELETE',
+                });
+                toast('Slot deleted');
+                setSlotRemoval(null);
+                load();
+              } catch (err) {
+                toast(err instanceof ApiError ? err.message : 'Delete failed', 'error');
+                setSlotRemoval(null);
+              }
+            }}
+            onClose={() => setSlotRemoval(null)}
+          />
+        </>
+      ) : null}
+
       <p className="mt-4 text-xs text-ink-muted">
         Course status: {overview.course.status} ·{' '}
         <Link href={`/courses/${overview.course.id}`} className="text-brand-700 hover:underline">
@@ -284,6 +351,86 @@ export default function SectionHubPage() {
         </Link>
       </p>
     </div>
+  );
+}
+
+function AddSlotDialog({
+  open,
+  sectionId,
+  defaultRoom,
+  onClose,
+  onDone,
+}: {
+  open: boolean;
+  sectionId: string;
+  defaultRoom: string | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const form = useZodForm(createSlotSchema);
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const raw = formValues(event.currentTarget);
+    raw.sectionId = sectionId;
+    const input = form.validate(raw);
+    if (!input) return;
+    const done = await form.submit(async () => {
+      await apiFetch('/timetable/slots', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    });
+    if (done) onDone();
+  }
+
+  return (
+    <Dialog
+      open={open}
+      title="Add timetable slot"
+      description="Conflicts within this section and room clashes in the same term are rejected."
+      onClose={onClose}
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
+        <Select
+          label="Day"
+          name="dayOfWeek"
+          options={[
+            { value: '1', label: 'Monday' },
+            { value: '2', label: 'Tuesday' },
+            { value: '3', label: 'Wednesday' },
+            { value: '4', label: 'Thursday' },
+            { value: '5', label: 'Friday' },
+            { value: '6', label: 'Saturday' },
+            { value: '7', label: 'Sunday' },
+          ]}
+          error={form.fieldErrors.dayOfWeek}
+        />
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Start time" name="startTime" type="time" error={form.fieldErrors.startTime} />
+          <Input label="End time" name="endTime" type="time" error={form.fieldErrors.endTime} />
+        </div>
+        <Input
+          label="Room (optional)"
+          name="room"
+          defaultValue={defaultRoom ?? ''}
+          error={form.fieldErrors.room}
+        />
+        {form.formError ? (
+          <p className="rounded-card border border-danger-500/30 bg-danger-50 px-4 py-3 text-sm text-danger-700" role="alert">
+            {form.formError}
+          </p>
+        ) : null}
+        <div className="flex justify-end gap-3">
+          <Button type="button" variant="secondary" onClick={onClose} disabled={form.busy}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={form.busy}>
+            {form.busy ? 'Adding…' : 'Add slot'}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 

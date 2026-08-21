@@ -5,5 +5,7 @@ export * from './schemas/common';
 export * from './schemas/auth';
 export * from './schemas/people';
 export * from './schemas/academics';
+export * from './schemas/timetable';
 export * from './types/api';
 export * from './types/academics';
+export * from './types/timetable';

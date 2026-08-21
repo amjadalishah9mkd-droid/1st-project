@@ -316,4 +316,129 @@ export async function runDemoSeed(
       });
     }
   }
+
+  // ── Timetable slots (M3) ─────────────────────────────────────
+  const slotSpecs: Array<{
+    section: string;
+    dayOfWeek: number;
+    startTime: string;
+    endTime: string;
+    room: string;
+  }> = [
+    { section: 'CS-101/A', dayOfWeek: 1, startTime: '09:00', endTime: '10:30', room: 'CS-Lab 1' },
+    { section: 'CS-101/A', dayOfWeek: 3, startTime: '09:00', endTime: '10:30', room: 'CS-Lab 1' },
+    { section: 'CS-201/A', dayOfWeek: 2, startTime: '11:00', endTime: '12:30', room: 'CS-204' },
+    { section: 'CS-201/A', dayOfWeek: 4, startTime: '11:00', endTime: '12:30', room: 'CS-204' },
+    { section: 'CS-305/A', dayOfWeek: 1, startTime: '14:00', endTime: '15:30', room: 'CS-305' },
+    { section: 'CS-305/A', dayOfWeek: 3, startTime: '14:00', endTime: '15:30', room: 'CS-305' },
+    { section: 'EE-110/A', dayOfWeek: 2, startTime: '09:00', endTime: '10:30', room: 'EE-101' },
+    { section: 'EE-110/A', dayOfWeek: 5, startTime: '09:00', endTime: '10:30', room: 'EE-101' },
+    { section: 'BUS-101/A', dayOfWeek: 1, startTime: '11:00', endTime: '12:00', room: 'BUS-Hall 2' },
+    { section: 'BUS-101/A', dayOfWeek: 4, startTime: '11:00', endTime: '12:00', room: 'BUS-Hall 2' },
+    { section: 'HUM-150/A', dayOfWeek: 2, startTime: '14:00', endTime: '15:00', room: 'HUM-12' },
+    { section: 'HUM-150/A', dayOfWeek: 5, startTime: '14:00', endTime: '15:00', room: 'HUM-12' },
+  ];
+  const slotIds = new Map<string, string>(); // "SECTION/day/start" → id
+  for (const spec of slotSpecs) {
+    const sectionId = sections.get(spec.section)!;
+    let slot = await prisma.timetableSlot.findFirst({
+      where: {
+        sectionId,
+        dayOfWeek: spec.dayOfWeek,
+        startTime: spec.startTime,
+      },
+    });
+    if (!slot) {
+      slot = await prisma.timetableSlot.create({
+        data: {
+          sectionId,
+          dayOfWeek: spec.dayOfWeek,
+          startTime: spec.startTime,
+          endTime: spec.endTime,
+          room: spec.room,
+        },
+      });
+    }
+    slotIds.set(`${spec.section}/${spec.dayOfWeek}/${spec.startTime}`, slot.id);
+  }
+
+  // ── Sessions + attendance history (past 2 weeks + current week) ──
+  const adminUser = await prisma.user.findFirstOrThrow({
+    where: { collegeId, email: 'admin@campusos.dev' },
+  });
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const day = today.getUTCDay();
+  const thisMonday = new Date(today);
+  thisMonday.setUTCDate(today.getUTCDate() + (day === 0 ? -6 : 1 - day));
+
+  const weekMondays = [-2, -1, 0].map((offset) => {
+    const monday = new Date(thisMonday);
+    monday.setUTCDate(thisMonday.getUTCDate() + offset * 7);
+    return monday;
+  });
+
+  // Deterministic ~88%-present pattern.
+  function statusFor(admissionNo: string, dateKey: string):
+    | 'PRESENT'
+    | 'ABSENT'
+    | 'LATE' {
+    let hash = 0;
+    const seed = `${admissionNo}:${dateKey}`;
+    for (let i = 0; i < seed.length; i += 1) {
+      hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+    }
+    const bucket = hash % 100;
+    if (bucket < 84) return 'PRESENT';
+    if (bucket < 92) return 'LATE';
+    return 'ABSENT';
+  }
+
+  const sectionEnrollmentMap = new Map<string, string[]>(); // section key → admissionNos
+  for (const spec of enrollmentSpecs) {
+    for (const key of spec.sections) {
+      const list = sectionEnrollmentMap.get(key) ?? [];
+      list.push(spec.admissionNo);
+      sectionEnrollmentMap.set(key, list);
+    }
+  }
+
+  for (const spec of slotSpecs) {
+    const sectionId = sections.get(spec.section)!;
+    const slotId = slotIds.get(`${spec.section}/${spec.dayOfWeek}/${spec.startTime}`)!;
+    for (const monday of weekMondays) {
+      const date = new Date(monday);
+      date.setUTCDate(monday.getUTCDate() + spec.dayOfWeek - 1);
+      const isPast = date < today;
+      const session = await prisma.classSession.upsert({
+        where: { slotId_date: { slotId, date } },
+        update: {},
+        create: {
+          slotId,
+          sectionId,
+          date,
+          status: isPast ? 'HELD' : 'SCHEDULED',
+          takenById: isPast ? adminUser.id : null,
+        },
+      });
+      if (!isPast) continue;
+
+      const dateKey = date.toISOString().slice(0, 10);
+      for (const admissionNo of sectionEnrollmentMap.get(spec.section) ?? []) {
+        const studentId = studentProfiles.get(admissionNo)!;
+        await prisma.attendanceRecord.upsert({
+          where: {
+            sessionId_studentId: { sessionId: session.id, studentId },
+          },
+          update: {},
+          create: {
+            sessionId: session.id,
+            studentId,
+            status: statusFor(admissionNo, dateKey),
+            markedById: adminUser.id,
+          },
+        });
+      }
+    }
+  }
 }

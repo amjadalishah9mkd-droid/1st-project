@@ -87,7 +87,8 @@ export function useOptions<T>(path: string, enabled = true) {
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
-    apiFetch<T[]>(`${path}?page=1&limit=100`)
+    const separator = path.includes('?') ? '&' : '?';
+    apiFetch<T[]>(`${path}${separator}page=1&limit=100`)
       .then((response) => {
         if (!cancelled) setOptions(response.data);
       })
