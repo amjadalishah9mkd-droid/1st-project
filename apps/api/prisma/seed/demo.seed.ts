@@ -611,4 +611,84 @@ export async function runDemoSeed(
       });
     }
   }
+
+  // ── Exams & results (M5) ─────────────────────────────────────
+  function marksFor(admissionNo: string, paperKey: string, max: number): number {
+    let hash = 0;
+    const seed = `marks:${admissionNo}:${paperKey}`;
+    for (let i = 0; i < seed.length; i += 1) {
+      hash = (hash * 33 + seed.charCodeAt(i)) >>> 0;
+    }
+    // 45%–98% of max, rounded to 0.5
+    const fraction = 0.45 + (hash % 54) / 100;
+    return Math.round(max * fraction * 2) / 2;
+  }
+
+  // Published midterm with papers + locked marks.
+  let midterm = await prisma.exam.findFirst({
+    where: { collegeId, title: 'Midterm Examination — Fall 2026' },
+  });
+  if (!midterm) {
+    midterm = await prisma.exam.create({
+      data: {
+        collegeId,
+        termId: fall.id,
+        title: 'Midterm Examination — Fall 2026',
+        type: 'MIDTERM',
+        status: 'PUBLISHED',
+        publishedAt: new Date(),
+        publishedById: adminUser.id,
+      },
+    });
+    const midtermPapers: Array<{ section: string; max: number }> = [
+      { section: 'CS-101/A', max: 60 },
+      { section: 'CS-201/A', max: 80 },
+      { section: 'HUM-150/A', max: 40 },
+    ];
+    for (const paperSpec of midtermPapers) {
+      const paper = await prisma.examPaper.create({
+        data: {
+          examId: midterm.id,
+          sectionId: sections.get(paperSpec.section)!,
+          examDate: daysFromNow(-10, 9),
+          maxMarks: paperSpec.max,
+        },
+      });
+      for (const admissionNo of sectionEnrollmentMap.get(paperSpec.section) ?? []) {
+        await prisma.mark.create({
+          data: {
+            examPaperId: paper.id,
+            studentId: studentProfiles.get(admissionNo)!,
+            marksObtained: marksFor(admissionNo, paperSpec.section, paperSpec.max),
+            enteredById: adminUser.id,
+            lockedAt: new Date(),
+          },
+        });
+      }
+    }
+  }
+
+  // Draft final with one paper, no marks yet.
+  let finalExam = await prisma.exam.findFirst({
+    where: { collegeId, title: 'Final Examination — Fall 2026' },
+  });
+  if (!finalExam) {
+    finalExam = await prisma.exam.create({
+      data: {
+        collegeId,
+        termId: fall.id,
+        title: 'Final Examination — Fall 2026',
+        type: 'FINAL',
+        status: 'DRAFT',
+      },
+    });
+    await prisma.examPaper.create({
+      data: {
+        examId: finalExam.id,
+        sectionId: sections.get('CS-101/A')!,
+        examDate: daysFromNow(30, 9),
+        maxMarks: 100,
+      },
+    });
+  }
 }

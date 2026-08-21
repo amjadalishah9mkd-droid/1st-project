@@ -31,6 +31,12 @@ export function renderTemplate(event: DomainEvent): NotificationTemplate | null 
         body: `"${event.assignmentTitle}" was graded: ${event.points}/${event.maxPoints}.`,
         linkPath: `/assignments/${event.assignmentId}`,
       };
+    case 'results.published':
+      return {
+        title: 'Results published',
+        body: `Results for "${event.examTitle}" are now available.`,
+        linkPath: '/results',
+      };
     default:
       return null;
   }
