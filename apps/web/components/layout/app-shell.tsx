@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { apiFetch } from '@/lib/api/client';
 import { useSession } from '@/components/providers/session-provider';
 import { navItemsFor } from './navigation';
 
@@ -15,6 +16,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, status, logout, hasPermission } = useSession();
   const pathname = usePathname();
   const router = useRouter();
+  const [unread, setUnread] = useState<number | null>(null);
+
+  // Live bell: poll the unread count every 30s (Blueprint §10).
+  useEffect(() => {
+    if (status !== 'authenticated') return;
+    let cancelled = false;
+    const poll = () => {
+      apiFetch<{ unread: number }>('/notifications/unread-count')
+        .then((response) => {
+          if (!cancelled) setUnread(response.data.unread);
+        })
+        .catch(() => undefined);
+    };
+    poll();
+    const interval = setInterval(poll, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [status, pathname]);
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -87,12 +108,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <header className="flex h-14 items-center justify-between border-b border-line bg-surface-raised px-6">
           <div />
           <div className="flex items-center gap-4">
-            <span
-              className="rounded-full border border-line bg-surface px-2.5 py-1 text-xs font-medium text-ink-secondary"
-              title="Unread notifications"
+            <Link
+              href="/notifications"
+              className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                (unread ?? user.counters.unreadNotifications) > 0
+                  ? 'border-brand-300 bg-brand-50 text-brand-800'
+                  : 'border-line bg-surface text-ink-secondary'
+              }`}
+              title="Notifications"
             >
-              {user.counters.unreadNotifications} unread
-            </span>
+              🔔 {unread ?? user.counters.unreadNotifications} unread
+            </Link>
             <div className="flex items-center gap-3">
               <div className="grid h-8 w-8 place-items-center rounded-full bg-brand-100 text-xs font-semibold text-brand-800">
                 {initials}

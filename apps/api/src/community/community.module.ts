@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
 import { CommunityController } from './community.controller';
+import { ModerationController } from './moderation.controller';
 import { CommunityAccessPolicy } from './community-access.policy';
 import { PostsService } from './posts.service';
 import { GroupsService } from './groups.service';
+import { ModerationService } from './moderation.service';
 import {
   CommunityEventsService,
   ResourcesService,
@@ -10,7 +12,7 @@ import {
 } from './community.services';
 
 @Module({
-  controllers: [CommunityController],
+  controllers: [CommunityController, ModerationController],
   providers: [
     CommunityAccessPolicy,
     PostsService,
@@ -18,6 +20,7 @@ import {
     SocietiesService,
     CommunityEventsService,
     ResourcesService,
+    ModerationService,
   ],
   exports: [CommunityAccessPolicy],
 })

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ScheduleModule } from '@nestjs/schedule';
 import { PrismaModule } from './prisma/prisma.module';
 import { HealthModule } from './health/health.module';
 import { AuditModule } from './audit/audit.module';
@@ -16,15 +17,16 @@ import { AssignmentsModule } from './assignments/assignments.module';
 import { ExamsModule } from './exams/exams.module';
 import { FeesModule } from './fees/fees.module';
 import { CommunityModule } from './community/community.module';
+import { AnnouncementsModule } from './announcements/announcements.module';
 
 /**
- * Module graph through M7: infrastructure + auth/access + academic core +
- * timetable & attendance + files + assignments + exams & results + fees +
- * community.
+ * Module graph through M8: everything through community, plus moderation,
+ * the notification inbox, announcements and scheduled sweeps.
  */
 @Module({
   imports: [
     EventEmitterModule.forRoot(),
+    ScheduleModule.forRoot(),
     PrismaModule,
     AuditModule,
     AccessModule,
@@ -32,6 +34,7 @@ import { CommunityModule } from './community/community.module';
     UsersModule,
     AcademicsModule,
     EventsModule,
+    AnnouncementsModule,
     NotificationsModule,
     TimetableModule,
     AttendanceModule,

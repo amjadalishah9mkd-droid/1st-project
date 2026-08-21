@@ -31,7 +31,9 @@ const IMPLEMENTED_ROUTES: Array<{ href: string; label: string }> = [
   { href: '/results', label: 'Results' },
   { href: '/fees', label: 'Fees' },
   { href: '/community', label: 'Community' },
-  // M8+: moderation, announcements, notifications, settings
+  { href: '/announcements', label: 'Announcements' },
+  { href: '/moderation', label: 'Moderation' },
+  // M9: settings + dashboards polish
 ];
 
 export function navItemsFor(

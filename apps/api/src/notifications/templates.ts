@@ -47,7 +47,7 @@ export function renderTemplate(event: DomainEvent): NotificationTemplate | null 
       return {
         title: 'Invoice overdue',
         body: `An invoice of ${event.amount} was due on ${event.dueDate} and is now overdue.`,
-        linkPath: '/fees',
+        linkPath: `/fees/invoices/${event.invoiceId}`,
       };
     case 'community.comment':
       return {
@@ -84,6 +84,58 @@ export function renderTemplate(event: DomainEvent): NotificationTemplate | null 
         body: `"${event.title}" is happening on ${new Date(event.startsAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}.`,
         linkPath: '/community/events',
       };
+    case 'assignment.due_soon':
+      return {
+        title: 'Assignment due soon',
+        body: `"${event.title}" is due ${new Date(event.dueAt).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.`,
+        linkPath: `/assignments/${event.assignmentId}`,
+      };
+    case 'event.reminder':
+      return {
+        title: 'Event reminder',
+        body: `"${event.title}" starts ${new Date(event.startsAt).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.`,
+        linkPath: `/community/events?event=${event.eventId}`,
+      };
+    case 'announcement.published':
+      return {
+        title: 'Announcement',
+        body: event.title,
+        linkPath: '/announcements',
+      };
+    case 'moderation.action_taken':
+      switch (event.action) {
+        case 'REMOVE_CONTENT':
+          return {
+            title: 'Content removed',
+            body: `Your content was removed by moderation.${event.note ? ` Note: ${event.note}` : ''}`,
+            linkPath: '/community',
+          };
+        case 'RESTORE_CONTENT':
+          return {
+            title: 'Content restored',
+            body: 'Your content was restored by moderation.',
+            linkPath: '/community',
+          };
+        case 'WARN_USER':
+          return {
+            title: 'Moderation warning',
+            body: `You received a warning from moderation.${event.note ? ` Note: ${event.note}` : ''}`,
+            linkPath: '/community',
+          };
+        case 'SUSPEND_COMMUNITY':
+          return {
+            title: 'Community access suspended',
+            body: `Your community access has been suspended.${event.note ? ` Note: ${event.note}` : ''}`,
+            linkPath: '/community',
+          };
+        case 'LIFT_SUSPENSION':
+          return {
+            title: 'Suspension lifted',
+            body: 'Your community access has been restored.',
+            linkPath: '/community',
+          };
+      }
+      return null;
     default:
       return null;
   }

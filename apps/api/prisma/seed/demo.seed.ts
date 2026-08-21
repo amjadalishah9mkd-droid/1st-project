@@ -899,4 +899,51 @@ export async function runDemoSeed(
       data: { collegeId, authorId: uid('student@campusos.dev'), type: 'GENERAL', body: societyPostBody, societyId: techSocietyId },
     });
   }
+
+  // ── Moderation & announcements (M8) ──────────────────────────
+  const reportedPost = await prisma.post.findFirst({
+    where: { collegeId, body: { contains: 'Merge sort propaganda' } },
+  });
+  if (reportedPost) {
+    const existingReport = await prisma.report.findFirst({
+      where: { collegeId, targetId: reportedPost.id },
+    });
+    if (!existingReport) {
+      await prisma.report.create({
+        data: {
+          collegeId,
+          reporterId: uid('sofia.rossi@campusos.dev'),
+          targetType: 'POST',
+          targetId: reportedPost.id,
+          reason: 'SPAM',
+          details: 'Feels like algorithm spam to me (joking, but testing the queue).',
+        },
+      });
+      await prisma.report.create({
+        data: {
+          collegeId,
+          reporterId: uid('emma.silva@campusos.dev'),
+          targetType: 'POST',
+          targetId: reportedPost.id,
+          reason: 'OTHER',
+          details: 'Duplicate report to demonstrate grouping.',
+        },
+      });
+    }
+  }
+
+  const annTitle = 'Library hours extended during midterms';
+  if (!(await prisma.announcement.findFirst({ where: { collegeId, title: annTitle } }))) {
+    await prisma.announcement.create({
+      data: {
+        collegeId,
+        authorId: adminUser.id,
+        title: annTitle,
+        body: 'From Monday the library stays open until midnight through the midterm period. Quiet-hours wing rules apply after 21:00.',
+        audienceScope: 'ALL',
+        audienceIds: [],
+        publishedAt: new Date(),
+      },
+    });
+  }
 }

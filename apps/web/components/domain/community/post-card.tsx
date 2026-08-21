@@ -6,7 +6,8 @@ import { apiFetch, ApiError } from '@/lib/api/client';
 import { useToast } from '@/components/providers/toast-provider';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ConfirmDialog } from '@/components/ui/dialog';
+import { ConfirmDialog, Dialog } from '@/components/ui/dialog';
+import { Select } from '@/components/ui/select';
 
 function timeAgo(iso: string): string {
   const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -37,6 +38,7 @@ export function PostCard({
   const [commentText, setCommentText] = useState('');
   const [busy, setBusy] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
 
   async function toggleLike() {
     try {
@@ -160,6 +162,15 @@ export function PostCard({
         >
           💬 {current.commentCount}
         </button>
+        {!current.canDelete ? (
+          <button
+            type="button"
+            onClick={() => setReportOpen(true)}
+            className="ml-auto text-xs text-ink-faint transition-colors hover:text-danger-700"
+          >
+            Report
+          </button>
+        ) : null}
       </footer>
 
       {commentsOpen ? (
@@ -217,7 +228,100 @@ export function PostCard({
         }}
         onClose={() => setDeleteConfirm(false)}
       />
+
+      {reportOpen ? (
+        <ReportDialog
+          targetType="POST"
+          targetId={current.id}
+          onClose={() => setReportOpen(false)}
+          onDone={() => {
+            setReportOpen(false);
+            toast('Report submitted — a moderator will review it', 'info');
+          }}
+        />
+      ) : null}
     </article>
+  );
+}
+
+export function ReportDialog({
+  targetType,
+  targetId,
+  onClose,
+  onDone,
+}: {
+  targetType: 'POST' | 'COMMENT' | 'USER' | 'EVENT' | 'RESOURCE';
+  targetId: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [reason, setReason] = useState('SPAM');
+  const [details, setDetails] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    try {
+      await apiFetch('/community/reports', {
+        method: 'POST',
+        body: JSON.stringify({
+          targetType,
+          targetId,
+          reason,
+          details: details.trim() || undefined,
+        }),
+      });
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Report failed');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open title="Report content" onClose={onClose}>
+      <div className="flex flex-col gap-4">
+        <Select
+          label="Reason"
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          options={[
+            { value: 'SPAM', label: 'Spam' },
+            { value: 'HARASSMENT', label: 'Harassment' },
+            { value: 'INAPPROPRIATE', label: 'Inappropriate content' },
+            { value: 'MISINFORMATION', label: 'Misinformation' },
+            { value: 'OTHER', label: 'Other' },
+          ]}
+        />
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="report-details" className="text-sm font-medium">
+            Details (optional)
+          </label>
+          <textarea
+            id="report-details"
+            rows={3}
+            value={details}
+            onChange={(event) => setDetails(event.target.value)}
+            className="rounded-lg border border-line-strong bg-surface-raised px-3 py-2 text-sm"
+          />
+        </div>
+        {error ? (
+          <p className="rounded-card border border-danger-500/30 bg-danger-50 px-4 py-3 text-sm text-danger-700" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <div className="flex justify-end gap-3">
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={submit} disabled={busy}>
+            {busy ? 'Reporting…' : 'Submit report'}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
   );
 }
 

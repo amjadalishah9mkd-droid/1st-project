@@ -4,18 +4,28 @@ import { AssignmentsListener } from './listeners/assignments.listener';
 import { ResultsListener } from './listeners/results.listener';
 import { FeesListener } from './listeners/fees.listener';
 import { CommunityListener } from './listeners/community.listener';
+import { PlatformListener } from './listeners/platform.listener';
+import { InboxService, NotificationsController } from './inbox.controller';
+import { NotificationSchedulerService } from './notification-scheduler.service';
+import { AnnouncementsModule } from '../announcements/announcements.module';
 
 /**
- * Notifications module: event listeners that persist Notification rows.
- * The inbox/bell API surface arrives in M8.
+ * Notifications module (complete in M8): event listeners persisting
+ * Notification rows, the inbox API, and the daily scheduled sweeps.
  */
 @Module({
+  imports: [AnnouncementsModule],
+  controllers: [NotificationsController],
   providers: [
     AttendanceListener,
     AssignmentsListener,
     ResultsListener,
     FeesListener,
     CommunityListener,
+    PlatformListener,
+    InboxService,
+    NotificationSchedulerService,
   ],
+  exports: [NotificationSchedulerService],
 })
 export class NotificationsModule {}
