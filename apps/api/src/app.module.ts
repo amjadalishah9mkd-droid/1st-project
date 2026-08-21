@@ -14,10 +14,11 @@ import { AttendanceModule } from './attendance/attendance.module';
 import { FilesModule } from './files/files.module';
 import { AssignmentsModule } from './assignments/assignments.module';
 import { ExamsModule } from './exams/exams.module';
+import { FeesModule } from './fees/fees.module';
 
 /**
- * Module graph through M5: infrastructure + auth/access + academic core +
- * timetable & attendance + files + assignments + exams & results.
+ * Module graph through M6: infrastructure + auth/access + academic core +
+ * timetable & attendance + files + assignments + exams & results + fees.
  */
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { ExamsModule } from './exams/exams.module';
     FilesModule,
     AssignmentsModule,
     ExamsModule,
+    FeesModule,
     HealthModule,
   ],
 })

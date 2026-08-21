@@ -1,0 +1,532 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import type {
+  CreateFeeStructureInput,
+  FeeStructureItem,
+  FeeSummary,
+  GenerateInvoicesInput,
+  GenerateInvoicesResult,
+  InvoiceDetail,
+  InvoiceItem,
+  PageMeta,
+  PaginationQuery,
+  RecordPaymentInput,
+  UpdateFeeStructureInput,
+} from '@campusos/shared';
+import type { Prisma } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { PolicyService } from '../access/policy.service';
+import { AuditService } from '../audit/audit.service';
+import { EventsService } from '../events/events.module';
+import type { AuthenticatedUser } from '../access/authenticated-user';
+import { pageArgs, pageMeta } from '../common/pagination/pagination';
+
+function forbidden(): ForbiddenException {
+  return new ForbiddenException({
+    code: 'FORBIDDEN',
+    message: 'You do not have permission to perform this action',
+  });
+}
+
+const invoiceInclude = {
+  student: {
+    include: { user: { select: { firstName: true, lastName: true } } },
+  },
+  structure: { select: { name: true } },
+  payments: true,
+} satisfies Prisma.InvoiceInclude;
+
+type InvoiceRecord = Prisma.InvoiceGetPayload<{ include: typeof invoiceInclude }>;
+
+function paidAmount(row: InvoiceRecord): number {
+  return row.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+}
+
+function toInvoiceItem(row: InvoiceRecord): InvoiceItem {
+  const paid = paidAmount(row);
+  return {
+    id: row.id,
+    invoiceNo: row.invoiceNo,
+    studentId: row.studentId,
+    studentName: `${row.student.user.firstName} ${row.student.user.lastName}`,
+    rollNo: row.student.rollNo,
+    structureName: row.structure.name,
+    amount: row.amount.toString(),
+    paidAmount: String(paid),
+    balance: String(Number(row.amount) - paid),
+    dueDate: row.dueDate.toISOString().slice(0, 10),
+    status: row.status,
+  };
+}
+
+@Injectable()
+export class FeesService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly policy: PolicyService,
+    private readonly audit: AuditService,
+    private readonly events: EventsService,
+  ) {}
+
+  // ── Structures ─────────────────────────────────────────────
+
+  private toStructureItem(row: Prisma.FeeStructureGetPayload<{
+    include: {
+      term: { select: { label: true } };
+      course: { select: { code: true } };
+      components: true;
+      _count: { select: { invoices: true } };
+    };
+  }>): FeeStructureItem {
+    return {
+      id: row.id,
+      termId: row.termId,
+      termLabel: row.term.label,
+      courseId: row.courseId,
+      courseCode: row.course?.code ?? null,
+      name: row.name,
+      totalAmount: row.totalAmount.toString(),
+      components: row.components.map((component) => ({
+        id: component.id,
+        label: component.label,
+        amount: component.amount.toString(),
+      })),
+      invoiceCount: row._count.invoices,
+    };
+  }
+
+  async listStructures(
+    user: AuthenticatedUser,
+    query: PaginationQuery,
+  ): Promise<{ data: FeeStructureItem[]; meta: PageMeta }> {
+    const where: Prisma.FeeStructureWhereInput = {
+      collegeId: user.collegeId,
+      ...(query.q ? { name: { contains: query.q, mode: 'insensitive' } } : {}),
+    };
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.feeStructure.findMany({
+        where,
+        include: {
+          term: { select: { label: true } },
+          course: { select: { code: true } },
+          components: true,
+          _count: { select: { invoices: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        ...pageArgs(query),
+      }),
+      this.prisma.feeStructure.count({ where }),
+    ]);
+    return { data: rows.map((r) => this.toStructureItem(r)), meta: pageMeta(query, total) };
+  }
+
+  async createStructure(
+    user: AuthenticatedUser,
+    input: CreateFeeStructureInput,
+  ): Promise<FeeStructureItem> {
+    const term = await this.prisma.term.findFirst({
+      where: { id: input.termId, collegeId: user.collegeId },
+      select: { id: true },
+    });
+    if (!term) {
+      throw new BadRequestException({
+        code: 'INVALID_TERM',
+        message: 'The selected term does not exist in this college',
+      });
+    }
+    if (input.courseId) {
+      const course = await this.prisma.course.findFirst({
+        where: { id: input.courseId, collegeId: user.collegeId },
+        select: { id: true },
+      });
+      if (!course) {
+        throw new BadRequestException({
+          code: 'INVALID_COURSE',
+          message: 'The selected course does not exist in this college',
+        });
+      }
+    }
+    // Server computes the total — it always equals the component sum.
+    const totalAmount = input.components.reduce((sum, c) => sum + c.amount, 0);
+
+    const created = await this.prisma.feeStructure.create({
+      data: {
+        collegeId: user.collegeId,
+        termId: input.termId,
+        courseId: input.courseId ?? null,
+        name: input.name,
+        totalAmount,
+        components: { create: input.components },
+      },
+      include: {
+        term: { select: { label: true } },
+        course: { select: { code: true } },
+        components: true,
+        _count: { select: { invoices: true } },
+      },
+    });
+    await this.audit.log({
+      collegeId: user.collegeId,
+      actorId: user.id,
+      action: 'fees.structure_created',
+      targetType: 'FeeStructure',
+      targetId: created.id,
+    });
+    return this.toStructureItem(created);
+  }
+
+  async updateStructure(
+    user: AuthenticatedUser,
+    id: string,
+    input: UpdateFeeStructureInput,
+  ): Promise<FeeStructureItem> {
+    const existing = await this.prisma.feeStructure.findFirst({
+      where: { id, collegeId: user.collegeId },
+    });
+    if (!existing) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Fee structure not found' });
+    }
+    const totalAmount = input.components
+      ? input.components.reduce((sum, c) => sum + c.amount, 0)
+      : undefined;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      if (input.components) {
+        await tx.feeComponent.deleteMany({ where: { structureId: id } });
+        await tx.feeComponent.createMany({
+          data: input.components.map((c) => ({ structureId: id, ...c })),
+        });
+      }
+      return tx.feeStructure.update({
+        where: { id },
+        data: { name: input.name, totalAmount },
+        include: {
+          term: { select: { label: true } },
+          course: { select: { code: true } },
+          components: true,
+          _count: { select: { invoices: true } },
+        },
+      });
+    });
+    return this.toStructureItem(updated);
+  }
+
+  // ── Invoice generation ─────────────────────────────────────
+
+  /**
+   * Generates invoices for the structure's audience (Blueprint W6):
+   * course-scoped → students actively enrolled in any section of that course
+   * in the structure's term; college-wide → all ENROLLED students. Students
+   * who already hold an invoice for this structure are skipped. Amount is a
+   * snapshot of the structure total. Emits invoice.issued per new invoice.
+   */
+  async generateInvoices(
+    user: AuthenticatedUser,
+    input: GenerateInvoicesInput,
+  ): Promise<GenerateInvoicesResult> {
+    const structure = await this.prisma.feeStructure.findFirst({
+      where: { id: input.structureId, collegeId: user.collegeId },
+    });
+    if (!structure) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Fee structure not found' });
+    }
+
+    const students = await this.prisma.studentProfile.findMany({
+      where: {
+        collegeId: user.collegeId,
+        status: 'ENROLLED',
+        ...(structure.courseId
+          ? {
+              enrollments: {
+                some: {
+                  status: 'ACTIVE',
+                  section: {
+                    courseId: structure.courseId,
+                    termId: structure.termId,
+                  },
+                },
+              },
+            }
+          : {}),
+      },
+      select: { id: true, userId: true },
+    });
+
+    const existing = await this.prisma.invoice.findMany({
+      where: { structureId: structure.id },
+      select: { studentId: true },
+    });
+    const alreadyInvoiced = new Set(existing.map((invoice) => invoice.studentId));
+    const targets = students.filter((student) => !alreadyInvoiced.has(student.id));
+
+    const year = new Date().getFullYear();
+    let sequence = await this.prisma.invoice.count({
+      where: { collegeId: user.collegeId },
+    });
+
+    const dueDate = new Date(`${input.dueDate}T00:00:00Z`);
+    const createdInvoices: Array<{ id: string; userId: string }> = [];
+    await this.prisma.$transaction(async (tx) => {
+      for (const student of targets) {
+        sequence += 1;
+        const invoice = await tx.invoice.create({
+          data: {
+            collegeId: user.collegeId,
+            studentId: student.id,
+            structureId: structure.id,
+            invoiceNo: `INV-${year}-${String(sequence).padStart(5, '0')}`,
+            amount: structure.totalAmount,
+            dueDate,
+          },
+        });
+        createdInvoices.push({ id: invoice.id, userId: student.userId });
+      }
+    });
+
+    await this.audit.log({
+      collegeId: user.collegeId,
+      actorId: user.id,
+      action: 'fees.invoices_generated',
+      targetType: 'FeeStructure',
+      targetId: structure.id,
+      metadata: { created: createdInvoices.length, skipped: alreadyInvoiced.size },
+    });
+    for (const invoice of createdInvoices) {
+      this.events.emit({
+        type: 'invoice.issued',
+        studentUserId: invoice.userId,
+        invoiceId: invoice.id,
+        amount: structure.totalAmount.toString(),
+        dueDate: input.dueDate,
+      });
+    }
+    return { created: createdInvoices.length, skipped: alreadyInvoiced.size };
+  }
+
+  // ── Invoices ───────────────────────────────────────────────
+
+  /** Lazily transitions past-due PENDING/PARTIAL invoices to OVERDUE. */
+  private async applyOverdueTransitions(collegeId: string): Promise<void> {
+    await this.prisma.invoice.updateMany({
+      where: {
+        collegeId,
+        status: { in: ['PENDING', 'PARTIAL'] },
+        dueDate: { lt: new Date() },
+      },
+      data: { status: 'OVERDUE' },
+    });
+  }
+
+  async listInvoices(
+    user: AuthenticatedUser,
+    query: PaginationQuery & { studentId?: string; status?: string },
+  ): Promise<{ data: InvoiceItem[]; meta: PageMeta }> {
+    const scope = await this.policy.scopeFor(user, 'fees.read');
+    if (!scope) throw forbidden();
+    await this.applyOverdueTransitions(user.collegeId);
+
+    const where: Prisma.InvoiceWhereInput = {
+      collegeId: user.collegeId,
+      ...(query.status ? { status: query.status as never } : {}),
+      ...(query.studentId && scope === 'ALL' ? { studentId: query.studentId } : {}),
+      ...(scope === 'OWN' ? { student: { userId: user.id } } : {}),
+      ...(query.q
+        ? {
+            OR: [
+              { invoiceNo: { contains: query.q, mode: 'insensitive' } },
+              {
+                student: {
+                  user: {
+                    OR: [
+                      { firstName: { contains: query.q, mode: 'insensitive' } },
+                      { lastName: { contains: query.q, mode: 'insensitive' } },
+                    ],
+                  },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.invoice.findMany({
+        where,
+        include: invoiceInclude,
+        orderBy: { createdAt: 'desc' },
+        ...pageArgs(query),
+      }),
+      this.prisma.invoice.count({ where }),
+    ]);
+    return { data: rows.map(toInvoiceItem), meta: pageMeta(query, total) };
+  }
+
+  async invoiceDetail(user: AuthenticatedUser, id: string): Promise<InvoiceDetail> {
+    const scope = await this.policy.scopeFor(user, 'fees.read');
+    if (!scope) throw forbidden();
+    await this.applyOverdueTransitions(user.collegeId);
+
+    const row = await this.prisma.invoice.findFirst({
+      where: {
+        id,
+        collegeId: user.collegeId,
+        ...(scope === 'OWN' ? { student: { userId: user.id } } : {}),
+      },
+      include: {
+        ...invoiceInclude,
+        structure: { include: { components: true } },
+        payments: {
+          include: { recordedBy: { select: { firstName: true, lastName: true } } },
+          orderBy: { paidAt: 'asc' },
+        },
+      },
+    });
+    if (!row) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Invoice not found' });
+    }
+    return {
+      ...toInvoiceItem(row),
+      structureName: row.structure.name,
+      components: row.structure.components.map((component) => ({
+        label: component.label,
+        amount: component.amount.toString(),
+      })),
+      payments: row.payments.map((payment) => ({
+        id: payment.id,
+        amount: payment.amount.toString(),
+        method: payment.method,
+        reference: payment.reference,
+        paidAt: payment.paidAt.toISOString().slice(0, 10),
+        recordedByName: `${payment.recordedBy.firstName} ${payment.recordedBy.lastName}`,
+      })),
+    };
+  }
+
+  async cancelInvoice(user: AuthenticatedUser, id: string): Promise<InvoiceItem> {
+    const row = await this.prisma.invoice.findFirst({
+      where: { id, collegeId: user.collegeId },
+      include: invoiceInclude,
+    });
+    if (!row) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Invoice not found' });
+    }
+    if (row.payments.length > 0) {
+      throw new ConflictException({
+        code: 'HAS_PAYMENTS',
+        message: 'Invoices with recorded payments cannot be cancelled',
+      });
+    }
+    if (row.status === 'CANCELLED') {
+      throw new BadRequestException({
+        code: 'ALREADY_CANCELLED',
+        message: 'This invoice is already cancelled',
+      });
+    }
+    const updated = await this.prisma.invoice.update({
+      where: { id },
+      data: { status: 'CANCELLED' },
+      include: invoiceInclude,
+    });
+    await this.audit.log({
+      collegeId: user.collegeId,
+      actorId: user.id,
+      action: 'fees.invoice_cancelled',
+      targetType: 'Invoice',
+      targetId: id,
+    });
+    return toInvoiceItem(updated);
+  }
+
+  // ── Payments ───────────────────────────────────────────────
+
+  /**
+   * Records a manual payment (Blueprint W6) and recomputes the invoice
+   * status transactionally: paid ≥ amount → PAID, > 0 → PARTIAL.
+   */
+  async recordPayment(
+    user: AuthenticatedUser,
+    invoiceId: string,
+    input: RecordPaymentInput,
+  ): Promise<InvoiceDetail> {
+    const row = await this.prisma.invoice.findFirst({
+      where: { id: invoiceId, collegeId: user.collegeId },
+      include: invoiceInclude,
+    });
+    if (!row) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Invoice not found' });
+    }
+    if (row.status === 'CANCELLED') {
+      throw new BadRequestException({
+        code: 'INVOICE_CANCELLED',
+        message: 'Payments cannot be recorded on a cancelled invoice',
+      });
+    }
+    const balance = Number(row.amount) - paidAmount(row);
+    if (input.amount > balance) {
+      throw new BadRequestException({
+        code: 'OVERPAYMENT',
+        message: `Payment exceeds the outstanding balance (${balance})`,
+      });
+    }
+
+    const newPaid = paidAmount(row) + input.amount;
+    const newStatus = newPaid >= Number(row.amount) ? 'PAID' : 'PARTIAL';
+    await this.prisma.$transaction([
+      this.prisma.payment.create({
+        data: {
+          invoiceId,
+          amount: input.amount,
+          method: input.method,
+          reference: input.reference,
+          paidAt: input.paidAt ? new Date(`${input.paidAt}T00:00:00Z`) : new Date(),
+          recordedById: user.id,
+        },
+      }),
+      this.prisma.invoice.update({
+        where: { id: invoiceId },
+        data: { status: newStatus },
+      }),
+    ]);
+    await this.audit.log({
+      collegeId: user.collegeId,
+      actorId: user.id,
+      action: 'fees.payment_recorded',
+      targetType: 'Invoice',
+      targetId: invoiceId,
+      metadata: { amount: input.amount, method: input.method },
+    });
+    return this.invoiceDetail(user, invoiceId);
+  }
+
+  // ── Summary ────────────────────────────────────────────────
+
+  async summary(user: AuthenticatedUser): Promise<FeeSummary> {
+    await this.applyOverdueTransitions(user.collegeId);
+    const invoices = await this.prisma.invoice.findMany({
+      where: { collegeId: user.collegeId, status: { not: 'CANCELLED' } },
+      include: { payments: { select: { amount: true } } },
+    });
+    let invoiced = 0;
+    let collected = 0;
+    let paidCount = 0;
+    let overdueCount = 0;
+    for (const invoice of invoices) {
+      invoiced += Number(invoice.amount);
+      collected += invoice.payments.reduce((sum, p) => sum + Number(p.amount), 0);
+      if (invoice.status === 'PAID') paidCount += 1;
+      if (invoice.status === 'OVERDUE') overdueCount += 1;
+    }
+    return {
+      invoicedTotal: String(invoiced),
+      collectedTotal: String(collected),
+      outstandingTotal: String(invoiced - collected),
+      invoiceCount: invoices.length,
+      paidCount,
+      overdueCount,
+    };
+  }
+}

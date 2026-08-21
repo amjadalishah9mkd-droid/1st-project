@@ -37,6 +37,18 @@ export function renderTemplate(event: DomainEvent): NotificationTemplate | null 
         body: `Results for "${event.examTitle}" are now available.`,
         linkPath: '/results',
       };
+    case 'invoice.issued':
+      return {
+        title: 'New fee invoice',
+        body: `An invoice of ${event.amount} is due by ${event.dueDate}.`,
+        linkPath: '/fees',
+      };
+    case 'invoice.overdue':
+      return {
+        title: 'Invoice overdue',
+        body: `An invoice of ${event.amount} was due on ${event.dueDate} and is now overdue.`,
+        linkPath: '/fees',
+      };
     default:
       return null;
   }

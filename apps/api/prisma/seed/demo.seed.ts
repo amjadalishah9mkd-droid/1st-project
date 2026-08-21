@@ -691,4 +691,78 @@ export async function runDemoSeed(
       },
     });
   }
+
+  // ── Fees (M6) ────────────────────────────────────────────────
+  let tuition = await prisma.feeStructure.findFirst({
+    where: { collegeId, name: 'Fall 2026 Tuition' },
+  });
+  if (!tuition) {
+    tuition = await prisma.feeStructure.create({
+      data: {
+        collegeId,
+        termId: fall.id,
+        name: 'Fall 2026 Tuition',
+        totalAmount: 1500,
+        components: {
+          create: [
+            { label: 'Tuition', amount: 1200 },
+            { label: 'Lab fee', amount: 200 },
+            { label: 'Library fee', amount: 100 },
+          ],
+        },
+      },
+    });
+
+    // Invoices for every enrolled demo student, in mixed states.
+    const allStudents = [...studentProfiles.entries()]; // [admissionNo, profileId]
+    let sequence = await prisma.invoice.count({ where: { collegeId } });
+    const year = new Date().getFullYear();
+    for (const [admissionNo, studentId] of allStudents) {
+      sequence += 1;
+      const index = Number(admissionNo.slice(-2));
+      // Mix: every 3rd paid, every 3rd+1 partial, rest pending; two overdue.
+      const overdue = index % 7 === 0;
+      const invoice = await prisma.invoice.create({
+        data: {
+          collegeId,
+          studentId,
+          structureId: tuition.id,
+          invoiceNo: `INV-${year}-${String(sequence).padStart(5, '0')}`,
+          amount: 1500,
+          dueDate: overdue ? daysFromNow(-5) : daysFromNow(20),
+          status: 'PENDING',
+        },
+      });
+      if (index % 3 === 0) {
+        await prisma.payment.create({
+          data: {
+            invoiceId: invoice.id,
+            amount: 1500,
+            method: 'BANK_TRANSFER',
+            reference: `TXN-${invoice.invoiceNo}`,
+            paidAt: daysFromNow(-3),
+            recordedById: adminUser.id,
+          },
+        });
+        await prisma.invoice.update({
+          where: { id: invoice.id },
+          data: { status: 'PAID' },
+        });
+      } else if (index % 3 === 1) {
+        await prisma.payment.create({
+          data: {
+            invoiceId: invoice.id,
+            amount: 700,
+            method: 'CASH',
+            paidAt: daysFromNow(-2),
+            recordedById: adminUser.id,
+          },
+        });
+        await prisma.invoice.update({
+          where: { id: invoice.id },
+          data: { status: 'PARTIAL' },
+        });
+      }
+    }
+  }
 }

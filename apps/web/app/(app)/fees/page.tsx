@@ -1,0 +1,460 @@
+'use client';
+
+import { FormEvent, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import {
+  createFeeStructureSchema,
+  generateInvoicesSchema,
+  type CourseItem,
+  type FeeStructureItem,
+  type FeeSummary,
+  type InvoiceItem,
+  type TermItem,
+} from '@campusos/shared';
+import { apiFetch } from '@/lib/api/client';
+import { useList, useOptions } from '@/lib/hooks/use-list';
+import { formValues, useZodForm } from '@/lib/hooks/use-zod-form';
+import { useToast } from '@/components/providers/toast-provider';
+import { useSession } from '@/components/providers/session-provider';
+import { PageHeader } from '@/components/layout/page-header';
+import { DataTable } from '@/components/data/data-table';
+import { Badge, statusTone } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Dialog } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
+import { invoiceTone } from './fee-utils';
+
+export default function FeesPage() {
+  const { hasPermission } = useSession();
+  const canManage = hasPermission('fees.manage');
+  return canManage ? <AdminFeesView /> : <StudentFeesView />;
+}
+
+// ── Student view ─────────────────────────────────────────────
+
+function StudentFeesView() {
+  const list = useList<InvoiceItem>('/fees/invoices');
+  const router = useRouter();
+  return (
+    <div className="mx-auto max-w-4xl">
+      <PageHeader
+        title="My fees"
+        description="Your invoices and payment status."
+      />
+      <DataTable
+        rowKey={(row) => row.id}
+        rows={list.rows}
+        meta={list.meta}
+        loading={list.loading}
+        error={list.error}
+        onPageChange={list.setPage}
+        onRetry={list.refetch}
+        onRowClick={(row) => router.push(`/fees/invoices/${row.id}`)}
+        emptyTitle="No invoices"
+        emptyMessage="Invoices issued to you will appear here."
+        columns={[
+          { key: 'no', header: 'Invoice', render: (row) => <span className="font-mono text-xs">{row.invoiceNo}</span> },
+          { key: 'name', header: 'Fee', render: (row) => row.structureName },
+          { key: 'amount', header: 'Amount', render: (row) => row.amount },
+          { key: 'balance', header: 'Balance', render: (row) => row.balance },
+          { key: 'due', header: 'Due', render: (row) => row.dueDate },
+          {
+            key: 'status',
+            header: 'Status',
+            render: (row) => <Badge tone={invoiceTone(row.status)}>{row.status}</Badge>,
+          },
+        ]}
+      />
+    </div>
+  );
+}
+
+// ── Admin view ───────────────────────────────────────────────
+
+type Tab = 'invoices' | 'structures';
+
+function AdminFeesView() {
+  const [tab, setTab] = useState<Tab>('invoices');
+  const invoices = useList<InvoiceItem>('/fees/invoices');
+  const structures = useList<FeeStructureItem>('/fees/structures');
+  const terms = useOptions<TermItem>('/terms');
+  const courses = useOptions<CourseItem>('/courses');
+  const [summary, setSummary] = useState<FeeSummary | null>(null);
+  const [structureOpen, setStructureOpen] = useState(false);
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const router = useRouter();
+  const { toast } = useToast();
+
+  const loadSummary = () => {
+    apiFetch<FeeSummary>('/fees/summary')
+      .then((response) => setSummary(response.data))
+      .catch(() => undefined);
+  };
+  useEffect(loadSummary, []);
+
+  return (
+    <div className="mx-auto max-w-6xl">
+      <PageHeader
+        title="Fees"
+        description="Fee structures, invoices and manually recorded payments."
+        actions={
+          <>
+            <Button variant="secondary" onClick={() => setStructureOpen(true)}>
+              New structure
+            </Button>
+            <Button onClick={() => setGenerateOpen(true)}>Generate invoices</Button>
+          </>
+        }
+      />
+
+      {summary ? (
+        <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            ['Invoiced', summary.invoicedTotal],
+            ['Collected', summary.collectedTotal],
+            ['Outstanding', summary.outstandingTotal],
+            ['Overdue invoices', String(summary.overdueCount)],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-card border border-line bg-surface-raised p-4 shadow-card">
+              <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">{label}</p>
+              <p className="mt-1 text-xl font-semibold tracking-tight">{value}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="mb-4 flex gap-1 border-b border-line" role="tablist">
+        {(
+          [
+            ['invoices', `Invoices`],
+            ['structures', `Structures`],
+          ] as Array<[Tab, string]>
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            role="tab"
+            aria-selected={tab === key}
+            onClick={() => setTab(key)}
+            className={`border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+              tab === key
+                ? 'border-brand-600 text-brand-700'
+                : 'border-transparent text-ink-muted hover:text-ink'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'invoices' ? (
+        <DataTable
+          rowKey={(row) => row.id}
+          rows={invoices.rows}
+          meta={invoices.meta}
+          loading={invoices.loading}
+          error={invoices.error}
+          search={invoices.search}
+          onSearchChange={invoices.onSearchChange}
+          searchPlaceholder="Search invoice no or student…"
+          onPageChange={invoices.setPage}
+          onRetry={invoices.refetch}
+          onRowClick={(row) => router.push(`/fees/invoices/${row.id}`)}
+          emptyTitle="No invoices"
+          emptyMessage="Generate invoices from a fee structure."
+          columns={[
+            { key: 'no', header: 'Invoice', render: (row) => <span className="font-mono text-xs">{row.invoiceNo}</span> },
+            {
+              key: 'student',
+              header: 'Student',
+              render: (row) => (
+                <div>
+                  <p className="font-medium">{row.studentName}</p>
+                  <p className="font-mono text-xs text-ink-muted">{row.rollNo}</p>
+                </div>
+              ),
+            },
+            { key: 'fee', header: 'Fee', render: (row) => row.structureName },
+            { key: 'amount', header: 'Amount', render: (row) => row.amount },
+            { key: 'balance', header: 'Balance', render: (row) => row.balance },
+            { key: 'due', header: 'Due', render: (row) => row.dueDate },
+            {
+              key: 'status',
+              header: 'Status',
+              render: (row) => <Badge tone={invoiceTone(row.status)}>{row.status}</Badge>,
+            },
+          ]}
+        />
+      ) : (
+        <DataTable
+          rowKey={(row) => row.id}
+          rows={structures.rows}
+          meta={structures.meta}
+          loading={structures.loading}
+          error={structures.error}
+          onPageChange={structures.setPage}
+          onRetry={structures.refetch}
+          emptyTitle="No fee structures"
+          emptyMessage="Create a structure to define what students are billed."
+          columns={[
+            { key: 'name', header: 'Name', render: (row) => row.name },
+            { key: 'term', header: 'Term', render: (row) => row.termLabel },
+            {
+              key: 'scope',
+              header: 'Applies to',
+              render: (row) => row.courseCode ?? 'All students',
+            },
+            {
+              key: 'components',
+              header: 'Components',
+              render: (row) =>
+                row.components.map((c) => `${c.label} (${c.amount})`).join(', '),
+            },
+            { key: 'total', header: 'Total', render: (row) => row.totalAmount },
+            { key: 'invoices', header: 'Invoices', render: (row) => row.invoiceCount },
+          ]}
+        />
+      )}
+
+      <StructureDialog
+        open={structureOpen}
+        terms={terms}
+        courses={courses}
+        onClose={() => setStructureOpen(false)}
+        onSaved={() => {
+          setStructureOpen(false);
+          toast('Fee structure created');
+          structures.refetch();
+        }}
+      />
+      <GenerateDialog
+        open={generateOpen}
+        structures={structures.rows}
+        onClose={() => setGenerateOpen(false)}
+        onDone={(created, skipped) => {
+          setGenerateOpen(false);
+          toast(`${created} invoice(s) created, ${skipped} skipped`, 'info');
+          invoices.refetch();
+          structures.refetch();
+          loadSummary();
+        }}
+      />
+    </div>
+  );
+}
+
+function StructureDialog({
+  open,
+  terms,
+  courses,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  terms: TermItem[];
+  courses: CourseItem[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const form = useZodForm(createFeeStructureSchema);
+  const [components, setComponents] = useState([{ label: 'Tuition', amount: '' }]);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const raw = formValues(event.currentTarget);
+    raw.components = components
+      .filter((component) => component.label.trim() && component.amount !== '')
+      .map((component) => ({
+        label: component.label.trim(),
+        amount: Number(component.amount),
+      }));
+    const input = form.validate(raw);
+    if (!input) return;
+    const done = await form.submit(async () => {
+      await apiFetch('/fees/structures', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    });
+    if (done) {
+      setComponents([{ label: 'Tuition', amount: '' }]);
+      onSaved();
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      title="New fee structure"
+      description="Total is calculated from the components. Leave the course empty to apply to all students."
+      onClose={onClose}
+      wide
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
+        <Input label="Name" name="name" placeholder="Fall 2026 Tuition" error={form.fieldErrors.name} />
+        <div className="grid grid-cols-2 gap-4">
+          <Select
+            label="Term"
+            name="termId"
+            placeholder="Select term"
+            options={terms.map((term) => ({
+              value: term.id,
+              label: `${term.label}${term.isCurrent ? ' (current)' : ''}`,
+            }))}
+            error={form.fieldErrors.termId}
+          />
+          <Select
+            label="Course (optional)"
+            name="courseId"
+            placeholder="All students"
+            options={courses.map((course) => ({
+              value: course.id,
+              label: `${course.code} — ${course.title}`,
+            }))}
+            error={form.fieldErrors.courseId}
+          />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <p className="text-sm font-medium">Components</p>
+          {components.map((component, index) => (
+            <div key={index} className="flex gap-2">
+              <input
+                aria-label={`Component ${index + 1} label`}
+                value={component.label}
+                onChange={(event) =>
+                  setComponents((current) =>
+                    current.map((c, i) =>
+                      i === index ? { ...c, label: event.target.value } : c,
+                    ),
+                  )
+                }
+                placeholder="Label"
+                className="h-10 flex-1 rounded-lg border border-line-strong bg-surface-raised px-3 text-sm"
+              />
+              <input
+                aria-label={`Component ${index + 1} amount`}
+                type="number"
+                min={0}
+                value={component.amount}
+                onChange={(event) =>
+                  setComponents((current) =>
+                    current.map((c, i) =>
+                      i === index ? { ...c, amount: event.target.value } : c,
+                    ),
+                  )
+                }
+                placeholder="Amount"
+                className="h-10 w-32 rounded-lg border border-line-strong bg-surface-raised px-3 text-right text-sm"
+              />
+              {components.length > 1 ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    setComponents((current) => current.filter((_, i) => i !== index))
+                  }
+                >
+                  Remove
+                </Button>
+              ) : null}
+            </div>
+          ))}
+          <div>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() =>
+                setComponents((current) => [...current, { label: '', amount: '' }])
+              }
+            >
+              Add component
+            </Button>
+          </div>
+          {form.fieldErrors.components ? (
+            <p className="text-xs text-danger-700">{form.fieldErrors.components}</p>
+          ) : null}
+        </div>
+
+        {form.formError ? (
+          <p className="rounded-card border border-danger-500/30 bg-danger-50 px-4 py-3 text-sm text-danger-700" role="alert">
+            {form.formError}
+          </p>
+        ) : null}
+        <div className="flex justify-end gap-3">
+          <Button type="button" variant="secondary" onClick={onClose} disabled={form.busy}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={form.busy}>
+            {form.busy ? 'Creating…' : 'Create structure'}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+function GenerateDialog({
+  open,
+  structures,
+  onClose,
+  onDone,
+}: {
+  open: boolean;
+  structures: FeeStructureItem[];
+  onClose: () => void;
+  onDone: (created: number, skipped: number) => void;
+}) {
+  const form = useZodForm(generateInvoicesSchema);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const input = form.validate(formValues(event.currentTarget));
+    if (!input) return;
+    await form.submit(async () => {
+      const response = await apiFetch<{ created: number; skipped: number }>(
+        '/fees/invoices/generate',
+        { method: 'POST', body: JSON.stringify(input) },
+      );
+      onDone(response.data.created, response.data.skipped);
+    });
+  }
+
+  return (
+    <Dialog
+      open={open}
+      title="Generate invoices"
+      description="Creates one invoice per eligible student; students already invoiced for this structure are skipped."
+      onClose={onClose}
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
+        <Select
+          label="Fee structure"
+          name="structureId"
+          placeholder={structures.length ? 'Select structure' : 'No structures yet'}
+          options={structures.map((structure) => ({
+            value: structure.id,
+            label: `${structure.name} (${structure.totalAmount})`,
+          }))}
+          error={form.fieldErrors.structureId}
+        />
+        <Input label="Due date" name="dueDate" type="date" error={form.fieldErrors.dueDate} />
+        {form.formError ? (
+          <p className="rounded-card border border-danger-500/30 bg-danger-50 px-4 py-3 text-sm text-danger-700" role="alert">
+            {form.formError}
+          </p>
+        ) : null}
+        <div className="flex justify-end gap-3">
+          <Button type="button" variant="secondary" onClick={onClose} disabled={form.busy}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={form.busy || structures.length === 0}>
+            {form.busy ? 'Generating…' : 'Generate'}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}

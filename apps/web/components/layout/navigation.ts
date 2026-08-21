@@ -29,7 +29,8 @@ const IMPLEMENTED_ROUTES: Array<{ href: string; label: string }> = [
   { href: '/assignments', label: 'Assignments' },
   { href: '/exams', label: 'Exams' },
   { href: '/results', label: 'Results' },
-  // M6+: fees, community, …
+  { href: '/fees', label: 'Fees' },
+  // M7+: community, …
 ];
 
 export function navItemsFor(
