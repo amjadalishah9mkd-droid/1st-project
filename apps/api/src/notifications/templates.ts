@@ -19,6 +19,18 @@ export function renderTemplate(event: DomainEvent): NotificationTemplate | null 
         body: `You were marked absent in ${event.sectionName} on ${event.date}.`,
         linkPath: '/attendance',
       };
+    case 'assignment.published':
+      return {
+        title: 'New assignment',
+        body: `"${event.title}" is due ${new Date(event.dueAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}.`,
+        linkPath: `/assignments/${event.assignmentId}`,
+      };
+    case 'assignment.graded':
+      return {
+        title: 'Assignment graded',
+        body: `"${event.assignmentTitle}" was graded: ${event.points}/${event.maxPoints}.`,
+        linkPath: `/assignments/${event.assignmentId}`,
+      };
     default:
       return null;
   }

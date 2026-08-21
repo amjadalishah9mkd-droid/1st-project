@@ -441,4 +441,174 @@ export async function runDemoSeed(
       }
     }
   }
+
+  // ── Assignments + submissions (M4) ───────────────────────────
+  const teacherUsers = new Map<string, string>(); // employeeNo → userId
+  for (const spec of teacherSpecs) {
+    const user = await prisma.user.findFirstOrThrow({
+      where: { collegeId, email: spec.email },
+    });
+    teacherUsers.set(spec.employeeNo, user.id);
+  }
+
+  const daysFromNow = (days: number, hour = 23) => {
+    const date = new Date();
+    date.setUTCHours(hour, 59, 0, 0);
+    date.setUTCDate(date.getUTCDate() + days);
+    return date;
+  };
+
+  const assignmentSpecs2: Array<{
+    section: string;
+    title: string;
+    description: string;
+    dueInDays: number;
+    maxPoints: number;
+    allowLate: boolean;
+    published: boolean;
+    createdBy: string; // employeeNo
+    submissions: Array<{
+      admissionNo: string;
+      text: string;
+      daysAgo: number; // submittedAt relative to now
+      points?: number;
+      feedback?: string;
+    }>;
+  }> = [
+    {
+      section: 'CS-101/A',
+      title: 'Programming Basics Worksheet',
+      description:
+        'Complete the ten exercises on variables, conditionals and loops. Submit your answers as text or attach a single file.',
+      dueInDays: -3,
+      maxPoints: 20,
+      allowLate: true,
+      published: true,
+      createdBy: 'EMP-1001',
+      submissions: [
+        {
+          admissionNo: 'ADM-2026-0001',
+          text: 'Answers 1–10 attached inline. Q7 assumes zero-based indexing.',
+          daysAgo: 5,
+          points: 18,
+          feedback: 'Clean work — watch the off-by-one in Q7.',
+        },
+        {
+          admissionNo: 'ADM-2026-0002',
+          text: 'Completed all exercises; unsure about Q9 edge case.',
+          daysAgo: 4,
+          points: 15,
+          feedback: 'Q9 needed the empty-input case handled.',
+        },
+        {
+          admissionNo: 'ADM-2026-0003',
+          text: 'Submission for worksheet — see answers below. 1) x=5 ...',
+          daysAgo: 4,
+        },
+        {
+          admissionNo: 'ADM-2026-0008',
+          text: 'Late submission, apologies — full answers included.',
+          daysAgo: 1,
+        },
+      ],
+    },
+    {
+      section: 'CS-201/A',
+      title: 'Algorithm Analysis Essay',
+      description:
+        'Write a 800–1200 word analysis comparing the time and space complexity of merge sort and quicksort, including best/average/worst cases.',
+      dueInDays: 5,
+      maxPoints: 50,
+      allowLate: false,
+      published: true,
+      createdBy: 'EMP-1001',
+      submissions: [
+        {
+          admissionNo: 'ADM-2026-0001',
+          text: 'Draft essay: Merge sort guarantees O(n log n) across all cases while quicksort…',
+          daysAgo: 0,
+        },
+      ],
+    },
+    {
+      section: 'CS-305/A',
+      title: 'ER Diagram — Library System',
+      description:
+        'Model a lending library: members, catalog items, loans, reservations and fines. Draft — publishing after the lecture.',
+      dueInDays: 10,
+      maxPoints: 30,
+      allowLate: true,
+      published: false,
+      createdBy: 'EMP-1002',
+      submissions: [],
+    },
+    {
+      section: 'HUM-150/A',
+      title: 'Reflective Paragraph',
+      description:
+        'Write one well-structured paragraph (150–200 words) reflecting on your first month at college.',
+      dueInDays: 2,
+      maxPoints: 10,
+      allowLate: true,
+      published: true,
+      createdBy: 'EMP-1005',
+      submissions: [
+        {
+          admissionNo: 'ADM-2026-0011',
+          text: 'My first month at Evergreen has challenged how I plan my time…',
+          daysAgo: 1,
+          points: 9,
+          feedback: 'Strong voice; tighten the closing sentence.',
+        },
+      ],
+    },
+  ];
+
+  for (const spec of assignmentSpecs2) {
+    const sectionId = sections.get(spec.section)!;
+    let assignment = await prisma.assignment.findFirst({
+      where: { sectionId, title: spec.title },
+    });
+    if (!assignment) {
+      assignment = await prisma.assignment.create({
+        data: {
+          sectionId,
+          title: spec.title,
+          description: spec.description,
+          dueAt: daysFromNow(spec.dueInDays),
+          maxPoints: spec.maxPoints,
+          allowLate: spec.allowLate,
+          createdById: teacherUsers.get(spec.createdBy)!,
+          publishedAt: spec.published ? daysFromNow(spec.dueInDays - 7, 9) : null,
+        },
+      });
+    }
+    for (const submission of spec.submissions) {
+      const studentId = studentProfiles.get(submission.admissionNo)!;
+      const submittedAt = new Date();
+      submittedAt.setUTCDate(submittedAt.getUTCDate() - submission.daysAgo);
+      const isLate = submittedAt > assignment.dueAt;
+      await prisma.submission.upsert({
+        where: {
+          assignmentId_studentId: { assignmentId: assignment.id, studentId },
+        },
+        update: {},
+        create: {
+          assignmentId: assignment.id,
+          studentId,
+          textContent: submission.text,
+          submittedAt,
+          isLate,
+          ...(submission.points !== undefined
+            ? {
+                points: submission.points,
+                feedback: submission.feedback,
+                gradedById: teacherUsers.get(spec.createdBy)!,
+                gradedAt: new Date(),
+              }
+            : {}),
+        },
+      });
+    }
+  }
 }

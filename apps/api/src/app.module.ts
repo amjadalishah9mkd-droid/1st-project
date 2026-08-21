@@ -11,10 +11,12 @@ import { EventsModule } from './events/events.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { TimetableModule } from './timetable/timetable.module';
 import { AttendanceModule } from './attendance/attendance.module';
+import { FilesModule } from './files/files.module';
+import { AssignmentsModule } from './assignments/assignments.module';
 
 /**
- * Module graph through M3: infrastructure + auth/access + academic core +
- * timetable & attendance + event-driven notification rows.
+ * Module graph through M4: infrastructure + auth/access + academic core +
+ * timetable & attendance + files + assignments.
  */
 @Module({
   imports: [
@@ -29,6 +31,8 @@ import { AttendanceModule } from './attendance/attendance.module';
     NotificationsModule,
     TimetableModule,
     AttendanceModule,
+    FilesModule,
+    AssignmentsModule,
     HealthModule,
   ],
 })
