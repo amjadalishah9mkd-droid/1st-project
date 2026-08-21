@@ -31,9 +31,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     };
     poll();
     const interval = setInterval(poll, 30000);
+    window.addEventListener('campusos:unread-refresh', poll);
     return () => {
       cancelled = true;
       clearInterval(interval);
+      window.removeEventListener('campusos:unread-refresh', poll);
     };
   }, [status, pathname]);
 

@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import {
   createExamPaperSchema,
+  type ExamAnalytics,
   type ExamDetail,
   type ExamPaperItem,
   type MarksSheet,
@@ -140,6 +141,10 @@ export default function ExamDetailPage() {
       </div>
 
       {canManage ? (
+        <AnalyticsPanel examId={exam.id} refreshKey={exam.markCount} />
+      ) : null}
+
+      {canManage ? (
         <AddPaperDialog
           open={paperOpen}
           examId={exam.id}
@@ -191,6 +196,91 @@ export default function ExamDetailPage() {
         }}
         onClose={() => setPublishConfirm(false)}
       />
+    </div>
+  );
+}
+
+function AnalyticsPanel({
+  examId,
+  refreshKey,
+}: {
+  examId: string;
+  refreshKey: number;
+}) {
+  const [analytics, setAnalytics] = useState<ExamAnalytics | null>(null);
+
+  useEffect(() => {
+    apiFetch<ExamAnalytics>(`/results/analytics?examId=${examId}`)
+      .then((response) => setAnalytics(response.data))
+      .catch(() => undefined);
+  }, [examId, refreshKey]);
+
+  if (!analytics) return null;
+  const totalMarks = analytics.bandDistribution.reduce((sum, band) => sum + band.count, 0);
+
+  return (
+    <div className="mt-6 grid gap-4 lg:grid-cols-2">
+      <section className="rounded-card border border-line bg-surface-raised shadow-card">
+        <h2 className="border-b border-line px-5 py-3 text-sm font-semibold">
+          Paper statistics
+        </h2>
+        {analytics.papers.every((paper) => paper.markCount === 0) ? (
+          <p className="px-5 py-6 text-center text-sm text-ink-muted">
+            Statistics appear once marks are entered.
+          </p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-line text-left">
+                {['Paper', 'Marks', 'Avg', 'High', 'Low'].map((header) => (
+                  <th key={header} className="px-5 py-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">
+                    {header}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {analytics.papers.map((paper) => (
+                <tr key={paper.paperId} className="border-b border-line last:border-b-0">
+                  <td className="px-5 py-2">
+                    {paper.courseCode} — {paper.sectionName}
+                  </td>
+                  <td className="px-5 py-2">{paper.markCount}</td>
+                  <td className="px-5 py-2">{paper.average ?? '—'}</td>
+                  <td className="px-5 py-2">{paper.highest ?? '—'}</td>
+                  <td className="px-5 py-2">{paper.lowest ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <section className="rounded-card border border-line bg-surface-raised shadow-card">
+        <h2 className="border-b border-line px-5 py-3 text-sm font-semibold">
+          Grade distribution
+        </h2>
+        {totalMarks === 0 ? (
+          <p className="px-5 py-6 text-center text-sm text-ink-muted">
+            The distribution appears once marks are entered.
+          </p>
+        ) : (
+          <ul className="space-y-2 px-5 py-4">
+            {analytics.bandDistribution.map((band) => (
+              <li key={band.label} className="flex items-center gap-3 text-sm">
+                <span className="w-8 font-semibold">{band.label}</span>
+                <div className="h-3 flex-1 overflow-hidden rounded-full bg-surface-sunken">
+                  <div
+                    className="h-full rounded-full bg-brand-500"
+                    style={{ width: `${totalMarks > 0 ? (band.count / totalMarks) * 100 : 0}%` }}
+                  />
+                </div>
+                <span className="w-8 text-right text-xs text-ink-muted">{band.count}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }

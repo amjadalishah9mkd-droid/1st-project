@@ -24,6 +24,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { invoiceTone } from './fee-utils';
+import { formatAmount } from '@/lib/format';
 
 export default function FeesPage() {
   const { hasPermission } = useSession();
@@ -56,8 +57,8 @@ function StudentFeesView() {
         columns={[
           { key: 'no', header: 'Invoice', render: (row) => <span className="font-mono text-xs">{row.invoiceNo}</span> },
           { key: 'name', header: 'Fee', render: (row) => row.structureName },
-          { key: 'amount', header: 'Amount', render: (row) => row.amount },
-          { key: 'balance', header: 'Balance', render: (row) => row.balance },
+          { key: 'amount', header: 'Amount', render: (row) => formatAmount(row.amount) },
+          { key: 'balance', header: 'Balance', render: (row) => formatAmount(row.balance) },
           { key: 'due', header: 'Due', render: (row) => row.dueDate },
           {
             key: 'status',
@@ -82,6 +83,7 @@ function AdminFeesView() {
   const courses = useOptions<CourseItem>('/courses');
   const [summary, setSummary] = useState<FeeSummary | null>(null);
   const [structureOpen, setStructureOpen] = useState(false);
+  const [editingStructure, setEditingStructure] = useState<FeeStructureItem | null>(null);
   const [generateOpen, setGenerateOpen] = useState(false);
   const router = useRouter();
   const { toast } = useToast();
@@ -111,9 +113,9 @@ function AdminFeesView() {
       {summary ? (
         <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {[
-            ['Invoiced', summary.invoicedTotal],
-            ['Collected', summary.collectedTotal],
-            ['Outstanding', summary.outstandingTotal],
+            ['Invoiced', formatAmount(summary.invoicedTotal)],
+            ['Collected', formatAmount(summary.collectedTotal)],
+            ['Outstanding', formatAmount(summary.outstandingTotal)],
             ['Overdue invoices', String(summary.overdueCount)],
           ].map(([label, value]) => (
             <div key={label} className="rounded-card border border-line bg-surface-raised p-4 shadow-card">
@@ -175,8 +177,8 @@ function AdminFeesView() {
               ),
             },
             { key: 'fee', header: 'Fee', render: (row) => row.structureName },
-            { key: 'amount', header: 'Amount', render: (row) => row.amount },
-            { key: 'balance', header: 'Balance', render: (row) => row.balance },
+            { key: 'amount', header: 'Amount', render: (row) => formatAmount(row.amount) },
+            { key: 'balance', header: 'Balance', render: (row) => formatAmount(row.balance) },
             { key: 'due', header: 'Due', render: (row) => row.dueDate },
             {
               key: 'status',
@@ -210,8 +212,18 @@ function AdminFeesView() {
               render: (row) =>
                 row.components.map((c) => `${c.label} (${c.amount})`).join(', '),
             },
-            { key: 'total', header: 'Total', render: (row) => row.totalAmount },
+            { key: 'total', header: 'Total', render: (row) => formatAmount(row.totalAmount) },
             { key: 'invoices', header: 'Invoices', render: (row) => row.invoiceCount },
+            {
+              key: 'actions',
+              header: '',
+              className: 'w-16 text-right',
+              render: (row) => (
+                <Button variant="ghost" size="sm" onClick={() => setEditingStructure(row)}>
+                  Edit
+                </Button>
+              ),
+            },
           ]}
         />
       )}
@@ -227,6 +239,18 @@ function AdminFeesView() {
           structures.refetch();
         }}
       />
+      {editingStructure ? (
+        <EditStructureDialog
+          structure={editingStructure}
+          onClose={() => setEditingStructure(null)}
+          onSaved={() => {
+            setEditingStructure(null);
+            toast('Fee structure updated');
+            structures.refetch();
+            loadSummary();
+          }}
+        />
+      ) : null}
       <GenerateDialog
         open={generateOpen}
         structures={structures.rows}
@@ -452,6 +476,141 @@ function GenerateDialog({
           </Button>
           <Button type="submit" disabled={form.busy || structures.length === 0}>
             {form.busy ? 'Generating…' : 'Generate'}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+
+function EditStructureDialog({
+  structure,
+  onClose,
+  onSaved,
+}: {
+  structure: FeeStructureItem;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(structure.name);
+  const [components, setComponents] = useState(
+    structure.components.map((component) => ({
+      label: component.label,
+      amount: component.amount,
+    })),
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const cleaned = components
+      .filter((component) => component.label.trim() && component.amount !== '')
+      .map((component) => ({
+        label: component.label.trim(),
+        amount: Number(component.amount),
+      }));
+    if (cleaned.length === 0) {
+      setError('Add at least one component');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await apiFetch(`/fees/structures/${structure.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: name.trim(), components: cleaned }),
+      });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Update failed');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open
+      title={`Edit ${structure.name}`}
+      description="Existing invoices keep their snapshotted amounts; only future invoices use the new total."
+      onClose={onClose}
+      wide
+    >
+      <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
+        <Input
+          label="Name"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+        />
+        <div className="flex flex-col gap-2">
+          <p className="text-sm font-medium">Components</p>
+          {components.map((component, index) => (
+            <div key={index} className="flex gap-2">
+              <input
+                aria-label={`Component ${index + 1} label`}
+                value={component.label}
+                onChange={(event) =>
+                  setComponents((current) =>
+                    current.map((c, i) =>
+                      i === index ? { ...c, label: event.target.value } : c,
+                    ),
+                  )
+                }
+                className="h-10 flex-1 rounded-lg border border-line-strong bg-surface-raised px-3 text-sm"
+              />
+              <input
+                aria-label={`Component ${index + 1} amount`}
+                type="number"
+                min={0}
+                value={component.amount}
+                onChange={(event) =>
+                  setComponents((current) =>
+                    current.map((c, i) =>
+                      i === index ? { ...c, amount: event.target.value } : c,
+                    ),
+                  )
+                }
+                className="h-10 w-32 rounded-lg border border-line-strong bg-surface-raised px-3 text-right text-sm"
+              />
+              {components.length > 1 ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    setComponents((current) => current.filter((_, i) => i !== index))
+                  }
+                >
+                  Remove
+                </Button>
+              ) : null}
+            </div>
+          ))}
+          <div>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() =>
+                setComponents((current) => [...current, { label: '', amount: '' }])
+              }
+            >
+              Add component
+            </Button>
+          </div>
+        </div>
+        {error ? (
+          <p className="rounded-card border border-danger-500/30 bg-danger-50 px-4 py-3 text-sm text-danger-700" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <div className="flex justify-end gap-3">
+          <Button type="button" variant="secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={busy}>
+            {busy ? 'Saving…' : 'Save changes'}
           </Button>
         </div>
       </form>

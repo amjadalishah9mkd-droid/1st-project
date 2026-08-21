@@ -354,8 +354,44 @@ export class CommunityEventsService {
       }),
       this.prisma.event.count({ where }),
     ]);
+
+    // Batched aggregates (M9 hardening — avoids 3 queries per row).
+    const eventIds = rows.map((row) => row.id);
+    const [rsvpCounts, myRsvps] = await Promise.all([
+      this.prisma.eventRsvp.groupBy({
+        by: ['eventId', 'status'],
+        where: { eventId: { in: eventIds } },
+        _count: true,
+      }),
+      this.prisma.eventRsvp.findMany({
+        where: { eventId: { in: eventIds }, userId: user.id },
+        select: { eventId: true, status: true },
+      }),
+    ]);
+    const countFor = (eventId: string, status: string) =>
+      rsvpCounts.find((c) => c.eventId === eventId && c.status === status)?._count ?? 0;
+    const myRsvpMap = new Map(myRsvps.map((r) => [r.eventId, r.status]));
+
     const data: EventItem[] = [];
-    for (const row of rows) data.push(await this.toItem(row, user));
+    for (const row of rows) {
+      data.push({
+        id: row.id,
+        title: row.title,
+        description: row.description,
+        venue: row.venue,
+        startsAt: row.startsAt.toISOString(),
+        endsAt: row.endsAt.toISOString(),
+        capacity: row.capacity,
+        status: row.status,
+        societyId: row.society?.id ?? null,
+        societyName: row.society?.name ?? null,
+        createdByName: `${row.createdBy.firstName} ${row.createdBy.lastName}`,
+        goingCount: countFor(row.id, 'GOING'),
+        interestedCount: countFor(row.id, 'INTERESTED'),
+        myRsvp: (myRsvpMap.get(row.id) as EventItem['myRsvp']) ?? null,
+        canManage: await this.canManageEvent(user, row.societyId, row.createdById),
+      });
+    }
     return { data, meta: pageMeta(query, total) };
   }
 

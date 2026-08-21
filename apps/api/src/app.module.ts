@@ -18,10 +18,10 @@ import { ExamsModule } from './exams/exams.module';
 import { FeesModule } from './fees/fees.module';
 import { CommunityModule } from './community/community.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
+import { DashboardsModule } from './dashboards/dashboards.module';
 
 /**
- * Module graph through M8: everything through community, plus moderation,
- * the notification inbox, announcements and scheduled sweeps.
+ * Complete module graph (M0–M9): the full CampusOS MVP per Blueprint §6.
  */
 @Module({
   imports: [
@@ -43,6 +43,7 @@ import { AnnouncementsModule } from './announcements/announcements.module';
     ExamsModule,
     FeesModule,
     CommunityModule,
+    DashboardsModule,
     HealthModule,
   ],
 })

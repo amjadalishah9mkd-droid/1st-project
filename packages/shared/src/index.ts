@@ -19,3 +19,4 @@ export * from './types/exams';
 export * from './types/fees';
 export * from './types/community';
 export * from './types/moderation';
+export * from './types/dashboards';

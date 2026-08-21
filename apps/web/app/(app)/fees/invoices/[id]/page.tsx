@@ -18,6 +18,7 @@ import { ConfirmDialog, Dialog } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { invoiceTone } from '../../fee-utils';
+import { formatAmount } from '@/lib/format';
 
 export default function InvoiceDetailPage() {
   const params = useParams<{ id: string }>();
@@ -71,9 +72,9 @@ export default function InvoiceDetailPage() {
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {[
           ['Status', <Badge key="s" tone={invoiceTone(invoice.status)}>{invoice.status}</Badge>],
-          ['Amount', invoice.amount],
-          ['Paid', invoice.paidAmount],
-          ['Balance', invoice.balance],
+          ['Amount', formatAmount(invoice.amount)],
+          ['Paid', formatAmount(invoice.paidAmount)],
+          ['Balance', formatAmount(invoice.balance)],
         ].map(([label, value]) => (
           <div key={label as string} className="rounded-card border border-line bg-surface-raised p-4 shadow-card">
             <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">
@@ -93,12 +94,12 @@ export default function InvoiceDetailPage() {
             {invoice.components.map((component) => (
               <li key={component.label} className="flex justify-between px-5 py-2.5">
                 <span>{component.label}</span>
-                <span className="font-medium">{component.amount}</span>
+                <span className="font-medium">{formatAmount(component.amount)}</span>
               </li>
             ))}
             <li className="flex justify-between px-5 py-2.5 font-semibold">
               <span>Total</span>
-              <span>{invoice.amount}</span>
+              <span>{formatAmount(invoice.amount)}</span>
             </li>
           </ul>
           <p className="border-t border-line px-5 py-2.5 text-xs text-ink-muted">
@@ -119,7 +120,7 @@ export default function InvoiceDetailPage() {
               {invoice.payments.map((payment) => (
                 <li key={payment.id} className="px-5 py-2.5">
                   <div className="flex justify-between">
-                    <span className="font-medium">{payment.amount}</span>
+                    <span className="font-medium">{formatAmount(payment.amount)}</span>
                     <span className="text-ink-muted">{payment.paidAt}</span>
                   </div>
                   <p className="text-xs text-ink-muted">

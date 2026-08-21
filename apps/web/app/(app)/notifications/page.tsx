@@ -8,6 +8,7 @@ import { useToast } from '@/components/providers/toast-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { EmptyState, ErrorState, Skeleton } from '@/components/data/data-table';
 import { Button } from '@/components/ui/button';
+import { refreshUnreadBadge } from '@/lib/format';
 
 function timeAgo(iso: string): string {
   const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -24,6 +25,7 @@ export default function NotificationsPage() {
   async function markRead(id: string) {
     try {
       await apiFetch(`/notifications/${id}/read`, { method: 'PATCH' });
+      refreshUnreadBadge();
       list.refetch();
     } catch (err) {
       toast(err instanceof ApiError ? err.message : 'Failed', 'error');
@@ -36,6 +38,7 @@ export default function NotificationsPage() {
         method: 'POST',
       });
       toast(`${response.data.read} notification(s) marked as read`);
+      refreshUnreadBadge();
       list.refetch();
     } catch (err) {
       toast(err instanceof ApiError ? err.message : 'Failed', 'error');
