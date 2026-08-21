@@ -30,7 +30,8 @@ const IMPLEMENTED_ROUTES: Array<{ href: string; label: string }> = [
   { href: '/exams', label: 'Exams' },
   { href: '/results', label: 'Results' },
   { href: '/fees', label: 'Fees' },
-  // M7+: community, …
+  { href: '/community', label: 'Community' },
+  // M8+: moderation, announcements, notifications, settings
 ];
 
 export function navItemsFor(

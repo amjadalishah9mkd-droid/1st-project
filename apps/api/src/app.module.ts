@@ -15,10 +15,12 @@ import { FilesModule } from './files/files.module';
 import { AssignmentsModule } from './assignments/assignments.module';
 import { ExamsModule } from './exams/exams.module';
 import { FeesModule } from './fees/fees.module';
+import { CommunityModule } from './community/community.module';
 
 /**
- * Module graph through M6: infrastructure + auth/access + academic core +
- * timetable & attendance + files + assignments + exams & results + fees.
+ * Module graph through M7: infrastructure + auth/access + academic core +
+ * timetable & attendance + files + assignments + exams & results + fees +
+ * community.
  */
 @Module({
   imports: [
@@ -37,6 +39,7 @@ import { FeesModule } from './fees/fees.module';
     AssignmentsModule,
     ExamsModule,
     FeesModule,
+    CommunityModule,
     HealthModule,
   ],
 })

@@ -49,6 +49,41 @@ export function renderTemplate(event: DomainEvent): NotificationTemplate | null 
         body: `An invoice of ${event.amount} was due on ${event.dueDate} and is now overdue.`,
         linkPath: '/fees',
       };
+    case 'community.comment':
+      return {
+        title: 'New comment',
+        body: `${event.actorName} commented on your post.`,
+        linkPath: `/community?post=${event.postId}`,
+      };
+    case 'community.like':
+      return {
+        title: 'New like',
+        body: `${event.actorName} liked your post.`,
+        linkPath: `/community?post=${event.postId}`,
+      };
+    case 'community.group_request':
+      return {
+        title: 'Join request',
+        body: `Someone requested to join "${event.groupName}".`,
+        linkPath: `/community/groups/${event.groupId}`,
+      };
+    case 'community.membership_decided':
+      return {
+        title: event.scope === 'GROUP' ? 'Group membership' : 'Society membership',
+        body: event.approved
+          ? `You are now a member of "${event.targetName}".`
+          : `Your request to join "${event.targetName}" was declined.`,
+        linkPath:
+          event.scope === 'GROUP'
+            ? `/community/groups/${event.targetId}`
+            : `/community/societies/${event.targetId}`,
+      };
+    case 'event.created':
+      return {
+        title: 'New event',
+        body: `"${event.title}" is happening on ${new Date(event.startsAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}.`,
+        linkPath: '/community/events',
+      };
     default:
       return null;
   }

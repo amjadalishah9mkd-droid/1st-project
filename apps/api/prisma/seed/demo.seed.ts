@@ -765,4 +765,138 @@ export async function runDemoSeed(
       }
     }
   }
+
+  // ── Community (M7) ───────────────────────────────────────────
+  const userIdByEmail = new Map<string, string>();
+  for (const u of await prisma.user.findMany({ where: { collegeId }, select: { id: true, email: true } })) {
+    userIdByEmail.set(u.email, u.id);
+  }
+  const uid = (email: string) => userIdByEmail.get(email)!;
+
+  // Groups
+  const groupSpecs = [
+    { name: 'Coding Club', description: 'Weekly katas, hackathon prep and pair programming.', privacy: 'OPEN' as const, creator: 'jonas.weber@campusos.dev', members: ['student@campusos.dev', 'aisha.khan@campusos.dev', 'ravi.sharma@campusos.dev'] },
+    { name: 'Photography Circle', description: 'Campus walks, photo challenges and editing tips.', privacy: 'OPEN' as const, creator: 'sofia.rossi@campusos.dev', members: ['nina.ivanova@campusos.dev', 'tom.evans@campusos.dev'] },
+    { name: 'Debate Society Prep', description: 'Closed practice group for the inter-college debate team.', privacy: 'REQUEST' as const, creator: 'nina.ivanova@campusos.dev', members: ['emma.silva@campusos.dev'] },
+  ];
+  const groupIds = new Map<string, string>();
+  for (const spec of groupSpecs) {
+    let group = await prisma.group.findFirst({ where: { collegeId, name: spec.name } });
+    if (!group) {
+      group = await prisma.group.create({
+        data: {
+          collegeId,
+          name: spec.name,
+          description: spec.description,
+          privacy: spec.privacy,
+          createdById: uid(spec.creator),
+          members: {
+            create: [
+              { userId: uid(spec.creator), role: 'MODERATOR', status: 'ACTIVE' },
+              ...spec.members.map((email) => ({ userId: uid(email), role: 'MEMBER' as const, status: 'ACTIVE' as const })),
+            ],
+          },
+        },
+      });
+    }
+    groupIds.set(spec.name, group.id);
+  }
+
+  // Societies (Mina is president of the Tech Society)
+  const societySpecs = [
+    { name: 'Tech Society', category: 'TECHNICAL' as const, description: 'Talks, workshops and the annual hack night.', advisor: 'EMP-1002', members: [ { email: 'student@campusos.dev', role: 'PRESIDENT' as const }, { email: 'jonas.weber@campusos.dev', role: 'OFFICER' as const }, { email: 'aisha.khan@campusos.dev', role: 'MEMBER' as const } ] },
+    { name: 'Literary Society', category: 'LITERARY' as const, description: 'Poetry slams, book circles and the campus zine.', advisor: 'EMP-1005', members: [ { email: 'nina.ivanova@campusos.dev', role: 'PRESIDENT' as const }, { email: 'tom.evans@campusos.dev', role: 'MEMBER' as const } ] },
+  ];
+  const societyIds = new Map<string, string>();
+  for (const spec of societySpecs) {
+    let society = await prisma.society.findFirst({ where: { collegeId, name: spec.name } });
+    if (!society) {
+      society = await prisma.society.create({
+        data: {
+          collegeId,
+          name: spec.name,
+          category: spec.category,
+          description: spec.description,
+          facultyAdvisorId: teacherProfiles.get(spec.advisor)!,
+          members: { create: spec.members.map((m) => ({ userId: uid(m.email), role: m.role, status: 'ACTIVE' as const })) },
+        },
+      });
+    }
+    societyIds.set(spec.name, society.id);
+  }
+
+  // Events
+  const eventSpecs = [
+    { title: 'Hack Night 2026', society: 'Tech Society', venue: 'CS-Lab 1', inDays: 6, capacity: 60, creator: 'student@campusos.dev', description: 'An evening of rapid prototyping — teams of three, pizza included.' },
+    { title: 'Open Mic & Poetry Slam', society: 'Literary Society', venue: 'HUM Auditorium', inDays: 9, capacity: null, creator: 'nina.ivanova@campusos.dev', description: 'Share your words. Sign-up at the door.' },
+    { title: 'Freshers Welcome Fair', society: null, venue: 'Main Quad', inDays: 3, capacity: null, creator: 'admin@campusos.dev', description: 'Meet every society and club on campus in one afternoon.' },
+  ];
+  for (const spec of eventSpecs) {
+    const existing = await prisma.event.findFirst({ where: { collegeId, title: spec.title } });
+    if (existing) continue;
+    const startsAt = daysFromNow(spec.inDays, 17);
+    const endsAt = daysFromNow(spec.inDays, 20);
+    const event = await prisma.event.create({
+      data: {
+        collegeId,
+        societyId: spec.society ? societyIds.get(spec.society)! : null,
+        title: spec.title,
+        description: spec.description,
+        venue: spec.venue,
+        startsAt,
+        endsAt,
+        capacity: spec.capacity,
+        createdById: uid(spec.creator),
+      },
+    });
+    for (const email of ['jonas.weber@campusos.dev', 'aisha.khan@campusos.dev']) {
+      await prisma.eventRsvp.create({ data: { eventId: event.id, userId: uid(email), status: 'GOING' } }).catch(() => undefined);
+    }
+  }
+
+  // Posts + comments + likes on the campus feed
+  const postSpecs = [
+    { author: 'student@campusos.dev', type: 'ACHIEVEMENT' as const, body: 'Placed 2nd at the regional algorithms contest this weekend! Huge thanks to the Coding Club practice sessions. 🏆', likes: ['jonas.weber@campusos.dev', 'aisha.khan@campusos.dev', 'sofia.rossi@campusos.dev'], comments: [ { author: 'jonas.weber@campusos.dev', body: 'Massive! Congrats Mina 🎉' }, { author: 'aisha.khan@campusos.dev', body: 'So deserved — those DP drills paid off.' } ] },
+    { author: 'jonas.weber@campusos.dev', type: 'GENERAL' as const, body: 'Anyone else finding the CS-201 essay topic surprisingly fun? Merge sort propaganda incoming.', likes: ['student@campusos.dev'], comments: [ { author: 'student@campusos.dev', body: 'Quicksort gang would like a word 😄' } ] },
+    { author: 'nina.ivanova@campusos.dev', type: 'GENERAL' as const, body: 'The library added a quiet-hours wing on the second floor. Absolute game changer during midterms.', likes: ['tom.evans@campusos.dev', 'emma.silva@campusos.dev'], comments: [] },
+    { author: 'teacher@campusos.dev', type: 'GENERAL' as const, body: 'CS-101 folks: office hours moved to Thursday 3pm this week only. Bring your worksheet questions.', likes: ['student@campusos.dev', 'ravi.sharma@campusos.dev'], comments: [] },
+  ];
+  for (const spec of postSpecs) {
+    const existing = await prisma.post.findFirst({ where: { collegeId, body: spec.body } });
+    if (existing) continue;
+    const post = await prisma.post.create({
+      data: {
+        collegeId,
+        authorId: uid(spec.author),
+        type: spec.type,
+        body: spec.body,
+        likeCount: spec.likes.length,
+        commentCount: spec.comments.length,
+      },
+    });
+    for (const email of spec.likes) {
+      await prisma.like.create({ data: { userId: uid(email), postId: post.id } }).catch(() => undefined);
+    }
+    for (const comment of spec.comments) {
+      await prisma.comment.create({ data: { postId: post.id, authorId: uid(comment.author), body: comment.body } });
+    }
+  }
+
+  // Group post
+  const codingClubId = groupIds.get('Coding Club')!;
+  const groupPostBody = 'Kata of the week: implement an LRU cache without looking anything up. Solutions thread on Friday!';
+  if (!(await prisma.post.findFirst({ where: { collegeId, body: groupPostBody } }))) {
+    await prisma.post.create({
+      data: { collegeId, authorId: uid('jonas.weber@campusos.dev'), type: 'GENERAL', body: groupPostBody, groupId: codingClubId },
+    });
+  }
+
+  // Society wall post
+  const techSocietyId = societyIds.get('Tech Society')!;
+  const societyPostBody = 'Hack Night registrations open! Teams of three, all skill levels welcome. See the Events tab to RSVP.';
+  if (!(await prisma.post.findFirst({ where: { collegeId, body: societyPostBody } }))) {
+    await prisma.post.create({
+      data: { collegeId, authorId: uid('student@campusos.dev'), type: 'GENERAL', body: societyPostBody, societyId: techSocietyId },
+    });
+  }
 }
