@@ -129,6 +129,13 @@ export interface ModerationActionTakenEvent {
   note: string | null;
 }
 
+export interface VerificationDecidedEvent {
+  type: 'verification.approved' | 'verification.rejected';
+  claimId: string;
+  userId: string;
+  rejectionReason?: string;
+}
+
 export type DomainEvent =
   | AttendanceMarkedAbsentEvent
   | AssignmentPublishedEvent
@@ -144,6 +151,7 @@ export type DomainEvent =
   | EventCreatedEvent
   | EventReminderEvent
   | AnnouncementPublishedEvent
-  | ModerationActionTakenEvent;
+  | ModerationActionTakenEvent
+  | VerificationDecidedEvent;
 
 export type DomainEventType = DomainEvent['type'];

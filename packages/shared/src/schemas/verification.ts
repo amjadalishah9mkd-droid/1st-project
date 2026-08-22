@@ -65,3 +65,69 @@ export function readCollegeSettings(raw: unknown): CollegeSettings {
   const result = collegeSettingsSchema.safeParse(raw ?? {});
   return result.success ? result.data : collegeSettingsSchema.parse({});
 }
+
+// ── M11-W3: claims API contracts ────────────────────────────────────────────
+
+export const EVIDENCE_MAX_BYTES = 5 * 1024 * 1024; // 5 MB — ID card images
+export const EVIDENCE_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+] as const;
+
+export const submitClaimSchema = z.object({
+  claimedAdmissionNo: z.string().trim().min(1).max(64),
+  evidenceFileKey: z.string().trim().min(1).max(200),
+});
+export type SubmitClaimInput = z.infer<typeof submitClaimSchema>;
+
+export const claimDecisionSchema = z
+  .object({
+    decision: z.enum(['APPROVE', 'REJECT']),
+    rejectionReason: z.string().trim().min(3).max(500).optional(),
+  })
+  .refine((v) => v.decision !== 'REJECT' || v.rejectionReason, {
+    message: 'A rejection reason is required',
+    path: ['rejectionReason'],
+  });
+export type ClaimDecisionInput = z.infer<typeof claimDecisionSchema>;
+
+/** Own-claim view (student). Never exposes reviewer identity. */
+export interface MyClaimItem {
+  id: string;
+  claimedAdmissionNo: string;
+  status: ClaimStatusKey;
+  createdAt: string;
+  decidedAt: string | null;
+  rejectionReason: string | null;
+  evidence: { name: string; size: number } | null;
+}
+
+/** Admin queue/detail view. */
+export interface ClaimAdminItem {
+  id: string;
+  status: ClaimStatusKey;
+  claimedAdmissionNo: string;
+  createdAt: string;
+  decidedAt: string | null;
+  rejectionReason: string | null;
+  claimant: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+    verificationStatus: UserVerificationStatus;
+  };
+  matchedProfile: {
+    id: string;
+    admissionNo: string;
+    rollNo: string;
+    batch: string;
+    firstName: string;
+    lastName: string;
+    departmentName: string;
+    belongsToClaimant: boolean;
+  } | null;
+  evidence: { url: string; name: string; size: number; mimeType: string } | null;
+}

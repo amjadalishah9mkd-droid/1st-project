@@ -19,6 +19,7 @@ import { FeesModule } from './fees/fees.module';
 import { CommunityModule } from './community/community.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
 import { DashboardsModule } from './dashboards/dashboards.module';
+import { VerificationModule } from './verification/verification.module';
 
 /**
  * Complete module graph (M0–M9): the full CampusOS MVP per Blueprint §6.
@@ -44,6 +45,7 @@ import { DashboardsModule } from './dashboards/dashboards.module';
     FeesModule,
     CommunityModule,
     DashboardsModule,
+    VerificationModule,
     HealthModule,
   ],
 })

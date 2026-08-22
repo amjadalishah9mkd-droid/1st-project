@@ -253,6 +253,7 @@ model College {
   announcements    Announcement[]
   auditLogs        AuditLog[]
   identityClaims   StudentIdentityClaim[]
+  evidenceFiles    EvidenceFile[]
 }
 
 // ────────────────────── Identity & Access ──────────────────────
@@ -289,6 +290,7 @@ model User {
   authIdentities         AuthIdentity[]
   identityClaims         StudentIdentityClaim[] @relation("ClaimUser")
   identityClaimsDecided  StudentIdentityClaim[] @relation("ClaimDecidedBy")
+  evidenceFiles          EvidenceFile[]
 
   sessionsTaken     ClassSession[]     @relation("SessionTakenBy")
   attendanceMarked  AttendanceRecord[] @relation("AttendanceMarkedBy")
@@ -400,6 +402,25 @@ model AuthIdentity {
   // One identity per provider per user (v1).
   @@unique([userId, provider])
   @@index([userId])
+}
+
+// M11-W3 — student-ID evidence uploads. Purpose-restricted file metadata:
+// only keys registered here are treated as verification evidence, and only
+// authorized parties can obtain signed URLs for them (files.controller).
+model EvidenceFile {
+  id         String   @id @default(cuid())
+  key        String   @unique
+  collegeId  String
+  uploaderId String
+  mimeType   String
+  size       Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  college  College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  uploader User    @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
+
+  @@index([uploaderId])
 }
 
 // M11 — claim binding a login account to a real student identity

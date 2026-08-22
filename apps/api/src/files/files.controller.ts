@@ -22,6 +22,7 @@ import {
 } from '@campusos/shared';
 import { LocalStorageAdapter } from './storage.adapter';
 import { FileUrlSignerService } from './url-signer.service';
+import { EvidenceAuthzService } from './evidence-authz.service';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { CurrentUser } from '../access/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
@@ -45,6 +46,7 @@ export class FilesController {
   constructor(
     private readonly storage: LocalStorageAdapter,
     private readonly signer: FileUrlSignerService,
+    private readonly evidenceAuthz: EvidenceAuthzService,
   ) {}
 
   @Post()
@@ -77,7 +79,7 @@ export class FilesController {
 
   @Post('sign')
   async signUrl(
-    @CurrentUser() _user: AuthenticatedUser,
+    @CurrentUser() user: AuthenticatedUser,
     @Body(new ZodValidationPipe(signFileUrlSchema)) body: SignFileUrlInput,
   ): Promise<SignedFileUrl> {
     // Strictly internal URLs only: exact prefix, then a single key segment
@@ -102,6 +104,9 @@ export class FilesController {
         message: 'Only CampusOS file URLs can be signed',
       });
     }
+    // M11-W3: verification evidence is a restricted file class. Signing —
+    // the only way to a working URL — requires per-user authorization.
+    await this.evidenceAuthz.assertCanSign(user, key);
     const { exp, sig } = this.signer.sign(key);
     return {
       url: `${FILE_URL_PREFIX}${encodeURIComponent(key)}?exp=${exp}&sig=${sig}`,

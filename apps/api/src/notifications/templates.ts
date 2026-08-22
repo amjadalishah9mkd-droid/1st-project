@@ -13,6 +13,20 @@ export interface NotificationTemplate {
  */
 export function renderTemplate(event: DomainEvent): NotificationTemplate | null {
   switch (event.type) {
+    case 'verification.approved':
+      return {
+        title: 'Identity verified',
+        body: 'Your student identity has been verified. Welcome to CampusOS!',
+        linkPath: '/dashboard',
+      };
+    case 'verification.rejected':
+      return {
+        title: 'Verification update',
+        body: event.rejectionReason
+          ? `Your identity claim was not approved: ${event.rejectionReason}`
+          : 'Your identity claim was not approved. You may submit a new claim.',
+        linkPath: '/verify',
+      };
     case 'attendance.marked_absent':
       return {
         title: 'Marked absent',
