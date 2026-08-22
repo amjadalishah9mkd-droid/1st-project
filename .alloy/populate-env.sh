@@ -7,6 +7,18 @@ cd "$(dirname "$0")/.."
 
 ENV_FILE="apps/api/.env"
 
+ensure_key() {
+  local key="$1"
+  if ! grep -q "^${key}=..*" "$ENV_FILE" 2>/dev/null; then
+    # Replace an empty assignment or append a fresh one.
+    if grep -q "^${key}=$" "$ENV_FILE" 2>/dev/null; then
+      sed -i "s|^${key}=$|${key}=$(openssl rand -hex 32)|" "$ENV_FILE"
+    else
+      echo "${key}=$(openssl rand -hex 32)" >> "$ENV_FILE"
+    fi
+  fi
+}
+
 if [ ! -f "$ENV_FILE" ]; then
   {
     echo "DATABASE_URL=postgresql://campusos:campusos@127.0.0.1:5432/campusos"
@@ -14,15 +26,12 @@ if [ ! -f "$ENV_FILE" ]; then
     echo "SEED_DEMO=true"
     echo "JWT_ACCESS_SECRET=$(openssl rand -hex 32)"
     echo "JWT_REFRESH_SECRET=$(openssl rand -hex 32)"
+    echo "FILE_URL_SECRET=$(openssl rand -hex 32)"
   } > "$ENV_FILE"
   echo "[populate-env] created $ENV_FILE"
 else
-  # Fill only missing keys; never touch existing values.
-  grep -q '^JWT_ACCESS_SECRET=..*' "$ENV_FILE" || \
-    sed -i "s|^JWT_ACCESS_SECRET=$|JWT_ACCESS_SECRET=$(openssl rand -hex 32)|" "$ENV_FILE" 2>/dev/null || \
-    echo "JWT_ACCESS_SECRET=$(openssl rand -hex 32)" >> "$ENV_FILE"
-  grep -q '^JWT_REFRESH_SECRET=..*' "$ENV_FILE" || \
-    sed -i "s|^JWT_REFRESH_SECRET=$|JWT_REFRESH_SECRET=$(openssl rand -hex 32)|" "$ENV_FILE" 2>/dev/null || \
-    echo "JWT_REFRESH_SECRET=$(openssl rand -hex 32)" >> "$ENV_FILE"
+  ensure_key JWT_ACCESS_SECRET
+  ensure_key JWT_REFRESH_SECRET
+  ensure_key FILE_URL_SECRET
   echo "[populate-env] $ENV_FILE present; missing keys filled"
 fi

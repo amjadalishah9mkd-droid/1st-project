@@ -1,18 +1,38 @@
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { EnvelopeInterceptor } from './common/interceptors/envelope.interceptor';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
+import { corsOrigins, validateEnv } from './config/env';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, {
+  // Fail fast on misconfiguration (M10-W3) — before anything boots.
+  const env = validateEnv();
+
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: ['log', 'warn', 'error'],
   });
 
   // Blueprint §7: all routes served under /api/v1
   app.setGlobalPrefix('api/v1');
+
+  // Security headers + fingerprint reduction (M10-W3).
+  app.use(
+    helmet({
+      // The API serves JSON and file streams only; a strict CSP belongs to
+      // the web app. Cross-origin resource policy stays same-site.
+      contentSecurityPolicy: false,
+      crossOriginResourcePolicy: { policy: 'same-site' },
+    }),
+  );
+  app.disable('x-powered-by');
+  // Behind the Alloy/production reverse proxy: trust the first hop so
+  // req.ip (login rate limiting, audit) sees the real client address.
+  app.set('trust proxy', 1);
 
   // Refresh tokens travel as httpOnly cookies (Blueprint §9)
   app.use(cookieParser());
@@ -21,16 +41,17 @@ async function bootstrap(): Promise<void> {
   app.useGlobalInterceptors(new EnvelopeInterceptor());
   app.useGlobalFilters(new GlobalExceptionFilter());
 
-  // Web app is same-origin behind the Alloy proxy in production-like setups;
-  // during development web (3000) and api (4000) are separate origins.
+  // Dev: reflect origins for the local web app. Production: explicit
+  // CORS_ORIGINS allowlist, otherwise same-origin only.
   app.enableCors({
-    origin: true,
+    origin: corsOrigins(env),
     credentials: true,
   });
 
-  const port = Number.parseInt(process.env.API_PORT ?? '4000', 10);
-  await app.listen(port, '0.0.0.0');
-  new Logger('Bootstrap').log(`CampusOS API listening on ${port} (/api/v1)`);
+  await app.listen(env.API_PORT, '0.0.0.0');
+  new Logger('Bootstrap').log(
+    `CampusOS API listening on ${env.API_PORT} (/api/v1, ${env.NODE_ENV})`,
+  );
 }
 
 void bootstrap();

@@ -29,7 +29,9 @@ export class FilesController {
   constructor(private readonly storage: LocalStorageAdapter) {}
 
   @Post()
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: MAX_FILE_BYTES } }),
+  )
   async upload(
     @CurrentUser() _user: AuthenticatedUser,
     @UploadedFile() file: Express.Multer.File | undefined,

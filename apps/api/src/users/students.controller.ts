@@ -60,7 +60,9 @@ export class StudentsController {
 
   @Post('import')
   @RequirePermission(PERMISSIONS.USERS_MANAGE)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: 1024 * 1024 } }),
+  )
   async import(
     @CurrentUser() user: AuthenticatedUser,
     @UploadedFile() file: Express.Multer.File | undefined,

@@ -1,18 +1,30 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from '../src/app.module';
 import { EnvelopeInterceptor } from '../src/common/interceptors/envelope.interceptor';
 import { GlobalExceptionFilter } from '../src/common/filters/global-exception.filter';
 
-/** Boots the API exactly as main.ts does (prefix, envelopes, cookies). */
+/** Boots the API exactly as main.ts does (prefix, envelopes, cookies, headers). */
 export async function createTestApp(): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({
     imports: [AppModule],
   }).compile();
 
-  const app = moduleRef.createNestApplication({ logger: false });
+  const app = moduleRef.createNestApplication<NestExpressApplication>({
+    logger: false,
+  });
   app.setGlobalPrefix('api/v1');
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginResourcePolicy: { policy: 'same-site' },
+    }),
+  );
+  app.disable('x-powered-by');
+  app.set('trust proxy', 1);
   app.use(cookieParser());
   app.useGlobalInterceptors(new EnvelopeInterceptor());
   app.useGlobalFilters(new GlobalExceptionFilter());
