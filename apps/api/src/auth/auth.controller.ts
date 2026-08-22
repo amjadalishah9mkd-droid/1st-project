@@ -10,14 +10,17 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import {
+  acceptInviteSchema,
   changePasswordSchema,
   loginSchema,
+  type AcceptInviteInput,
   type AuthPayload,
   type ChangePasswordInput,
   type LoginInput,
   type MePayload,
 } from '@campusos/shared';
 import { AuthService } from './auth.service';
+import { CredentialTokensService } from './credential-tokens.service';
 import { REFRESH_TOKEN_TTL_MS } from './token.service';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { Public } from '../common/decorators/public.decorator';
@@ -47,7 +50,30 @@ function requestMeta(req: Request): { ip: string; userAgent?: string } {
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly credentials: CredentialTokensService,
+  ) {}
+
+  /** Invitation acceptance (M10-W2) — INVITE tokens only. */
+  @Public()
+  @Post('accept-invite')
+  @HttpCode(200)
+  acceptInvite(
+    @Body(new ZodValidationPipe(acceptInviteSchema)) body: AcceptInviteInput,
+  ): Promise<{ accepted: true }> {
+    return this.credentials.accept(body.token, 'INVITE', body.password);
+  }
+
+  /** Password reset via admin-issued link (M10-W2) — RESET tokens only. */
+  @Public()
+  @Post('reset-password')
+  @HttpCode(200)
+  resetPassword(
+    @Body(new ZodValidationPipe(acceptInviteSchema)) body: AcceptInviteInput,
+  ): Promise<{ accepted: true }> {
+    return this.credentials.accept(body.token, 'RESET', body.password);
+  }
 
   private setAuthCookies(
     res: Response,

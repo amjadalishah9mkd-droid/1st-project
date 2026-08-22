@@ -20,6 +20,11 @@ import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
+import {
+  InviteLinkDialog,
+  toAbsoluteLink,
+  type CredentialLinkInfo,
+} from '@/components/invite-link-dialog';
 
 export default function StudentsPage() {
   const list = useList<StudentItem>('/students');
@@ -30,6 +35,10 @@ export default function StudentsPage() {
   const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [invite, setInvite] = useState<{
+    email: string;
+    link: CredentialLinkInfo;
+  } | null>(null);
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -108,13 +117,11 @@ export default function StudentsPage() {
             open={createOpen}
             departments={departments}
             onClose={() => setCreateOpen(false)}
-            onCreated={(email, tempPassword) => {
+            onCreated={(email, invite) => {
               setCreateOpen(false);
               list.refetch();
-              toast(
-                `Student created. Temporary password for ${email}: ${tempPassword}`,
-                'info',
-              );
+              setInvite({ email, link: invite });
+              toast(`Student created: ${email}`, 'success');
             }}
           />
           <ImportStudentsDialog
@@ -127,6 +134,15 @@ export default function StudentsPage() {
                 summary.failed > 0 ? 'info' : 'success',
               );
             }}
+          />
+          <InviteLinkDialog
+            open={invite !== null}
+            title="Invitation link"
+            description={
+              invite ? `Send this link to ${invite.email} to set a password.` : ''
+            }
+            link={invite?.link ?? null}
+            onClose={() => setInvite(null)}
           />
         </>
       ) : null}
@@ -143,7 +159,7 @@ function CreateStudentDialog({
   open: boolean;
   departments: DepartmentItem[];
   onClose: () => void;
-  onCreated: (email: string, tempPassword: string) => void;
+  onCreated: (email: string, invite: CredentialLinkInfo) => void;
 }) {
   const form = useZodForm(createStudentSchema);
 
@@ -154,9 +170,9 @@ function CreateStudentDialog({
     await form.submit(async () => {
       const response = await apiFetch<{
         student: StudentItem;
-        tempPassword: string;
+        invite: CredentialLinkInfo;
       }>('/students', { method: 'POST', body: JSON.stringify(input) });
-      onCreated(response.data.student.email, response.data.tempPassword);
+      onCreated(response.data.student.email, response.data.invite);
     });
   }
 
@@ -164,7 +180,7 @@ function CreateStudentDialog({
     <Dialog
       open={open}
       title="Add student"
-      description="Creates the account with a temporary password; the student must change it on first login."
+      description="Creates the account and issues a one-time invitation link the student uses to set their password."
       onClose={onClose}
       wide
     >
@@ -287,11 +303,11 @@ function ImportStudentsDialog({
           {summary.createdStudents.length > 0 ? (
             <div className="max-h-48 overflow-y-auto rounded-card border border-line bg-surface p-3 text-xs">
               <p className="mb-2 font-semibold">
-                Temporary passwords (share securely — shown once):
+                Invitation links (share securely — shown once, expire in 48h):
               </p>
               {summary.createdStudents.map((entry) => (
-                <p key={entry.row} className="font-mono">
-                  {entry.email} → {entry.tempPassword}
+                <p key={entry.row} className="break-all font-mono">
+                  {entry.email} → {toAbsoluteLink(entry.inviteUrl)}
                 </p>
               ))}
             </div>

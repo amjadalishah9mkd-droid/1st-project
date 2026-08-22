@@ -1,13 +1,12 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import * as argon2 from 'argon2';
 import {
   studentImportRowSchema,
   type StudentImportSummary,
 } from '@campusos/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { CredentialTokensService } from '../auth/credential-tokens.service';
 import type { AuthenticatedUser } from '../access/authenticated-user';
-import { generateTempPassword } from './students.service';
 
 /**
  * CSV student import (Blueprint §7 / M2-E).
@@ -22,6 +21,7 @@ export class StudentsImportService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly credentials: CredentialTokensService,
   ) {}
 
   async import(
@@ -142,12 +142,9 @@ export class StudentsImportService {
         continue;
       }
 
-      const tempPassword = generateTempPassword();
-      const passwordHash = await argon2.hash(tempPassword, {
-        type: argon2.argon2id,
-      });
+      const passwordHash = await this.credentials.unusablePasswordHash();
 
-      await this.prisma.studentProfile.create({
+      const createdProfile = await this.prisma.studentProfile.create({
         data: {
           college: { connect: { id: user.collegeId } },
           department: { connect: { id: departmentId } },
@@ -166,8 +163,14 @@ export class StudentsImportService {
             },
           },
         },
+        include: { user: { select: { id: true } } },
       });
 
+      const invite = await this.credentials.issue(
+        createdProfile.user.id,
+        'INVITE',
+        user,
+      );
       seenEmails.add(row.email);
       seenAdmissionNos.add(row.admissionNo);
       summary.created += 1;
@@ -175,7 +178,8 @@ export class StudentsImportService {
         row: rowNumber,
         email: row.email,
         admissionNo: row.admissionNo,
-        tempPassword,
+        inviteUrl: invite.url,
+        inviteExpiresAt: invite.expiresAt,
       });
     }
 

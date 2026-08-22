@@ -177,7 +177,9 @@ describe('M2 — Academic Core', () => {
         batch: '2026',
       });
     expect(res.status).toBe(201);
-    expect(res.body.data.tempPassword).toBeDefined();
+    expect(res.body.data.tempPassword).toBeUndefined();
+    expect(res.body.data.invite.url).toMatch(/^\/accept-invite\?token=[0-9a-f]{64}$/);
+    expect(res.body.data.invite.expiresAt).toBeDefined();
     studentProfileId = res.body.data.student.id;
     const user = await prisma.user.findFirstOrThrow({
       where: { email: `testy-${suffix}@campusos.dev`.toLowerCase() },
@@ -476,7 +478,11 @@ describe('M2 — Academic Core', () => {
     expect(summary.failed).toBe(3);
     expect(summary.errors).toHaveLength(3);
     expect(summary.createdStudents[0].email).toBe(`ana-${lsuffix}@campusos.dev`);
-    expect(summary.createdStudents[0].tempPassword).toBeDefined();
+    expect(summary.createdStudents[0].tempPassword).toBeUndefined();
+    expect(summary.createdStudents[0].inviteUrl).toMatch(
+      /^\/accept-invite\?token=[0-9a-f]{64}$/,
+    );
+    expect(summary.createdStudents[0].inviteExpiresAt).toBeDefined();
 
     const anaUser = await prisma.user.findFirstOrThrow({
       where: { email: `ana-${lsuffix}@campusos.dev` },

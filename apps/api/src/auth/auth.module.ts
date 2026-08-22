@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { AuthController, MeController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { TokenService } from './token.service';
+import { CredentialTokensService } from './credential-tokens.service';
 import { LoginRateLimiterService } from './login-rate-limiter.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { PermissionsGuard } from '../access/permissions.guard';
@@ -26,11 +27,12 @@ import { PermissionsGuard } from '../access/permissions.guard';
   providers: [
     AuthService,
     TokenService,
+    CredentialTokensService,
     LoginRateLimiterService,
     // Global guard order (Blueprint §9): authenticate, then authorize.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
-  exports: [AuthService, TokenService, LoginRateLimiterService],
+  exports: [AuthService, TokenService, CredentialTokensService, LoginRateLimiterService],
 })
 export class AuthModule {}

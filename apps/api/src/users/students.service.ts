@@ -4,8 +4,6 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import * as argon2 from 'argon2';
-import { randomBytes } from 'node:crypto';
 import type {
   CreateStudentInput,
   PaginationQuery,
@@ -17,6 +15,10 @@ import type {
 import { PrismaService } from '../prisma/prisma.service';
 import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
+import {
+  CredentialTokensService,
+  type IssuedCredentialLink,
+} from '../auth/credential-tokens.service';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 import { pageArgs, pageMeta } from '../common/pagination/pagination';
 import type { Prisma } from '@prisma/client';
@@ -65,6 +67,7 @@ export class StudentsService {
     private readonly prisma: PrismaService,
     private readonly policy: PolicyService,
     private readonly audit: AuditService,
+    private readonly credentials: CredentialTokensService,
   ) {}
 
   /**
@@ -205,7 +208,7 @@ export class StudentsService {
   async create(
     user: AuthenticatedUser,
     input: CreateStudentInput,
-  ): Promise<{ student: StudentItem; tempPassword: string }> {
+  ): Promise<{ student: StudentItem; invite: IssuedCredentialLink }> {
     await this.assertDepartmentInCollege(user.collegeId, input.departmentId);
     await this.assertEmailFree(user.collegeId, input.email);
 
@@ -220,10 +223,10 @@ export class StudentsService {
       });
     }
 
-    const tempPassword = generateTempPassword();
-    const passwordHash = await argon2.hash(tempPassword, {
-      type: argon2.argon2id,
-    });
+    // M10-W2: the account starts with an unusable random password; access
+    // is established through a one-time invitation link. No plaintext
+    // password ever leaves the API.
+    const passwordHash = await this.credentials.unusablePasswordHash();
 
     const created = await this.prisma.studentProfile.create({
       data: {
@@ -260,7 +263,8 @@ export class StudentsService {
       targetType: 'StudentProfile',
       targetId: created.id,
     });
-    return { student: toItem(created), tempPassword };
+    const invite = await this.credentials.issue(created.user.id, 'INVITE', user);
+    return { student: toItem(created), invite };
   }
 
   async update(
@@ -370,8 +374,3 @@ export class StudentsService {
   }
 }
 
-export function generateTempPassword(): string {
-  // Shape satisfies the change-password policy the student will be forced
-  // through on first login.
-  return `Cs${randomBytes(6).toString('base64url')}!7a`;
-}

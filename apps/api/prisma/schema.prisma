@@ -254,6 +254,8 @@ model User {
   studentProfile StudentProfile?
   refreshTokens  RefreshToken[]
   notifications  Notification[]
+  credentialTokens       CredentialToken[] @relation("CredentialTokenUser")
+  credentialTokensIssued CredentialToken[] @relation("CredentialTokenIssuer")
 
   sessionsTaken     ClassSession[]     @relation("SessionTakenBy")
   attendanceMarked  AttendanceRecord[] @relation("AttendanceMarkedBy")
@@ -321,6 +323,28 @@ model RefreshToken {
 
   @@index([userId])
   @@index([familyId])
+}
+
+enum CredentialPurpose {
+  INVITE
+  RESET
+}
+
+model CredentialToken {
+  id          String            @id @default(cuid())
+  userId      String
+  tokenHash   String            @unique
+  purpose     CredentialPurpose
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdById String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  user      User  @relation("CredentialTokenUser", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy User? @relation("CredentialTokenIssuer", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([userId, purpose, usedAt])
 }
 
 // ───────────────────── Academic Structure ──────────────────────

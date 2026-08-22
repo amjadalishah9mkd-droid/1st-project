@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
+import { ResetLinkButton } from '@/components/invite-link-dialog';
 
 export default function TeacherDetailPage() {
   const params = useParams<{ id: string }>();
@@ -55,7 +56,15 @@ export default function TeacherDetailPage() {
         title={`${teacher.firstName} ${teacher.lastName}`}
         description={`${teacher.designation} · ${teacher.departmentName}`}
         actions={
-          canManage ? <Button onClick={() => setEditOpen(true)}>Edit</Button> : undefined
+          canManage ? (
+            <div className="flex gap-3">
+              <ResetLinkButton
+                userId={teacher.userId}
+                personName={`${teacher.firstName} ${teacher.lastName}`}
+              />
+              <Button onClick={() => setEditOpen(true)}>Edit</Button>
+            </div>
+          ) : undefined
         }
       />
 

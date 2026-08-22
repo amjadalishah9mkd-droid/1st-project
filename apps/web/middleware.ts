@@ -17,6 +17,9 @@ import {
  */
 const SESSION_HINT_COOKIE = 'cos_auth';
 const PUBLIC_PATHS = ['/login'];
+// Public even with an active session hint (M10-W2): a logged-in admin may
+// open an invite/reset link on someone's behalf, and invitees have no session.
+const ALWAYS_PUBLIC_PATHS = ['/accept-invite'];
 
 interface SessionHint {
   role: RoleKey;
@@ -38,6 +41,14 @@ function readHint(request: NextRequest): SessionHint | null {
 export function middleware(request: NextRequest): NextResponse {
   const { pathname } = request.nextUrl;
   const hint = readHint(request);
+
+  if (
+    ALWAYS_PUBLIC_PATHS.some(
+      (p) => pathname === p || pathname.startsWith(`${p}/`),
+    )
+  ) {
+    return NextResponse.next();
+  }
 
   // Public auth routes
   if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {

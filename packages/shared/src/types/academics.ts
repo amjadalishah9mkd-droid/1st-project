@@ -172,6 +172,8 @@ export interface StudentImportSummary {
     row: number;
     email: string;
     admissionNo: string;
-    tempPassword: string;
+    /** Path-only invitation link (M10-W2); no plaintext passwords. */
+    inviteUrl: string;
+    inviteExpiresAt: string;
   }>;
 }

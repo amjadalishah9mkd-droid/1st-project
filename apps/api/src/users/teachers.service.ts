@@ -4,7 +4,6 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import * as argon2 from 'argon2';
 import type {
   CreateTeacherInput,
   PageMeta,
@@ -19,7 +18,10 @@ import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 import { pageArgs, pageMeta } from '../common/pagination/pagination';
-import { generateTempPassword } from './students.service';
+import {
+  CredentialTokensService,
+  type IssuedCredentialLink,
+} from '../auth/credential-tokens.service';
 
 const teacherInclude = {
   user: {
@@ -65,6 +67,7 @@ export class TeachersService {
     private readonly prisma: PrismaService,
     private readonly policy: PolicyService,
     private readonly audit: AuditService,
+    private readonly credentials: CredentialTokensService,
   ) {}
 
   async list(
@@ -165,7 +168,7 @@ export class TeachersService {
   async create(
     user: AuthenticatedUser,
     input: CreateTeacherInput,
-  ): Promise<{ teacher: TeacherItem; tempPassword: string }> {
+  ): Promise<{ teacher: TeacherItem; invite: IssuedCredentialLink }> {
     const department = await this.prisma.department.findFirst({
       where: { id: input.departmentId, collegeId: user.collegeId },
       select: { id: true },
@@ -197,10 +200,7 @@ export class TeachersService {
       });
     }
 
-    const tempPassword = generateTempPassword();
-    const passwordHash = await argon2.hash(tempPassword, {
-      type: argon2.argon2id,
-    });
+    const passwordHash = await this.credentials.unusablePasswordHash();
 
     const created = await this.prisma.teacherProfile.create({
       data: {
@@ -233,7 +233,8 @@ export class TeachersService {
       targetType: 'TeacherProfile',
       targetId: created.id,
     });
-    return { teacher: toItem(created), tempPassword };
+    const invite = await this.credentials.issue(created.user.id, 'INVITE', user);
+    return { teacher: toItem(created), invite };
   }
 
   async update(

@@ -18,6 +18,10 @@ import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
+import {
+  InviteLinkDialog,
+  type CredentialLinkInfo,
+} from '@/components/invite-link-dialog';
 
 export default function TeachersPage() {
   const list = useList<TeacherItem>('/teachers');
@@ -27,6 +31,10 @@ export default function TeachersPage() {
   const router = useRouter();
   const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
+  const [invite, setInvite] = useState<{
+    email: string;
+    link: CredentialLinkInfo;
+  } | null>(null);
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -76,16 +84,28 @@ export default function TeachersPage() {
       />
 
       {canManage ? (
-        <CreateTeacherDialog
-          open={createOpen}
-          departments={departments}
-          onClose={() => setCreateOpen(false)}
-          onCreated={(email, tempPassword) => {
-            setCreateOpen(false);
-            list.refetch();
-            toast(`Teacher created. Temporary password for ${email}: ${tempPassword}`, 'info');
-          }}
-        />
+        <>
+          <CreateTeacherDialog
+            open={createOpen}
+            departments={departments}
+            onClose={() => setCreateOpen(false)}
+            onCreated={(email, invite) => {
+              setCreateOpen(false);
+              list.refetch();
+              setInvite({ email, link: invite });
+              toast(`Teacher created: ${email}`, 'success');
+            }}
+          />
+          <InviteLinkDialog
+            open={invite !== null}
+            title="Invitation link"
+            description={
+              invite ? `Send this link to ${invite.email} to set a password.` : ''
+            }
+            link={invite?.link ?? null}
+            onClose={() => setInvite(null)}
+          />
+        </>
       ) : null}
     </div>
   );
@@ -100,7 +120,7 @@ function CreateTeacherDialog({
   open: boolean;
   departments: DepartmentItem[];
   onClose: () => void;
-  onCreated: (email: string, tempPassword: string) => void;
+  onCreated: (email: string, invite: CredentialLinkInfo) => void;
 }) {
   const form = useZodForm(createTeacherSchema);
 
@@ -111,9 +131,9 @@ function CreateTeacherDialog({
     await form.submit(async () => {
       const response = await apiFetch<{
         teacher: TeacherItem;
-        tempPassword: string;
+        invite: CredentialLinkInfo;
       }>('/teachers', { method: 'POST', body: JSON.stringify(input) });
-      onCreated(response.data.teacher.email, response.data.tempPassword);
+      onCreated(response.data.teacher.email, response.data.invite);
     });
   }
 
@@ -121,7 +141,7 @@ function CreateTeacherDialog({
     <Dialog
       open={open}
       title="Add teacher"
-      description="Creates the account with a temporary password; the teacher must change it on first login."
+      description="Creates the account and issues a one-time invitation link the teacher uses to set their password."
       onClose={onClose}
       wide
     >
