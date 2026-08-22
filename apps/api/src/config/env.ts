@@ -19,6 +19,14 @@ const baseSchema = z.object({
   UPLOAD_DIR: z.string().optional(),
   SEED_DEMO: z.string().optional(),
   ALLOW_DEMO_SEED: z.string().optional(),
+  // M11-W2 — Google OIDC (optional feature; endpoints return
+  // FEATURE_DISABLED when unset). If any of the three is set, all must be.
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  OAUTH_REDIRECT_BASE: z
+    .string()
+    .url('OAUTH_REDIRECT_BASE must be a URL, e.g. https://campus.example.edu')
+    .optional(),
 });
 
 export type AppEnv = z.infer<typeof baseSchema>;
@@ -60,6 +68,24 @@ export function validateEnv(
     // Development still needs *a* secret for the JwtModule to boot.
     throw new Error(
       'Invalid environment configuration — JWT_ACCESS_SECRET is not set. Run .alloy/populate-env.sh',
+    );
+  }
+
+  // Google OIDC: all-or-none in every environment. A half-configured OAuth
+  // client is a misconfiguration, never a fallback.
+  const googleVars: Array<[string, string | undefined]> = [
+    ['GOOGLE_CLIENT_ID', config.GOOGLE_CLIENT_ID],
+    ['GOOGLE_CLIENT_SECRET', config.GOOGLE_CLIENT_SECRET],
+    ['OAUTH_REDIRECT_BASE', config.OAUTH_REDIRECT_BASE],
+  ];
+  const setCount = googleVars.filter(([, v]) => v).length;
+  if (setCount > 0 && setCount < googleVars.length) {
+    const missing = googleVars
+      .filter(([, v]) => !v)
+      .map(([name]) => name)
+      .join(', ');
+    throw new Error(
+      `Invalid environment configuration — Google OIDC is partially configured; missing: ${missing}`,
     );
   }
 

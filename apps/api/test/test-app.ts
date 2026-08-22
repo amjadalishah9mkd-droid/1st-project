@@ -8,10 +8,16 @@ import { EnvelopeInterceptor } from '../src/common/interceptors/envelope.interce
 import { GlobalExceptionFilter } from '../src/common/filters/global-exception.filter';
 
 /** Boots the API exactly as main.ts does (prefix, envelopes, cookies, headers). */
-export async function createTestApp(): Promise<INestApplication> {
-  const moduleRef = await Test.createTestingModule({
+export async function createTestApp(
+  overrideProviders: Array<{ token: unknown; value: unknown }> = [],
+): Promise<INestApplication> {
+  let builder = Test.createTestingModule({
     imports: [AppModule],
-  }).compile();
+  });
+  for (const { token, value } of overrideProviders) {
+    builder = builder.overrideProvider(token).useValue(value);
+  }
+  const moduleRef = await builder.compile();
 
   const app = moduleRef.createNestApplication<NestExpressApplication>({
     logger: false,
