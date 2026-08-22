@@ -11,6 +11,7 @@ export * from './schemas/exams';
 export * from './schemas/fees';
 export * from './schemas/community';
 export * from './schemas/moderation';
+export * from './schemas/files';
 export * from './types/api';
 export * from './types/academics';
 export * from './types/timetable';

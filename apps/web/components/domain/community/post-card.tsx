@@ -3,6 +3,7 @@
 import { FormEvent, useState } from 'react';
 import type { CommentItem, PostItem } from '@campusos/shared';
 import { apiFetch, ApiError } from '@/lib/api/client';
+import { openFile } from '@/lib/api/files';
 import { useToast } from '@/components/providers/toast-provider';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -123,12 +124,17 @@ export function PostCard({
       <p className="mt-3 whitespace-pre-wrap text-sm text-ink">{current.body}</p>
 
       {current.resource ? (
-        <a
-          href={current.resource.fileUrl}
+        <button
+          type="button"
+          onClick={() =>
+            openFile(current.resource!.fileUrl).catch(() =>
+              toast('Could not open the file', 'error'),
+            )
+          }
           className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm text-brand-700 hover:border-brand-300"
         >
           ⬇ {current.resource.title}
-        </a>
+        </button>
       ) : null}
       {current.event ? (
         <p className="mt-3 rounded-lg border border-line bg-surface px-3 py-2 text-sm">

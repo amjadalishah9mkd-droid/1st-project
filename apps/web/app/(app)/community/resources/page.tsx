@@ -9,6 +9,7 @@ import {
 } from '@campusos/shared';
 import { apiFetch, ApiError } from '@/lib/api/client';
 import { uploadFile } from '@/lib/api/upload';
+import { openFile } from '@/lib/api/files';
 import { useList, useOptions } from '@/lib/hooks/use-list';
 import { formValues, useZodForm } from '@/lib/hooks/use-zod-form';
 import { useToast } from '@/components/providers/toast-provider';
@@ -36,7 +37,7 @@ export default function ResourcesPage() {
       const response = await apiFetch<{ url: string }>(
         `/community/resources/${resource.id}/download`,
       );
-      window.open(response.data.url, '_blank');
+      await openFile(response.data.url);
       list.refetch();
     } catch (err) {
       toast(err instanceof ApiError ? err.message : 'Download failed', 'error');

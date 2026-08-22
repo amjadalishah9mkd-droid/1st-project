@@ -352,11 +352,26 @@ describe('M4 — Assignments', () => {
     expect(submit.status).toBe(201);
     expect(submit.body.data.mySubmissionContent.fileName).toBe('homework.txt');
 
-    const download = await http.get(url).buffer(true).parse((res, cb) => {
-      const chunks: Buffer[] = [];
-      res.on('data', (c: Buffer) => chunks.push(c));
-      res.on('end', () => cb(null, Buffer.concat(chunks)));
-    });
+    // M10-W1: raw internal URLs are no longer downloadable — a signed URL
+    // must be requested first.
+    const unsigned = await http.get(url);
+    expect(unsigned.status).toBe(403);
+    expect(unsigned.body.error.code).toBe('SIGNATURE_REQUIRED');
+
+    const signed = await http
+      .post('/api/v1/files/sign')
+      .set(auth(studentToken))
+      .send({ url });
+    expect(signed.status).toBe(201);
+
+    const download = await http
+      .get(signed.body.data.url)
+      .buffer(true)
+      .parse((res, cb) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => cb(null, Buffer.concat(chunks)));
+      });
     expect(download.status).toBe(200);
     expect((download.body as Buffer).toString('utf8')).toBe('my homework contents');
   });

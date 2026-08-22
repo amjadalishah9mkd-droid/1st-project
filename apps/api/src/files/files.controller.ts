@@ -1,32 +1,51 @@
 import {
   BadRequestException,
+  Body,
   Controller,
+  ForbiddenException,
   Get,
   NotFoundException,
   Param,
   Post,
+  Query,
   Res,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
-import type { UploadedFileInfo } from '@campusos/shared';
+import {
+  signFileUrlSchema,
+  type SignFileUrlInput,
+  type SignedFileUrl,
+  type UploadedFileInfo,
+} from '@campusos/shared';
 import { LocalStorageAdapter } from './storage.adapter';
+import { FileUrlSignerService } from './url-signer.service';
+import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { CurrentUser } from '../access/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
+const FILE_URL_PREFIX = '/api/v1/files/';
 
 /**
- * File upload/serve endpoints (Blueprint §7: POST /files → {url}).
- * Authenticated users upload; files are served back only to authenticated
- * users. Keys are 128-bit random — unguessable by construction.
+ * File endpoints (M10-W1 hardened).
+ *  - POST /files       — authenticated upload; returns the internal URL that
+ *                        modules store (unchanged format).
+ *  - POST /files/sign  — authenticated; exchanges an internal file URL for a
+ *                        signed, 5-minute download URL. Only CampusOS-internal
+ *                        URLs are accepted — arbitrary URLs cannot be signed.
+ *  - GET  /files/:key  — requires a valid exp+sig pair (HMAC, timing-safe).
+ *                        Unsigned, tampered and expired links are rejected.
  */
 @Controller('files')
 export class FilesController {
-  constructor(private readonly storage: LocalStorageAdapter) {}
+  constructor(
+    private readonly storage: LocalStorageAdapter,
+    private readonly signer: FileUrlSignerService,
+  ) {}
 
   @Post()
   @UseInterceptors(
@@ -50,23 +69,78 @@ export class FilesController {
     }
     const stored = await this.storage.save(file.buffer, file.originalname);
     return {
-      url: `/api/v1/files/${stored.key}`,
+      url: `${FILE_URL_PREFIX}${stored.key}`,
       name: file.originalname,
       size: stored.size,
     };
   }
 
+  @Post('sign')
+  async signUrl(
+    @CurrentUser() _user: AuthenticatedUser,
+    @Body(new ZodValidationPipe(signFileUrlSchema)) body: SignFileUrlInput,
+  ): Promise<SignedFileUrl> {
+    // Strictly internal URLs only: exact prefix, then a single key segment
+    // that must survive the storage adapter's own key rules.
+    if (!body.url.startsWith(FILE_URL_PREFIX)) {
+      throw new BadRequestException({
+        code: 'INVALID_FILE_URL',
+        message: 'Only CampusOS file URLs can be signed',
+      });
+    }
+    const key = decodeURIComponent(body.url.slice(FILE_URL_PREFIX.length));
+    if (
+      key.length === 0 ||
+      key.includes('/') ||
+      key.includes('\\') ||
+      key.includes('..') ||
+      key.includes('?') ||
+      key.includes('#')
+    ) {
+      throw new BadRequestException({
+        code: 'INVALID_FILE_URL',
+        message: 'Only CampusOS file URLs can be signed',
+      });
+    }
+    const { exp, sig } = this.signer.sign(key);
+    return {
+      url: `${FILE_URL_PREFIX}${encodeURIComponent(key)}?exp=${exp}&sig=${sig}`,
+      expiresAt: new Date(exp * 1000).toISOString(),
+    };
+  }
+
   /**
-   * Download by capability key. Browser navigation (href downloads) cannot
-   * attach bearer headers, so access control is the 128-bit random key
-   * itself; uploads always require authentication.
+   * Signed download. @Public because browser navigation cannot attach
+   * bearer headers — access control is the HMAC signature issued to an
+   * authenticated caller moments earlier, not obscurity.
    */
   @Public()
   @Get(':key')
   async serve(
     @Param('key') key: string,
+    @Query('exp') exp: string | undefined,
+    @Query('sig') sig: string | undefined,
     @Res() res: Response,
   ): Promise<void> {
+    if (!exp || !sig) {
+      throw new ForbiddenException({
+        code: 'SIGNATURE_REQUIRED',
+        message: 'This file link must be signed. Request a fresh link.',
+      });
+    }
+    if (!this.signer.verify(key, exp, sig)) {
+      if (this.signer.isExpired(key, exp, sig)) {
+        throw new ForbiddenException({
+          code: 'LINK_EXPIRED',
+          message: 'This file link has expired. Request a fresh link.',
+        });
+      }
+      throw new ForbiddenException({
+        code: 'INVALID_SIGNATURE',
+        message: 'This file link is not valid.',
+      });
+    }
+
     const file = await this.storage.open(key);
     if (!file) {
       throw new NotFoundException({

@@ -12,6 +12,7 @@ import {
 } from '@campusos/shared';
 import { apiFetch, ApiError } from '@/lib/api/client';
 import { uploadFile } from '@/lib/api/upload';
+import { openFile } from '@/lib/api/files';
 import { formValues, useZodForm } from '@/lib/hooks/use-zod-form';
 import { useSession } from '@/components/providers/session-provider';
 import { useToast } from '@/components/providers/toast-provider';
@@ -112,12 +113,13 @@ export default function AssignmentDetailPage() {
             <ul className="mt-2 flex flex-wrap gap-2">
               {assignment.attachments.map((attachment) => (
                 <li key={attachment.url}>
-                  <a
-                    href={attachment.url}
+                  <button
+                    type="button"
+                    onClick={() => void openFile(attachment.url)}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm text-brand-700 hover:border-brand-300"
                   >
                     ⬇ {attachment.name}
-                  </a>
+                  </button>
                 </li>
               ))}
             </ul>
@@ -246,12 +248,13 @@ function StudentSubmissionPanel({
             </p>
           ) : null}
           {assignment.mySubmissionContent?.fileUrl ? (
-            <a
-              href={assignment.mySubmissionContent.fileUrl}
+            <button
+              type="button"
+              onClick={() => void openFile(assignment.mySubmissionContent!.fileUrl!)}
               className="mt-2 inline-block text-brand-700 hover:underline"
             >
               ⬇ {assignment.mySubmissionContent.fileName}
-            </a>
+            </button>
           ) : null}
           {graded ? (
             <div className="mt-3 border-t border-line pt-3">
@@ -377,9 +380,16 @@ function SubmissionsPanel({ assignmentId }: { assignmentId: string }) {
                     {entry.submission.fileName ? (
                       <>
                         {' · '}
-                        <a href={entry.submission.fileUrl ?? '#'} className="text-brand-700 hover:underline">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            entry.submission?.fileUrl &&
+                            void openFile(entry.submission.fileUrl)
+                          }
+                          className="text-brand-700 hover:underline"
+                        >
                           {entry.submission.fileName}
-                        </a>
+                        </button>
                       </>
                     ) : null}
                   </p>
@@ -464,9 +474,13 @@ function GradeDialog({
           </div>
         ) : null}
         {submission.fileUrl ? (
-          <a href={submission.fileUrl} className="text-sm text-brand-700 hover:underline">
+          <button
+            type="button"
+            onClick={() => void openFile(submission.fileUrl!)}
+            className="text-left text-sm text-brand-700 hover:underline"
+          >
             ⬇ {submission.fileName}
-          </a>
+          </button>
         ) : null}
         <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
           <Input
