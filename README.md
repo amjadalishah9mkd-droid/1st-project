@@ -17,6 +17,9 @@ Production deployment, backups, restores, secret rotation, seed-guard rules
 and rollback are documented in the operations runbook:
 **[docs/OPERATIONS.md](docs/OPERATIONS.md)**.
 
+The complete milestone-by-milestone development history is maintained in
+**[docs/CAMPUSOS_DEVELOPMENT_HISTORY.md](docs/CAMPUSOS_DEVELOPMENT_HISTORY.md)**.
+
 ## Run (Alloy / Docker)
 
 ```sh

@@ -1,0 +1,630 @@
+# CampusOS Development History
+
+> Living record of how CampusOS was designed, implemented, tested, secured and
+> evolved — milestone by milestone. Primary sources: the git history, Prisma
+> migrations, the test suite, and the per-milestone completion reports.
+> This document is updated after every milestone and never rewrites history.
+
+---
+
+## 1. Project Vision
+
+**CampusOS** is a unified digital platform for colleges: administrators,
+teachers and students share one professional SaaS workspace covering
+academics, attendance, assessment, fees, and a private campus community.
+
+- **Original purpose**: replace fragmented spreadsheets, paper registers and
+  ad-hoc chat groups with a single, secure, role-aware system built to a
+  written specification (the *CampusOS Final Technical Blueprint v1.0*, the
+  source of truth for architecture decisions).
+- **Target users**: college admins (operations, fees, moderation), teachers
+  (teaching workload, attendance, grading), students (learning, results,
+  fees, community), with parents/guardians as a future audience.
+- **Long-term goal**: evolve from a single-college MVP into a
+  production-ready multi-college platform, and eventually a broader
+  city-wide education platform serving schools and campuses at scale. The
+  tenant-safe data model (`collegeId` on every aggregate root) was chosen on
+  day one so this evolution never requires a rewrite.
+
+## 2. Development Philosophy
+
+Principles applied consistently from M0 onward:
+
+- **Tenant isolation** — every aggregate root carries `collegeId`; services
+  filter by the session's college; cross-tenant access yields 404s that leak
+  nothing.
+- **Permission-driven authorization** — a shared permission catalog and
+  role→permission matrix (`packages/shared/src/permissions.ts`) seeded into
+  the database; **PolicyService** (`can()` / `scopeFor()` with
+  OWN/ASSIGNED/DEPARTMENT/ALL scopes) is the only authorization mechanism.
+- **Zero hardcoded role authorization** — no `user.role === 'ADMIN'`
+  conditionals anywhere; behavior branches on permissions or data.
+- **Modular NestJS architecture** — one module per domain, global guards
+  (authenticate → authorize), uniform `{data, meta}` / `{error: {code,
+  message, details}}` envelopes.
+- **Shared validation** — Zod schemas in `packages/shared` are the single
+  validation source for API and web.
+- **PostgreSQL + Prisma** — cuid PKs, `createdAt/updatedAt` everywhere,
+  composite unique constraints scoped by college, deliberate delete policies
+  (Restrict on academic/financial references, Cascade on pure children,
+  SetNull on optional actors). Security-critical invariants live in the
+  database itself (unique and partial-unique indexes), not in application
+  checks.
+- **Typed domain events + notification architecture** — services emit typed
+  `DomainEvent`s after commit; listeners render templates into a
+  notification inbox; scheduled sweeps handle time-based events.
+- **Security-first design** — generic enumeration-safe errors, hashed
+  tokens at rest, rotation, signed URLs, rate limiting, audit logging.
+- **Test-driven verification** — every milestone ships e2e tests against a
+  live PostgreSQL; the whole suite must stay green before a milestone is
+  accepted.
+- **Docker/Alloy development environment** — the checked-in
+  `docker-compose.alloy.yaml` (postgres/api/web, host networking) is the
+  canonical dev environment with a browser preview; every milestone is also
+  manually verified there.
+- **Incremental milestones** — small, independently verifiable milestones
+  and workstreams, each with its own commit, report, and stop-for-approval
+  gate.
+
+## 3. Technology Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | Next.js (App Router), React, TypeScript, Tailwind CSS (`apps/web`, port 3000) |
+| Backend | NestJS REST API under `/api/v1`, TypeScript (`apps/api`, port 4000) |
+| Database | PostgreSQL 16 |
+| ORM | Prisma (migrations as the schema history) |
+| Authentication | Argon2id password hashes; 15-min JWT access tokens; rotating opaque refresh tokens (SHA-256 hashed at rest) in httpOnly cookies; Google OIDC (M11, additive) |
+| Authorization | PolicyService + database-seeded role→permission matrix; global JwtAuthGuard → PermissionsGuard |
+| Validation | Zod schemas shared via `packages/shared` |
+| File storage | Local filesystem adapter with S3-shaped interface; HMAC-signed expiring download URLs |
+| Notifications | `@nestjs/event-emitter` typed domain events → listeners → DB-backed inbox; `@nestjs/schedule` daily sweeps |
+| Testing | Jest + supertest e2e suites (`apps/api/test/*.e2e-spec.ts`) run `--runInBand` against live Postgres |
+| Docker | `docker-compose.alloy.yaml` (dev, host networking); `docker-compose.prod.yaml` + production Dockerfiles (`apps/api/Dockerfile`, `apps/web/Dockerfile`) |
+| Deployment/preview | Alloy sandbox proxying the web app at `http://localhost:8080` |
+
+## 4. Complete Milestone Timeline
+
+| Milestone | Name | Commit |
+|---|---|---|
+| — | Initial commit / Alloy dev environment | `638ceb8`, `bc7cd63`, `d890daa` |
+| M0 | Foundation | `e05785c` |
+| M1 | Auth & Access | `51f7ea3` |
+| M2 | Academic Core (people & structure) | `12ee991` |
+| M3 | Timetable & Attendance | `2dc57f3` |
+| M4 | Assignments & Files | `ee47c54` |
+| M5 | Exams & Results | `f8c8252` |
+| M6 | Fees | `e0e2b59` |
+| M7 | Community | `5260fac` |
+| M8 | Moderation, Notifications & Announcements | `395fdd5` |
+| M9 | Dashboards & Hardening | `eb833f7` |
+| M10-W3 | Production security/config hardening | `9c3c4b0` |
+| M10-W1 | Signed expiring file downloads | `5d35c5f` |
+| M10-W2 | Invitation & password-reset tokens | `86e9c96` |
+| M10-W4 | Production seed safety guard | `31e653f` |
+| M10-W5 | Operations runbook + final verification | `48f7185` |
+| M11-W1 | Identity & verification foundation | `2581a21` |
+| M11-W2 | Google OIDC core | `768fb05` |
+| M11-W3 | Identity claims + evidence API | `51069ab` |
+
+*(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
+config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
+and later workstreams depend on.)*
+
+## 5. M0–M10 Historical Record
+
+### M0 — Foundation
+#### Goal
+Stand up the monorepo and everything later milestones build on.
+#### What Was Implemented
+npm-workspaces monorepo (`apps/api`, `apps/web`, `packages/shared`); the
+complete Prisma schema for the Blueprint domain model in a single `init`
+migration; idempotent system seed (permissions, role matrix, college
+bootstrap) and demo seed (3 demo accounts + sample data); NestJS API
+bootstrap with envelope interceptor and global exception filter; Next.js
+web shell.
+#### Database
+Migration `20260820164746_init` — the full domain schema (identity/access,
+academic structure, attendance, assignments, exams, fees, community,
+moderation, notifications, audit).
+#### Verification
+Alloy Docker stack (postgres/api/web) with browser preview.
+#### Commit
+`e05785c`
+
+### M1 — Auth & Access
+#### Goal
+Authentication and the authorization backbone.
+#### What Was Implemented
+`POST /auth/login|refresh|logout|change-password`, `GET /me`; JWT access
+tokens (15 min, kept in web memory); rotating opaque refresh tokens hashed
+(SHA-256) in the `RefreshToken` table with token families and reuse
+detection; httpOnly cookies `cos_refresh` (path-scoped to `/api/v1/auth`)
+and `cos_auth` (routing-hint only: role + mustChangePassword); forced
+password change (`mustChangePassword` pinning); per-account login rate
+limiting; **PolicyService** RBAC resolving grants from the database on
+every request (never from the JWT); global guard chain; Next.js middleware
+consuming the hint cookie with the shared route→permission map.
+#### Security
+Generic `INVALID_CREDENTIALS` (no enumeration), hashed refresh tokens,
+rotation + family revocation, rate limiting, audit of login success/failure.
+#### Authorization
+Full permission catalog + `ROLE_PERMISSION_MATRIX` seeded; permissions
+resolved from DB so matrix edits take effect without re-login.
+#### Commit
+`51f7ea3`
+
+### M2 — Academic Core
+#### Goal
+People and academic structure.
+#### What Was Implemented
+Departments, courses, terms/academic years, sections; students and teachers
+(profiles 1:1 with users); enrollment and teaching assignments; CSV student
+import; scoped, searchable, paginated lists; section hub; web UI kit
+(tables, dialogs, forms); demo dataset. Student/teacher creation initially
+returned temporary passwords — later replaced by invitation links in
+M10-W2 (recorded there; history preserved).
+#### Commit
+`12ee991`
+
+### M3 — Timetable & Attendance
+#### What Was Implemented
+Timetable slot CRUD with conflict detection; role-aware timetable views;
+idempotent class-session generation; bulk attendance marking with absence
+notification rows; attendance summaries.
+#### Commit
+`2dc57f3`
+
+### M4 — Assignments & Files
+#### What Was Implemented
+Assignment lifecycle (draft → publish → submit → grade) with late policy;
+the **files module** (local storage adapter with S3-shaped interface,
+unguessable keys, filename sanitization); notifications on publish/grade;
+role-specific UI. Also fixed a single-flight refresh race in the web client.
+File downloads were plain internal URLs at this stage — signed expiring
+URLs arrived in M10-W1 (evolution recorded there).
+#### Commit
+`ee47c54`
+
+### M5 — Exams & Results
+#### What Was Implemented
+Exams/papers CRUD; marks grid with locking; atomic result publish +
+notifications; result cards with grade bands; analytics; grade-band
+management.
+#### Commit
+`f8c8252`
+
+### M6 — Fees
+#### What Was Implemented
+Fee structures with components; invoice generation with line-item
+snapshots; manual payment recording with a status engine
+(PENDING/PARTIAL/PAID/OVERDUE/CANCELLED); lazy overdue transitions;
+summaries; notifications.
+#### Commit
+`e0e2b59`
+
+### M7 — Community
+#### What Was Implemented
+Posts/comments/likes with counters; groups with request flow and
+moderators; societies with officers; events with RSVP and capacity;
+resources with download counts; suspension gate for participation;
+notifications.
+#### Commit
+`5260fac`
+
+### M8 — Moderation, Notifications & Announcements
+#### What Was Implemented
+Report flow with admin queue and moderation actions (including suspension
+and reporter immunity); notification inbox + live bell; audience-scoped
+announcements with fan-out; daily scheduled sweeps (assignment due-soon,
+invoice overdue, event reminders).
+#### Commit
+`395fdd5`
+
+### M9 — Dashboards & Hardening
+#### What Was Implemented
+Role dashboards with live aggregates; exam analytics UI; fee structure
+editing; amount formatting; instant bell refresh; batched event queries; a
+security audit pass (PASS) over the whole MVP.
+#### Testing
+Suite stood at **141 tests** after M9 (per the M10 baseline report; earlier
+per-milestone counts were not individually recorded in this document's
+sources).
+#### Commit
+`eb833f7`
+
+### M10 — Production Hardening (five workstreams)
+
+#### M10-W3 — Production security/config hardening (`9c3c4b0`)
+Helmet security headers (+ `x-powered-by` off, trust proxy); production
+CORS allowlist (`CORS_ORIGINS`, deny-by-default in prod); Zod environment
+validation (`apps/api/src/config/env.ts`) with production fail-fast on
+missing/short (≥32 char) `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` /
+`FILE_URL_SECRET`; interceptor-level upload limits (10 MB files, 1 MB CSV);
+production Dockerfiles + `docker-compose.prod.yaml` + env template;
+`.alloy/populate-env.sh` rewritten. Tests: **151** (10 new).
+
+#### M10-W1 — Signed expiring file downloads (`5d35c5f`)
+Problem: any authenticated user's browser link to `/files/:key` was a
+permanent unauthenticated URL. Solution: HMAC-SHA256 signature over
+`key|exp` with timing-safe verify; `POST /files/sign` (internal URLs only)
+issues 5-minute links; `GET /files/:key` enforces `exp`+`sig`
+(`SIGNATURE_REQUIRED` / `LINK_EXPIRED` / `INVALID_SIGNATURE`); web
+`openFile()` helper replaced every raw download href. Tests: **160**
+(9 new + updated round-trip). Verified byte-identical downloads in Alloy.
+
+#### M10-W2 — Invitation & password-reset tokens (`86e9c96`)
+Problem: student/teacher creation returned plaintext temporary passwords.
+Solution: `CredentialToken` model (INVITE 48 h / RESET 24 h), 256-bit random
+tokens stored **only as SHA-256 hashes**, one-time acceptance via atomic
+`updateMany` claim (concurrency-safe), issuing revokes prior active tokens;
+`POST /auth/accept-invite` / `POST /auth/reset-password`; admin
+`POST /users/:id/reset-link` (users.manage, college-scoped); accounts are
+created with an unusable random password; invite URLs replaced temp
+passwords in create + CSV import; web accept-invite page + invite/reset
+dialogs. Migration `20260822062836_credential_tokens`. Tests: **172**
+(12 new). Full manual Alloy flow verified (create → invite → accept →
+login → reuse rejected → reset link → old link invalid).
+
+#### M10-W4 — Production seed safety guard (`31e653f`)
+Demo seed (publicly documented passwords) is refused when
+`NODE_ENV=production` unless `ALLOW_DEMO_SEED=true` is set explicitly; loud
+refusal banner; system seed unaffected; pure decision function + seed-CLI
+tests. Tests: **181** (9 new). Discovery recorded: Prisma auto-loads
+`apps/api/.env`, so the guard also protects hosts that accidentally ship a
+dev `.env`.
+
+#### M10-W5 — Operations runbook + final verification (`48f7185`)
+`docs/OPERATIONS.md` (deployment, env/secret generation + rotation,
+migration order, pg_dump + uploads backup/restore, health checks,
+troubleshooting, restart/update, demo-seed prohibition, signed-URL and
+token behavior, rollback) + README link. Full verification battery:
+181/181 tests, typecheck clean, production images built, prod-boot
+fail-fast without secrets, prod CORS allow/deny verified, no
+tempPassword/raw-href/secret leftovers. **M10 accepted; checkpoint at
+`48f7185`.**
+
+## 6. M11 — Identity & Verification Evolution
+
+M11 began with an inspection-only architecture phase producing the
+**M11 Blueprint Rev. B** (Google-only student authentication as the end
+state, student identity verification, duplicate-account prevention), plus
+locked decisions D1–D7 (public college list; self-registration off by
+default per college; no account merging in v1 — reject with guidance;
+mandatory evidence + 30-day retention after approval; explicit
+"use Google" messaging only under strict conditions; per-college cutover
+with configurable grace period).
+
+### M11-W1 — Identity & verification foundation (`2581a21`)
+- **AuthIdentity**: Google `sub` as the immutable provider identity key;
+  `@@unique([provider, providerSub])` (one Google account = one CampusOS
+  user, globally) and `@@unique([userId, provider])`.
+- **StudentIdentityClaim** with PostgreSQL **partial unique indexes** (raw
+  SQL in the migration): `UNIQUE(studentProfileId) WHERE status IN
+  ('PENDING','APPROVED')` and `UNIQUE(userId) WHERE status='PENDING'` —
+  duplicate-account prevention lives in the database, immune to races.
+- `User.passwordHash` made nullable (fail-closed login for password-less
+  accounts); `User.verificationStatus`
+  (LEGACY/UNVERIFIED/PENDING/VERIFIED/REJECTED, default LEGACY so all
+  pre-M11 accounts are untouched).
+- College settings schema: `googleAuth: off|additive|required`,
+  `allowSelfRegistration` (default false), `googleAuthGraceDays`.
+- Permissions `verification.manage` (ADMIN/ALL) and `verification.submit`
+  (STUDENT/OWN) added to the shared matrix and seeds.
+- Migration `20260822071747_m11_identity_foundation`.
+- Tests: **192** (11 new: constraint behavior, 5-way concurrent claim race
+  with exactly one winner, fail-closed null-password login, seeding,
+  zero-change under `googleAuth=off`).
+
+### M11-W2 — Google OIDC core (`768fb05`)
+- Server-side authorization-code flow with **PKCE S256**, HMAC-signed
+  one-time state cookie (10-min TTL, replay-refused), **nonce**, JWKS
+  signature verification with kid-rotation cache; claim validation of
+  issuer/audience/expiry/nonce/`email_verified`.
+- Login strictly by `sub` via AuthIdentity — **email match never
+  auto-links**; unknown Google accounts are refused on login intent.
+- Flag-gated self-registration creating UNVERIFIED password-less students;
+  idempotent re-registration; email-collision refusal without linking.
+- Authenticated link/unlink: unlink refused without a fallback password
+  (`UNLINK_NO_PASSWORD`) and for student-profile holders in `required`
+  colleges (`GOOGLE_REQUIRED`) — data-driven, no role checks.
+- Sessions issued through the existing TokenService/cookie path — no
+  second session architecture; suspended users rejected by the same gate.
+- Env config `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/
+  `OAUTH_REDIRECT_BASE` — optional, all-or-none validated; unset →
+  `FEATURE_DISABLED`.
+- Audit: `auth.google_login`, `auth.google_linked`, `auth.google_unlinked`.
+- Tests: **221** (29 new, via a DI-injected fake OIDC client so claim
+  validation and flow logic run through real production code).
+- No migration required.
+
+### M11-W3 — Identity claims + evidence API (`51069ab`)
+- Purpose-restricted **EvidenceFile** uploads (`POST
+  /verification/evidence`): 5 MB cap, MIME allowlist
+  (JPEG/PNG/WebP/PDF) enforced by magic-byte sniffing, executables
+  rejected; ordinary `/files` uploads can never be used as evidence.
+- `POST /verification/claims`: evidence must be owned by the claimant;
+  profile resolution strictly college-scoped; unknown and cross-college
+  admission numbers produce identical enumeration-safe PENDING claims;
+  live-claim conflicts map to generic `CLAIM_UNAVAILABLE` (HTTP-level race
+  test: 1 winner of 3).
+- `GET /verification/claims/me` (own claims only); admin queue
+  `GET /verification/claims` (tenant-scoped, filter/search/pagination),
+  detail with unsigned internal evidence reference, and
+  `POST /verification/claims/:id/decision` — atomic PENDING→decided
+  transition, `CLAIM_UNRESOLVED` for unmatched claims,
+  `PROFILE_HAS_ACCOUNT` enforcing D3 (no merging), REJECT requires reason
+  and frees the profile slot.
+- **Evidence signing authorization** on `POST /files/sign`: for evidence
+  keys, only the uploader or a `verification.manage` holder in the same
+  college may obtain a signature (PolicyService-decided); everyone else
+  gets 404 with no existence leak; every evidence signing is audited.
+- Audit events `verification.claim_submitted/approved/rejected/
+  evidence_accessed`; notifications `verification.approved/rejected` via
+  the event bus, exactly-once by construction.
+- Migration `20260822163204_m11_evidence_files`.
+- Tests: **245** (24 new). Manual Alloy flow verified end-to-end:
+  upload → claim → admin review via signed URL (byte-identical download,
+  unsigned 403) → approve → student `VERIFIED`.
+
+*(Future M11 workstreams will be appended here as they are implemented.)*
+
+## 7. Architecture Evolution
+
+Core request path (unchanged in shape since M1, extended in depth):
+
+```
+Next.js web (App Router, middleware routing hints)
+        ↓  /api/v1 (same-origin proxy)
+NestJS API — EnvelopeInterceptor / GlobalExceptionFilter
+        ↓
+JwtAuthGuard → PermissionsGuard → PolicyService (DB-resolved grants)
+        ↓
+Domain services (tenant-scoped by collegeId)
+        ↓
+Prisma ORM  →  PostgreSQL 16
+```
+
+Key flows:
+
+- **Password authentication**: login → argon2id verify + rate limiter →
+  15-min JWT (memory) + rotating hashed refresh cookie (`cos_refresh`,
+  path `/api/v1/auth`) + routing-hint cookie (`cos_auth`); silent refresh
+  rotates the family; reuse detection revokes.
+- **Google OIDC (M11-W2)**: `GET /auth/google/start` → signed state cookie
+  (state+nonce+PKCE verifier) → Google → `GET /auth/google/callback` →
+  code exchange + JWKS verify + claim validation → AuthIdentity lookup by
+  `sub` → the same session-issuance path as password login.
+- **Student verification (M11-W3)**: evidence upload (purpose-restricted) →
+  claim (college-scoped resolution, DB-enforced uniqueness) → admin queue →
+  decision (atomic) → `verificationStatus` transition + notification +
+  audit.
+- **Signed file flow (M10-W1)**: modules store internal URLs; clients call
+  `POST /files/sign` (which since M11-W3 also authorizes evidence access);
+  `GET /files/:key?exp&sig` verifies HMAC timing-safe.
+- **Notification/event flow**: domain services emit typed events after
+  commit → listeners render templates → `Notification` rows → inbox/bell;
+  daily scheduled sweeps for time-based notifications.
+- **Tenant isolation**: `collegeId` scoping in every service query;
+  cross-college reads/writes surface as 404.
+- **Moderation flow (M8)**: reports → admin queue → actions (remove
+  content/suspend) with audit and reporter immunity.
+
+## 8. Database Evolution
+
+| Migration | Purpose | Milestone |
+|---|---|---|
+| `20260820164746_init` | Complete Blueprint domain schema | M0 |
+| `20260822062836_credential_tokens` | Hashed one-time INVITE/RESET tokens | M10-W2 |
+| `20260822071747_m11_identity_foundation` | AuthIdentity, StudentIdentityClaim (+partial unique indexes), nullable passwordHash, verificationStatus | M11-W1 |
+| `20260822163204_m11_evidence_files` | Purpose-restricted evidence file metadata | M11-W3 |
+
+Security-critical constraints:
+
+- **Tenant boundaries**: `@@unique([collegeId, email])` on User,
+  `@@unique([collegeId, admissionNo])` on StudentProfile, college-scoped
+  uniques on departments/courses/terms etc.
+- **Unique identities**: `AuthIdentity @@unique([provider, providerSub])`
+  (a Google account exists once, platform-wide) and
+  `@@unique([userId, provider])`.
+- **StudentIdentityClaim partial unique indexes** (raw SQL):
+  one live (PENDING/APPROVED) claim per student profile; one in-flight
+  claim per claimant — duplicate-account prevention that survives races.
+- **Credential token hashing**: `CredentialToken.tokenHash @unique`
+  (SHA-256; raw tokens never stored) with atomic single-use claims.
+- **Foreign-key behavior**: Restrict on academic/financial references,
+  Cascade only on pure children (refresh tokens, notifications,
+  identities), SetNull on optional actor references.
+
+## 9. Security Evolution
+
+| When | Improvement | Problem → Solution → Testing |
+|---|---|---|
+| M1 | JWT + rotating hashed refresh tokens | Sessions needed to be revocable and theft-resistant → 15-min JWTs + opaque rotating refresh tokens hashed at rest with family reuse detection → auth e2e suite |
+| M1 | PolicyService + tenant isolation | Role conditionals scatter and rot → single DB-resolved permission engine + collegeId scoping → permission-denial and tenancy tests in every module suite |
+| M1 | Login rate limiting + generic errors | Credential stuffing/enumeration → per-account limiter, uniform `INVALID_CREDENTIALS` → 429 tests |
+| M4→M10-W3 | Upload restrictions | Unbounded uploads → interceptor-level size limits (10 MB/1 MB CSV) → hardening tests |
+| M10-W1 | Signed expiring file URLs | Permanent unauthenticated download links → HMAC(key\|exp), timing-safe verify, 5-min TTL → tamper/expiry/unsigned tests + byte-identical Alloy check |
+| M10-W2 | Credential invitation tokens | Plaintext temp passwords in API responses → hashed one-time expiring tokens, unusable initial passwords → 12 e2e tests incl. reuse/revocation |
+| M10-W3 | Production env validation, Helmet, CORS allowlist | Misconfigured prod could boot half-secure → fail-fast Zod validation (≥32-char secrets), security headers, deny-by-default CORS → hardening suite + manual prod-boot checks |
+| M10-W4 | Seed protection | Demo accounts with public passwords must never reach production → loud refusal guard + explicit override → decision-logic + seed-CLI tests |
+| M11-W1 | Identity uniqueness in PostgreSQL | Duplicate student accounts via racing signups → partial unique indexes → 5-way race test (exactly one winner) |
+| M11-W2 | Google OIDC state/PKCE/nonce, JWKS, sub-keyed identity | OAuth CSRF/replay/pre-hijack via email match → signed one-time state cookie, PKCE S256, nonce, JWKS with rotation, `sub`-only identity, no email auto-link → 29 e2e tests incl. replayed state and email-squatting |
+| M11-W3 | Verification claims + evidence access control | ID-card evidence must be evidence, never a credential, and never publicly readable → purpose-restricted uploads (magic-byte MIME), sign-time authorization (owner/reviewer only, 404 otherwise), full audit → 24 e2e tests incl. signing matrix and enumeration safety |
+
+## 10. Testing Evolution
+
+Counts are the verified totals recorded in milestone reports (earlier
+milestones' individual totals were not separately recorded; the suite
+reached 141 by the end of M9):
+
+| Milestone | Tests Passed | Important Coverage Added |
+|---|---:|---|
+| M9 (baseline) | 141 | full MVP regression incl. dashboards, security audit |
+| M10-W3 | 151 | headers, env validation, CORS, upload limits |
+| M10-W1 | 160 | signed URL tamper/expiry/unsigned, byte round-trip |
+| M10-W2 | 172 | token hashing/expiry/one-time/revocation, no tempPassword |
+| M10-W4 | 181 | seed guard decisions + real seed CLI runs |
+| M10-W5 | 181 | (documentation + verification only) |
+| M11-W1 | 192 | partial-unique constraints, claim races, fail-closed null password |
+| M11-W2 | 221 | OIDC claim validation, state replay, PKCE, no email auto-link, unlink protection |
+| M11-W3 | 245 | claim lifecycle, evidence sign authorization, atomic decisions, exactly-once notifications |
+
+Key security tests maintained across the suite: tenant isolation (every
+module), race conditions (claims ×2 suites), authorization denial
+(permission-based 403s everywhere), refresh-token rotation/reuse, signed
+URL tampering, seed protection, OAuth state replay, duplicate-identity
+prevention, enumeration safety.
+
+## 11. Major Engineering Decisions
+
+### Decision: PolicyService instead of role conditionals
+**Problem:** role checks scattered across handlers become unauditable and
+drift. **Decision:** one permission engine (`can`/`scopeFor`) reading a
+DB-seeded matrix defined once in `packages/shared`. **Reason:** single
+source of truth shared by API and web middleware; matrix edits take effect
+without redeploys. **Consequence:** every later feature (moderation,
+verification) added permissions, never conditionals.
+
+### Decision: Google `sub` as the provider identity key
+**Problem:** emails are mutable and recyclable; keying on them enables
+pre-hijack account takeover. **Decision:** `AuthIdentity(provider,
+providerSub)` unique, email stored only as display metadata.
+**Alternatives considered:** email-keyed linking (rejected in the M11
+blueprint). **Consequence:** email changes are a non-event; linking is
+always explicit.
+
+### Decision: No email-based automatic account linking
+**Problem:** attacker-controlled Google accounts matching a victim's email
+must not attach to the victim's account. **Decision:** unknown `sub` never
+auto-links regardless of email match; linking requires an authenticated
+session. **Consequence:** one extra explicit step for legitimate users;
+class of takeover eliminated (tested).
+
+### Decision: PostgreSQL uniqueness for duplicate-account prevention
+**Problem:** application-level checks cannot survive concurrent requests.
+**Decision:** partial unique indexes on StudentIdentityClaim + unique
+AuthIdentity. **Consequence:** the invariant holds even with multiple API
+instances; services translate `P2002` into generic errors.
+
+### Decision: Signed file URLs (capability links) with sign-time authorization
+**Problem:** browser downloads cannot carry bearer headers. **Decision:**
+short-lived HMAC-signed URLs issued by an authenticated sign endpoint;
+M11-W3 layered per-user authorization at signing time for restricted
+classes (evidence). **Consequence:** `FILE_URL_SECRET` rotation is a global
+kill switch; restricted file classes plug into the sign hook.
+
+### Decision: Credential tokens instead of plaintext passwords
+**Problem:** temp passwords in API responses/CSV summaries are a standing
+leak. **Decision:** hashed one-time expiring INVITE/RESET tokens; accounts
+start with unusable random passwords. **Consequence:** no plaintext
+credential ever leaves the API; the pattern extends to future purposes
+(e.g. Google-link invites).
+
+### Decision: Lazy/scheduled notification behavior
+**Problem:** time-based states (overdue invoices, due-soon assignments)
+must not require per-request computation or external queues. **Decision:**
+lazy status transitions on read plus daily scheduled sweeps for
+notifications. **Consequence:** no queue infrastructure needed at MVP
+scale.
+
+### Decision: Single-college MVP on a tenant-safe schema
+**Problem:** multi-college was out of MVP scope but a rewrite later would
+be fatal. **Decision:** `collegeId` on every aggregate root from M0, with
+college-scoped uniques. **Consequence:** M11's cross-college identity
+rules composed naturally; multi-college is a data question, not a schema
+migration.
+
+### Decision: D3 — no account merging in v1
+**Problem:** approving a claim whose profile belongs to another
+login-capable account would require risky account merging. **Decision:**
+`PROFILE_HAS_ACCOUNT` — reject with guidance; provision students through
+invitations instead. **Consequence:** Google-born self-registrants bind to
+profiles via the invitation path until a future merge feature is designed.
+
+### Decision: Dormant GPA hooks
+Grade bands and marks store everything needed for GPA/transcripts, but no
+GPA computation ships in the MVP; the hooks stay dormant until a dedicated
+milestone (see roadmap).
+
+## 12. Problems, Bugs & How They Were Solved
+
+| Problem | Detection | Root cause | Solution | Test added | Where |
+|---|---|---|---|---|---|
+| Web client fired parallel refreshes on 401 bursts | e2e/manual | no single-flight guard | single-flight refresh in the API client | regression in auth flow tests | M4 (`ee47c54`) |
+| File links were permanent & unauthenticated | M10 security review | capability-less URLs | signed expiring URLs | 9 e2e tests (tamper/expiry) | M10-W1 (`5d35c5f`) |
+| Temp passwords exposed in responses | M10 security review | M2-era design | credential tokens + unusable passwords | 12 e2e tests | M10-W2 (`86e9c96`) |
+| Demo seed could run in production | M10 planning | no env guard in seed entrypoint | refusal guard + explicit override | 9 tests incl. real CLI runs | M10-W4 (`31e653f`) |
+| Prisma auto-loads `.env`, so `SEED_DEMO=true` leaked into "unset" test env | W4 test failure | `@prisma/client` dotenv behavior | test models prod host with explicit `SEED_DEMO=false`; guard protects shipped dev `.env` too | seed-guard suite | M10-W4 |
+| Hardcoded permission-catalog count (30) broke when W1 added permissions | regression run | literal in `auth.e2e-spec.ts` | assert against shared `PERMISSIONS` length | updated test | M11-W1 (`2581a21`) |
+| `/accept-invite` was redirected to login by middleware | manual Alloy flow in W2 | route not in public list | `ALWAYS_PUBLIC_PATHS` for `/accept-invite` | covered by manual flow + page tests | M10-W2 |
+| Evidence would have been signable by anyone authenticated | W3 design review | M10-W1 signatures authenticate the issuer, not the viewer | sign-time authorization for evidence keys (owner/reviewer, 404 otherwise) | signing matrix tests | M11-W3 (`51069ab`) |
+
+## 13. Deferred Work / Technical Debt
+
+| Item | Why Deferred | Current Status | Planned Phase |
+|---|---|---|---|
+| Evidence retention deletion job (30 days post-approval, D5) | W3 delivered access control; deletion is operational tooling | documented decision, not implemented | M11 (later workstream) |
+| OAuth consumed-state store is in-memory | single-instance deployments are the current target | acceptable; degrades to TTL-only protection if scaled out | M11-W7 hardening |
+| `FILE_URL_SECRET` rotation has no dual-key grace window | 300 s TTL makes impact negligible | documented in OPERATIONS.md | future ops enhancement |
+| Account merging for claims on provisioned profiles | D3 locked: reject-with-guidance in v1 | `PROFILE_HAS_ACCOUNT` behavior in place | post-M11 design |
+| Google-link invitations / student cutover (`required` mode UX) | later M11 workstreams by plan | password login preserved during rollout | M11-W4+ |
+| Student `/verify` UI + admin verification UI | backend-first ordering | API complete (W3) | M11-W5/W6 |
+| Prisma major-version upgrade available | upgrade advisory only | pinned to 5.22 | maintenance window |
+| Backups are documented cron scripts, not shipped automation | doc-only scope of M10-W5 | OPERATIONS.md §6 | future ops work |
+| GPA/transcripts | out of MVP scope | dormant hooks (grade bands, marks) | roadmap |
+
+## 14. Current System State
+
+*Last updated after M11-W3.*
+
+- **Current milestone**: M11-W3 complete (M0–M10 accepted; M11 W1–W3
+  complete, W4+ awaiting approval)
+- **Latest commit**: `51069ab` on branch
+  `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
+- **Migrations**: 4 found, database schema up to date
+- **Tests**: **245/245 passing** (16 suites)
+- **Typecheck**: clean (api, web, shared)
+- **Docker health**: postgres/api/web all healthy
+  (`/api/v1/health` → `database: up`)
+- **Alloy preview**: reachable at `http://localhost:8080` (login page 200;
+  demo admin/teacher/student logins verified)
+- **Known technical debt**: see §13
+- **Next planned milestone**: M11-W4 (Google-link invitation rework) —
+  pending explicit approval
+
+## 15. Future Roadmap
+
+**COMPLETED**
+- M0–M9 MVP (foundation → dashboards)
+- M10 production hardening (W1–W5)
+- M11-W1 identity foundation, M11-W2 Google OIDC core, M11-W3 claims +
+  evidence API
+
+**IN PROGRESS**
+- M11 Identity & Student Verification (W4+ pending approval: invitation
+  rework, student onboarding UI, admin verification UI, cutover +
+  hardening)
+
+**PLANNED**
+- Per-college Google-only cutover with grace period (D7)
+- Evidence retention automation (D5)
+- Email delivery channel for notifications/invitations
+- Payment gateway integration + accountant functionality
+- Parent/guardian portal
+- Complaint box
+- GPA/transcripts (activating the dormant grade-band hooks)
+
+**IDEAS**
+- Library management
+- Broader school/campus deployments (multi-college operations tooling)
+- Additional identity verification methods (institutional email domains,
+  registrar data feeds)
+- OCR-assisted evidence review (explicitly excluded from M11 v1)
+
+## 16. Final Completion Record
+
+*Not yet complete. This section will be filled in when CampusOS reaches its
+final release: final version, final commit, migration status, test count,
+security audit status, deployment status, production readiness, major
+capabilities, known limitations, and release date.*
