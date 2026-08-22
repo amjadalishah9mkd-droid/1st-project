@@ -11,6 +11,12 @@ Blueprint v1.0** (the source of truth for architecture decisions).
 - **Database**: PostgreSQL 16 + Prisma ORM (port 5432)
 - **Shared**: `packages/shared` — Zod schemas, enums, permission matrix, event contracts
 
+## Operations
+
+Production deployment, backups, restores, secret rotation, seed-guard rules
+and rollback are documented in the operations runbook:
+**[docs/OPERATIONS.md](docs/OPERATIONS.md)**.
+
 ## Run (Alloy / Docker)
 
 ```sh
