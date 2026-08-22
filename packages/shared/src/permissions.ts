@@ -34,6 +34,8 @@ export const PERMISSIONS = {
   MODERATION_ACT: 'moderation.act',
   ANNOUNCEMENTS_CREATE: 'announcements.create',
   SETTINGS_MANAGE: 'settings.manage',
+  VERIFICATION_MANAGE: 'verification.manage',
+  VERIFICATION_SUBMIT: 'verification.submit',
   DASHBOARD_ADMIN: 'dashboard.admin',
   DASHBOARD_TEACHER: 'dashboard.teacher',
   DASHBOARD_STUDENT: 'dashboard.student',
@@ -70,6 +72,10 @@ export const PERMISSION_DESCRIPTIONS: Record<PermissionKey, string> = {
   'moderation.act': 'Act on reports: remove, warn, suspend, restore',
   'announcements.create': 'Publish announcements',
   'settings.manage': 'Manage college settings, terms and grade bands',
+  'verification.manage':
+    'Review student identity claims, view verification evidence and decide approvals',
+  'verification.submit':
+    'Submit and manage own student identity verification claim',
   'dashboard.admin': 'View the admin dashboard',
   'dashboard.teacher': 'View the teacher dashboard',
   'dashboard.student': 'View the student dashboard',
@@ -113,6 +119,7 @@ export const ROLE_PERMISSION_MATRIX: RolePermissionGrant[] = [
   { role: 'ADMIN', permission: 'moderation.act', scope: 'ALL' },
   { role: 'ADMIN', permission: 'announcements.create', scope: 'ALL' },
   { role: 'ADMIN', permission: 'settings.manage', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'verification.manage', scope: 'ALL' },
   { role: 'ADMIN', permission: 'dashboard.admin', scope: 'ALL' },
 
   // ── TEACHER ────────────────────────────────────────────
@@ -146,6 +153,7 @@ export const ROLE_PERMISSION_MATRIX: RolePermissionGrant[] = [
   { role: 'STUDENT', permission: 'community.groups.create', scope: 'ALL' },
   { role: 'STUDENT', permission: 'community.report', scope: 'ALL' },
   { role: 'STUDENT', permission: 'dashboard.student', scope: 'OWN' },
+  { role: 'STUDENT', permission: 'verification.submit', scope: 'OWN' },
 ];
 
 /**

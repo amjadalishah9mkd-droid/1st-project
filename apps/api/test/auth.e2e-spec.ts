@@ -1,6 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import * as argon2 from 'argon2';
+import { PERMISSIONS } from '@campusos/shared';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { PolicyService } from '../src/access/policy.service';
 import { LoginRateLimiterService } from '../src/auth/login-rate-limiter.service';
@@ -287,7 +288,8 @@ describe('M1 — Auth & Access', () => {
       .get('/api/v1/access/permissions')
       .set('Authorization', `Bearer ${accessToken}`);
     expect(res.status).toBe(200);
-    expect(res.body.data.catalog.length).toBe(30);
+    // Catalog always mirrors the shared permission source of truth.
+    expect(res.body.data.catalog.length).toBe(Object.keys(PERMISSIONS).length);
     expect(res.body.data.matrix.length).toBe(res.body.data.expectedGrantCount);
   });
 

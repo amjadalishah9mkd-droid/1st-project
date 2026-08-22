@@ -50,8 +50,11 @@ export class AuthService {
       where: { email: input.email },
     });
 
+    // Fail closed for password-less accounts (M11: Google-born users have
+    // passwordHash = null) — indistinguishable from a wrong password.
     const passwordValid =
       user !== null &&
+      user.passwordHash !== null &&
       (await argon2.verify(user.passwordHash, input.password).catch(() => false));
 
     if (!user || !passwordValid || user.status !== 'ACTIVE') {
@@ -130,9 +133,11 @@ export class AuthService {
       throw this.invalidCredentials();
     }
 
-    const currentValid = await argon2
-      .verify(record.passwordHash, input.currentPassword)
-      .catch(() => false);
+    const currentValid =
+      record.passwordHash !== null &&
+      (await argon2
+        .verify(record.passwordHash, input.currentPassword)
+        .catch(() => false));
     if (!currentValid) {
       throw new BadRequestException({
         code: 'INVALID_CURRENT_PASSWORD',

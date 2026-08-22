@@ -27,6 +27,30 @@ enum UserStatus {
   ARCHIVED
 }
 
+// M11 — identity verification lifecycle (separate from UserStatus, which
+// keeps its operational meaning: suspension/archival).
+enum UserVerification {
+  LEGACY
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+// M11 — external authentication providers. Identity key is the provider's
+// immutable subject (Google `sub`), never the email address.
+enum AuthProvider {
+  GOOGLE
+}
+
+// M11 — student identity claim lifecycle.
+enum ClaimStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
 enum PermissionScope {
   OWN
   ASSIGNED
@@ -228,6 +252,7 @@ model College {
   moderationActions ModerationAction[]
   announcements    Announcement[]
   auditLogs        AuditLog[]
+  identityClaims   StudentIdentityClaim[]
 }
 
 // ────────────────────── Identity & Access ──────────────────────
@@ -236,9 +261,14 @@ model User {
   id                 String     @id @default(cuid())
   collegeId          String
   email              String
-  passwordHash       String
+  // Nullable since M11: Google-born accounts have no password. Password
+  // login already fails closed when the hash is absent.
+  passwordHash       String?
   role               RoleKey
   status             UserStatus @default(ACTIVE)
+  // M11 identity verification lifecycle. LEGACY = pre-M11 trusted accounts
+  // (admin-created / invite-accepted); no new gate applies to them.
+  verificationStatus UserVerification @default(LEGACY)
   firstName          String
   lastName           String
   phone              String?
@@ -256,6 +286,9 @@ model User {
   notifications  Notification[]
   credentialTokens       CredentialToken[] @relation("CredentialTokenUser")
   credentialTokensIssued CredentialToken[] @relation("CredentialTokenIssuer")
+  authIdentities         AuthIdentity[]
+  identityClaims         StudentIdentityClaim[] @relation("ClaimUser")
+  identityClaimsDecided  StudentIdentityClaim[] @relation("ClaimDecidedBy")
 
   sessionsTaken     ClassSession[]     @relation("SessionTakenBy")
   attendanceMarked  AttendanceRecord[] @relation("AttendanceMarkedBy")
@@ -345,6 +378,56 @@ model CredentialToken {
   createdBy User? @relation("CredentialTokenIssuer", fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([userId, purpose, usedAt])
+}
+
+// M11 — external provider identity (Google). Deliberately global (no
+// collegeId): one Google account is one human across the platform, which is
+// itself a duplicate-prevention guarantee.
+model AuthIdentity {
+  id          String       @id @default(cuid())
+  userId      String
+  provider    AuthProvider
+  providerSub String
+  emailAtLink String
+  linkedAt    DateTime     @default(now())
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // A provider account can be linked to exactly one CampusOS user, ever.
+  @@unique([provider, providerSub])
+  // One identity per provider per user (v1).
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+// M11 — claim binding a login account to a real student identity
+// (StudentProfile). Duplicate prevention is enforced at the database level
+// with partial unique indexes added by raw SQL in the migration:
+//   UNIQUE (studentProfileId) WHERE status IN ('PENDING','APPROVED')
+//   UNIQUE (userId)           WHERE status = 'PENDING'
+model StudentIdentityClaim {
+  id                 String      @id @default(cuid())
+  collegeId          String
+  userId             String
+  studentProfileId   String?
+  claimedAdmissionNo String
+  evidenceFileKey    String?
+  status             ClaimStatus @default(PENDING)
+  rejectionReason    String?
+  decidedById        String?
+  decidedAt          DateTime?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  college        College         @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  user           User            @relation("ClaimUser", fields: [userId], references: [id], onDelete: Cascade)
+  studentProfile StudentProfile? @relation(fields: [studentProfileId], references: [id], onDelete: Restrict)
+  decidedBy      User?           @relation("ClaimDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@index([collegeId, status])
+  @@index([userId])
 }
 
 // ───────────────────── Academic Structure ──────────────────────
@@ -504,6 +587,7 @@ model StudentProfile {
   submissions       Submission[]
   marks             Mark[]
   invoices          Invoice[]
+  identityClaims    StudentIdentityClaim[]
 
   @@unique([collegeId, admissionNo])
   @@index([departmentId])
