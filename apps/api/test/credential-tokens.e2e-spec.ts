@@ -50,9 +50,14 @@ describe('M10-W2 — invitation & password-reset tokens', () => {
       await prisma.enrollment.deleteMany({
         where: { studentId: studentProfileId },
       });
+      // M11-W4: invite acceptance creates a synthetic APPROVED claim.
+      await prisma.studentIdentityClaim.deleteMany({
+        where: { studentProfileId },
+      });
       await prisma.studentProfile.delete({ where: { id: studentProfileId } });
     }
     if (studentUserId) {
+      await prisma.notification.deleteMany({ where: { userId: studentUserId } });
       await prisma.auditLog.deleteMany({
         where: { OR: [{ actorId: studentUserId }, { targetId: studentUserId }] },
       });

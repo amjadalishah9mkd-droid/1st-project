@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   Post,
+  Query,
   Req,
   Res,
   UnauthorizedException,
@@ -21,6 +22,7 @@ import {
 } from '@campusos/shared';
 import { AuthService } from './auth.service';
 import { CredentialTokensService } from './credential-tokens.service';
+import { GoogleAuthService } from './google/google-auth.service';
 import { REFRESH_TOKEN_TTL_MS } from './token.service';
 import {
   REFRESH_COOKIE,
@@ -49,16 +51,39 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly credentials: CredentialTokensService,
+    private readonly google: GoogleAuthService,
   ) {}
 
-  /** Invitation acceptance (M10-W2) — INVITE tokens only. */
+  /**
+   * M11-W4 — acceptance options for a valid invite (drives the accept
+   * page). Invalid tokens get the same generic error as acceptance.
+   */
+  @Public()
+  @Get('invite-info')
+  async inviteInfo(
+    @Query('token') token: string | undefined,
+  ): Promise<{ mode: 'password' | 'google' | 'both'; collegeName: string; firstName: string }> {
+    const record = await this.credentials.lookupValid(token ?? '', 'INVITE');
+    return {
+      mode: this.credentials.inviteMode(record, this.google.isConfigured()),
+      collegeName: record.user.college.name,
+      firstName: record.user.firstName,
+    };
+  }
+
+  /** Invitation acceptance (M10-W2; W4 adds verification side effects). */
   @Public()
   @Post('accept-invite')
   @HttpCode(200)
   acceptInvite(
     @Body(new ZodValidationPipe(acceptInviteSchema)) body: AcceptInviteInput,
   ): Promise<{ accepted: true }> {
-    return this.credentials.accept(body.token, 'INVITE', body.password);
+    return this.credentials.accept(
+      body.token,
+      'INVITE',
+      body.password,
+      this.google.isConfigured(),
+    );
   }
 
   /** Password reset via admin-issued link (M10-W2) — RESET tokens only. */

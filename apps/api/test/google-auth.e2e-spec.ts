@@ -95,6 +95,28 @@ describe('M11-W2 — Google OIDC core', () => {
       where: { id: collegeId },
       data: { settings: originalSettings as never },
     });
+    // M11-W4: linking Google now auto-verifies student-profile owners
+    // (journey D). Restore the demo student to canonical pre-M11 state so
+    // later suites see LEGACY with a free identity slot.
+    const demoStudent = await prisma.user.findFirstOrThrow({
+      where: { email: 'student@campusos.dev' },
+    });
+    await prisma.studentIdentityClaim.deleteMany({
+      where: { userId: demoStudent.id },
+    });
+    await prisma.notification.deleteMany({
+      where: { userId: demoStudent.id, type: { startsWith: 'verification.' } },
+    });
+    await prisma.auditLog.deleteMany({
+      where: {
+        targetId: demoStudent.id,
+        action: { in: ['verification.auto_verified'] },
+      },
+    });
+    await prisma.user.update({
+      where: { id: demoStudent.id },
+      data: { verificationStatus: 'LEGACY' },
+    });
     await prisma.authIdentity.deleteMany({
       where: { OR: [{ userId: { in: cleanupUserIds } }, { providerSub: { contains: suffix } }] },
     });

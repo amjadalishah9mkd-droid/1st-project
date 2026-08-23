@@ -13,6 +13,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../../audit/audit.service';
 import { TokenService, type IssuedTokens } from '../token.service';
 import { AuthService } from '../auth.service';
+import { CredentialTokensService } from '../credential-tokens.service';
+import { OnboardingService } from '../onboarding.service';
 import {
   GOOGLE_OIDC_CLIENT,
   type GoogleOidcClient,
@@ -32,7 +34,7 @@ import {
  *    studentProfile existence, passwordHash presence).
  */
 
-export type GoogleIntent = 'login' | 'register' | 'link';
+export type GoogleIntent = 'login' | 'register' | 'link' | 'invite';
 
 const STATE_COOKIE = 'cos_oauth';
 const STATE_TTL_MS = 10 * 60 * 1000;
@@ -46,6 +48,8 @@ interface StatePayload {
   i: GoogleIntent;
   u?: string; // userId (link intent only)
   c?: string; // collegeId (register intent only)
+  t?: string; // raw invite token (invite intent only; cookie is HMAC-signed
+  //             httpOnly and the token never round-trips through Google)
   exp: number;
 }
 
@@ -80,6 +84,8 @@ export class GoogleAuthService {
     private readonly audit: AuditService,
     private readonly tokens: TokenService,
     private readonly auth: AuthService,
+    private readonly credentials: CredentialTokensService,
+    private readonly onboarding: OnboardingService,
     @Inject(GOOGLE_OIDC_CLIENT) private readonly oidc: GoogleOidcClient,
   ) {}
 
@@ -154,7 +160,11 @@ export class GoogleAuthService {
 
   async buildStart(
     intent: GoogleIntent,
-    options: { linkUserId?: string; collegeCode?: string } = {},
+    options: {
+      linkUserId?: string;
+      collegeCode?: string;
+      inviteToken?: string;
+    } = {},
   ): Promise<{ url: string; stateCookie: { name: string; value: string; maxAge: number } }> {
     if (!this.isConfigured()) throw featureDisabled();
 
@@ -169,6 +179,18 @@ export class GoogleAuthService {
     if (intent === 'link') {
       if (!options.linkUserId) throw authFailed();
       payload.u = options.linkUserId;
+    }
+
+    if (intent === 'invite') {
+      // M11-W4: validates the invite up front (generic INVALID_TOKEN on
+      // failure) and refuses colleges where Google auth is off.
+      const record = await this.credentials.lookupValid(
+        options.inviteToken ?? '',
+        'INVITE',
+      );
+      const mode = this.credentials.inviteMode(record, true);
+      if (mode === 'password') throw featureDisabled();
+      payload.t = options.inviteToken;
     }
 
     if (intent === 'register') {
@@ -304,6 +326,8 @@ export class GoogleAuthService {
         return this.completeLink(claims, state.u);
       case 'register':
         return this.completeRegister(claims, state.c, meta);
+      case 'invite':
+        return this.completeInvite(claims, state.t, meta);
     }
   }
 
@@ -413,6 +437,19 @@ export class GoogleAuthService {
       targetType: 'User',
       targetId: user.id,
     });
+
+    // M11-W4 (journey D): a session-authenticated link by an account that
+    // owns its StudentProfile is admin-provisioned identity proof — the
+    // student auto-verifies and their identity slot is held in PostgreSQL.
+    try {
+      const onboarding = await this.prisma.$transaction((tx) =>
+        this.onboarding.applyVerification(tx, user.id, null),
+      );
+      await this.onboarding.announce(user, onboarding, 'link');
+    } catch {
+      // IDENTITY_CONFLICT (already bound elsewhere) never unwinds the link
+      // itself; verification simply does not happen.
+    }
     return { kind: 'redirect', redirect: '/dashboard?googleLink=success' };
   }
 
@@ -499,6 +536,112 @@ export class GoogleAuthService {
       }
       throw error;
     }
+  }
+
+  /**
+   * M11-W4 — invitation acceptance via Google. One transaction, ordered so
+   * a failure anywhere leaves the invite token unconsumed:
+   *   AuthIdentity create → token claim → onboarding (supersession +
+   *   synthetic APPROVED claim + VERIFIED).
+   */
+  private async completeInvite(
+    claims: GoogleClaims,
+    rawToken: string | undefined,
+    meta: { ip: string; userAgent?: string },
+  ): Promise<
+    | { kind: 'session'; tokens: IssuedTokens; me: MePayload; redirect: string }
+    | { kind: 'redirect'; redirect: string }
+  > {
+    if (!rawToken) {
+      return { kind: 'redirect', redirect: '/login?error=google_auth_failed' };
+    }
+    let record: Awaited<ReturnType<CredentialTokensService['lookupValid']>>;
+    try {
+      record = await this.credentials.lookupValid(rawToken, 'INVITE');
+    } catch {
+      return { kind: 'redirect', redirect: '/login?error=google_auth_failed' };
+    }
+    const settings = readCollegeSettings(record.user.college.settings);
+    if (record.user.studentProfile && settings.googleAuth === 'off') {
+      return { kind: 'redirect', redirect: '/login?error=google_disabled' };
+    }
+
+    let onboarding: Awaited<
+      ReturnType<OnboardingService['applyVerification']>
+    > | null = null;
+    try {
+      onboarding = await this.prisma.$transaction(async (tx) => {
+        // 1. Bind the Google identity first: if this Google account is
+        //    already linked elsewhere (P2002), the transaction aborts and
+        //    the invite token remains valid for a retry with the right
+        //    account. Email match is never identity proof.
+        await tx.authIdentity.create({
+          data: {
+            userId: record.userId,
+            provider: 'GOOGLE',
+            providerSub: claims.sub,
+            emailAtLink: claims.email,
+          },
+        });
+        // 2. Consume the token atomically (one-time across BOTH methods).
+        const claimed = await tx.credentialToken.updateMany({
+          where: { id: record.id, usedAt: null },
+          data: { usedAt: new Date() },
+        });
+        if (claimed.count !== 1) throw authFailed();
+        // 3. No pending forced password change for Google-activated users.
+        await tx.user.update({
+          where: { id: record.userId },
+          data: { mustChangePassword: false },
+        });
+        // 4. Verification + supersession + synthetic APPROVED claim.
+        return this.onboarding.applyVerification(
+          tx,
+          record.userId,
+          record.createdById,
+        );
+      });
+    } catch {
+      // P2002 (sub linked elsewhere), lost token race, or IDENTITY_CONFLICT
+      // — all rolled back; token untouched by this attempt.
+      return { kind: 'redirect', redirect: '/login?error=google_auth_failed' };
+    }
+
+    await this.audit.log({
+      collegeId: record.user.collegeId,
+      actorId: record.userId,
+      action: 'auth.invite_accepted',
+      targetType: 'User',
+      targetId: record.userId,
+      metadata: { method: 'google' },
+    });
+    await this.audit.log({
+      collegeId: record.user.collegeId,
+      actorId: record.userId,
+      action: 'auth.google_linked',
+      targetType: 'User',
+      targetId: record.userId,
+    });
+    await this.onboarding.announce(record.user, onboarding, 'invitation');
+
+    const tokens = await this.tokens.issueFamily(
+      {
+        id: record.userId,
+        role: record.user.role,
+        collegeId: record.user.collegeId,
+      },
+      meta,
+    );
+    await this.prisma.user.update({
+      where: { id: record.userId },
+      data: { lastLoginAt: new Date() },
+    });
+    return {
+      kind: 'session',
+      tokens,
+      me: await this.auth.buildMePayload(record.userId),
+      redirect: '/dashboard',
+    };
   }
 
   // ── Link / unlink (authenticated API) ────────────────────────────────────

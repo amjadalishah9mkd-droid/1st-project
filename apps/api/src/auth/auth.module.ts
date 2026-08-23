@@ -6,6 +6,7 @@ import { AuthService } from './auth.service';
 import { TokenService } from './token.service';
 import { CredentialTokensService } from './credential-tokens.service';
 import { LoginRateLimiterService } from './login-rate-limiter.service';
+import { OnboardingService } from './onboarding.service';
 import { GoogleAuthController } from './google/google-auth.controller';
 import { GoogleAuthService } from './google/google-auth.service';
 import {
@@ -35,6 +36,7 @@ import { PermissionsGuard } from '../access/permissions.guard';
     TokenService,
     CredentialTokensService,
     LoginRateLimiterService,
+    OnboardingService,
     GoogleAuthService,
     // DI boundary: tests override this token with a fake Google client.
     { provide: GOOGLE_OIDC_CLIENT, useClass: HttpGoogleOidcClient },
@@ -47,6 +49,7 @@ import { PermissionsGuard } from '../access/permissions.guard';
     TokenService,
     CredentialTokensService,
     LoginRateLimiterService,
+    OnboardingService,
     GoogleAuthService,
   ],
 })

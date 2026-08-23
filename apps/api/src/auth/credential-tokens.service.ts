@@ -6,9 +6,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
+import { readCollegeSettings } from '@campusos/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { TokenService } from './token.service';
+import { OnboardingService } from './onboarding.service';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 
 export const INVITE_TTL_MS = 48 * 60 * 60 * 1000; // 48 hours
@@ -41,6 +43,7 @@ export class CredentialTokensService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly tokens: TokenService,
+    private readonly onboarding: OnboardingService,
   ) {}
 
   private hash(raw: string): string {
@@ -99,18 +102,23 @@ export class CredentialTokensService {
     };
   }
 
-  /**
-   * Claims a token and sets the password. The claim is atomic
-   * (updateMany over usedAt=null) so concurrent submissions cannot both win.
-   */
-  async accept(
-    rawToken: string,
-    purpose: 'INVITE' | 'RESET',
-    password: string,
-  ): Promise<{ accepted: true }> {
+  /** Validated, unconsumed token lookup (shared by all acceptance paths). */
+  async lookupValid(rawToken: string, purpose: 'INVITE' | 'RESET') {
     const record = await this.prisma.credentialToken.findUnique({
       where: { tokenHash: this.hash(rawToken) },
-      include: { user: { select: { id: true, collegeId: true, status: true } } },
+      include: {
+        user: {
+          select: {
+            id: true,
+            collegeId: true,
+            status: true,
+            role: true,
+            firstName: true,
+            college: { select: { name: true, settings: true } },
+            studentProfile: { select: { id: true } },
+          },
+        },
+      },
     });
     if (
       !record ||
@@ -121,21 +129,80 @@ export class CredentialTokensService {
     ) {
       throw genericInvalid();
     }
+    return record;
+  }
 
-    // Atomic one-time claim — a concurrent request loses this race.
-    const claimed = await this.prisma.credentialToken.updateMany({
-      where: { id: record.id, usedAt: null },
-      data: { usedAt: new Date() },
-    });
-    if (claimed.count !== 1) {
-      throw genericInvalid();
+  /**
+   * M11-W4 — acceptance methods offered for an invite, driven by the
+   * invited user's college settings (never by client input):
+   *   off      → password
+   *   additive → both (google shown only when the feature is configured)
+   *   required → google (students); non-students always use password
+   */
+  inviteMode(
+    record: Awaited<ReturnType<CredentialTokensService['lookupValid']>>,
+    googleConfigured: boolean,
+  ): 'password' | 'google' | 'both' {
+    if (!record.user.studentProfile || !googleConfigured) return 'password';
+    const settings = readCollegeSettings(record.user.college.settings);
+    if (settings.googleAuth === 'required') return 'google';
+    if (settings.googleAuth === 'additive') return 'both';
+    return 'password';
+  }
+
+  /**
+   * Claims a token and sets the password. The whole acceptance is one
+   * transaction (M11-W4): the token is only consumed if every side effect
+   * (password, verification, supersession) commits.
+   */
+  async accept(
+    rawToken: string,
+    purpose: 'INVITE' | 'RESET',
+    password: string,
+    googleConfigured = false,
+  ): Promise<{ accepted: true }> {
+    const record = await this.lookupValid(rawToken, purpose);
+
+    // Google-only colleges: student invites cannot be activated with a
+    // password (server-side enforcement, not just UI). The token stays
+    // valid for the Google path.
+    if (
+      purpose === 'INVITE' &&
+      this.inviteMode(record, googleConfigured) === 'google'
+    ) {
+      throw new ForbiddenException({
+        code: 'GOOGLE_SIGNIN_REQUIRED',
+        message: 'Use Google sign-in to activate this account',
+      });
     }
 
     const passwordHash = await argon2.hash(password, { type: argon2.argon2id });
-    await this.prisma.user.update({
-      where: { id: record.userId },
-      data: { passwordHash, mustChangePassword: false },
+    const onboarding = await this.prisma.$transaction(async (tx) => {
+      // Atomic one-time claim — a concurrent request loses this race, and
+      // a failure later in the transaction un-consumes the token.
+      const claimed = await tx.credentialToken.updateMany({
+        where: { id: record.id, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+      if (claimed.count !== 1) {
+        throw genericInvalid();
+      }
+      await tx.user.update({
+        where: { id: record.userId },
+        data: { passwordHash, mustChangePassword: false },
+      });
+      // M11-W4: invitation possession is admin-provisioned identity proof —
+      // student accounts become VERIFIED and hold their identity slot.
+      if (purpose === 'INVITE') {
+        return this.onboarding.applyVerification(
+          tx,
+          record.userId,
+          record.createdById,
+        );
+      }
+      return null;
     });
+
     // Any existing sessions die with the old credential.
     await this.tokens.revokeAllExceptFamily(record.userId, null);
 
@@ -146,7 +213,11 @@ export class CredentialTokensService {
         purpose === 'INVITE' ? 'auth.invite_accepted' : 'auth.reset_accepted',
       targetType: 'User',
       targetId: record.userId,
+      metadata: purpose === 'INVITE' ? { method: 'password' } : undefined,
     });
+    if (onboarding) {
+      await this.onboarding.announce(record.user, onboarding, 'invitation');
+    }
     return { accepted: true };
   }
 

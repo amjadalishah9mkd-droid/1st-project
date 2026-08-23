@@ -106,6 +106,7 @@ Principles applied consistently from M0 onward:
 | M11-W1 | Identity & verification foundation | `2581a21` |
 | M11-W2 | Google OIDC core | `768fb05` |
 | M11-W3 | Identity claims + evidence API | `51069ab` |
+| M11-W4 | Verified student onboarding / invitation integration | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -367,6 +368,62 @@ with configurable grace period).
   upload → claim → admin review via signed URL (byte-identical download,
   unsigned 403) → approve → student `VERIFIED`.
 
+### M11-W4 — Verified student onboarding / invitation integration
+**Goal:** give admin-created students a duplicate-proof path to VERIFIED,
+through the existing M10-W2 invitation, with either credential method.
+
+- **Core decision:** invitation possession = admin-provisioned identity
+  proof (Blueprint Mode A). Acceptance — password or Google — yields
+  `verificationStatus=VERIFIED` **plus a synthetic APPROVED
+  StudentIdentityClaim**, so the W1 partial-unique index permanently holds
+  the identity slot in PostgreSQL. Every VERIFIED identity now occupies its
+  slot, whether verified by admin review (W3) or onboarding (W4).
+- **User journeys:** (A) off-mode password acceptance → VERIFIED+claim;
+  (B) additive mode → accept page offers Google *and* password; (C)
+  required mode → Google only, password acceptance refused server-side
+  (`GOOGLE_SIGNIN_REQUIRED`) with the token left valid; (D) session link by
+  a LEGACY/UNVERIFIED profile owner auto-verifies; (E) **auto-supersession**
+  (approved decision): accepting an invite atomically rejects an impostor's
+  PENDING claim on the profile (reason: superseded by an
+  administrator-issued invitation), sets the impostor REJECTED, and
+  notifies them.
+- **State transitions added:** LEGACY|UNVERIFIED → VERIFIED (acceptance,
+  link); PENDING → REJECTED (supersession). RESET tokens and teacher/admin
+  invitations unchanged (data-driven: no StudentProfile → no lifecycle).
+- **API:** new `OnboardingService.applyVerification()` (single-transaction
+  supersession + synthetic claim + VERIFIED); `GET /auth/invite-info`
+  (public, generic errors) reporting `password|google|both` per college
+  settings; OIDC `invite` intent (`GET /auth/google/start?intent=invite&
+  token=…`) with the raw token carried only in the HMAC state cookie —
+  never through Google; callback transaction ordered AuthIdentity →
+  token-claim → onboarding so a wrong Google account (P2002) rolls back
+  without consuming the invitation; `POST /auth/accept-invite` became fully
+  transactional (token consumption included). No new CredentialPurpose —
+  one INVITE token, one-time across BOTH methods.
+- **Frontend:** `/accept-invite` fetches invite-info and renders "Continue
+  with Google" and/or the password form; required mode explains the
+  Google-only policy.
+- **Security decisions:** token-in-state-cookie (httpOnly, signed, 10-min);
+  transaction rollback keeps failed acceptances token-neutral; email match
+  still never links; database partial uniques remain the final authority
+  (IDENTITY_CONFLICT aborts acceptance if a foreign APPROVED claim exists).
+- **Audit/notifications:** `auth.invite_accepted` gains `{method}`;
+  new `verification.auto_verified` `{via: invitation|link}`; supersession
+  emits `verification.claim_rejected` audit + the existing
+  `verification.rejected` notification, exactly-once by construction.
+- **Migration:** none required (4 migrations, unchanged).
+- **Tests: 266** (21 new): both methods × three modes, one-time token
+  across methods (both orders), expired invites, wrong-Google rollback
+  with retry, supersession + notification, post-VERIFIED duplicate claim
+  blocked (DB-final), session-link auto-verify, teacher/admin + RESET
+  unaffected, cross-college integrity, IDENTITY_CONFLICT rollback,
+  3-way concurrent acceptance race (one winner), CSV-import invites.
+- **Alloy verification:** additive college → invite page showed both
+  options signed-out; password acceptance → DB showed VERIFIED + APPROVED
+  claim; duplicate claim → `CLAIM_UNAVAILABLE`; required mode hid the
+  password form and the API refused it; demo accounts unaffected; demo
+  data restored to canonical state.
+
 *(Future M11 workstreams will be appended here as they are implemented.)*
 
 ## 7. Architecture Evolution
@@ -451,6 +508,7 @@ Security-critical constraints:
 | M11-W1 | Identity uniqueness in PostgreSQL | Duplicate student accounts via racing signups → partial unique indexes → 5-way race test (exactly one winner) |
 | M11-W2 | Google OIDC state/PKCE/nonce, JWKS, sub-keyed identity | OAuth CSRF/replay/pre-hijack via email match → signed one-time state cookie, PKCE S256, nonce, JWKS with rotation, `sub`-only identity, no email auto-link → 29 e2e tests incl. replayed state and email-squatting |
 | M11-W3 | Verification claims + evidence access control | ID-card evidence must be evidence, never a credential, and never publicly readable → purpose-restricted uploads (magic-byte MIME), sign-time authorization (owner/reviewer only, 404 otherwise), full audit → 24 e2e tests incl. signing matrix and enumeration safety |
+| M11-W4 | Invitation-anchored verification + auto-supersession | Admin-created students had no duplicate-proof VERIFIED path; impostor claims could squat identity slots → transactional acceptance writing a synthetic APPROVED claim (DB slot held forever) and superseding impostor PENDING claims; token consumption is rollback-safe → 21 e2e tests incl. races and rollback |
 
 ## 10. Testing Evolution
 
@@ -469,6 +527,7 @@ reached 141 by the end of M9):
 | M11-W1 | 192 | partial-unique constraints, claim races, fail-closed null password |
 | M11-W2 | 221 | OIDC claim validation, state replay, PKCE, no email auto-link, unlink protection |
 | M11-W3 | 245 | claim lifecycle, evidence sign authorization, atomic decisions, exactly-once notifications |
+| M11-W4 | 266 | invitation onboarding (both methods × modes), supersession, token-neutral rollback, acceptance races |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -568,7 +627,7 @@ milestone (see roadmap).
 | OAuth consumed-state store is in-memory | single-instance deployments are the current target | acceptable; degrades to TTL-only protection if scaled out | M11-W7 hardening |
 | `FILE_URL_SECRET` rotation has no dual-key grace window | 300 s TTL makes impact negligible | documented in OPERATIONS.md | future ops enhancement |
 | Account merging for claims on provisioned profiles | D3 locked: reject-with-guidance in v1 | `PROFILE_HAS_ACCOUNT` behavior in place | post-M11 design |
-| Google-link invitations / student cutover (`required` mode UX) | later M11 workstreams by plan | password login preserved during rollout | M11-W4+ |
+| Student password cutover enforcement at login (`required` colleges) | W7 scope by plan; invitations already Google-capable | password login still works for legacy students | M11-W7 |
 | Student `/verify` UI + admin verification UI | backend-first ordering | API complete (W3) | M11-W5/W6 |
 | Prisma major-version upgrade available | upgrade advisory only | pinned to 5.22 | maintenance window |
 | Backups are documented cron scripts, not shipped automation | doc-only scope of M10-W5 | OPERATIONS.md §6 | future ops work |
@@ -576,21 +635,22 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M11-W3.*
+*Last updated after M11-W4.*
 
-- **Current milestone**: M11-W3 complete (M0–M10 accepted; M11 W1–W3
-  complete, W4+ awaiting approval)
-- **Latest commit**: `51069ab` on branch
+- **Current milestone**: M11-W4 complete (M0–M10 accepted; M11 W1–W4
+  complete, W5+ awaiting approval)
+- **Latest commit**: see the M11-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
-- **Migrations**: 4 found, database schema up to date
-- **Tests**: **245/245 passing** (16 suites)
+- **Migrations**: 4 found, database schema up to date (W4 required none)
+- **Tests**: **266/266 passing** (17 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
 - **Alloy preview**: reachable at `http://localhost:8080` (login page 200;
-  demo admin/teacher/student logins verified)
+  demo admin/teacher/student logins verified; Google endpoints correctly
+  FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13
-- **Next planned milestone**: M11-W4 (Google-link invitation rework) —
+- **Next planned milestone**: M11-W5 (student onboarding /verify UI) —
   pending explicit approval
 
 ## 15. Future Roadmap
@@ -599,12 +659,12 @@ milestone (see roadmap).
 - M0–M9 MVP (foundation → dashboards)
 - M10 production hardening (W1–W5)
 - M11-W1 identity foundation, M11-W2 Google OIDC core, M11-W3 claims +
-  evidence API
+  evidence API, M11-W4 verified student onboarding (invitation integration
+  + auto-supersession)
 
 **IN PROGRESS**
-- M11 Identity & Student Verification (W4+ pending approval: invitation
-  rework, student onboarding UI, admin verification UI, cutover +
-  hardening)
+- M11 Identity & Student Verification (W5+ pending approval: student
+  onboarding UI, admin verification UI, cutover + hardening)
 
 **PLANNED**
 - Per-college Google-only cutover with grace period (D7)

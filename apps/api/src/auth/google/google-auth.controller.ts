@@ -50,13 +50,22 @@ export class GoogleAuthController {
   async start(
     @Query('intent') intentRaw: string | undefined,
     @Query('college') college: string | undefined,
+    @Query('token') inviteToken: string | undefined,
     @Res() res: Response,
   ): Promise<void> {
     // `link` intent must come through the authenticated POST /link route so
     // the state cookie is bound to a verified session, never a query param.
-    const intent: GoogleIntent = intentRaw === 'register' ? 'register' : 'login';
+    // `invite` (M11-W4) is public by design: possession of the one-time
+    // invite token IS the authorization, exactly like /auth/accept-invite.
+    const intent: GoogleIntent =
+      intentRaw === 'register'
+        ? 'register'
+        : intentRaw === 'invite'
+          ? 'invite'
+          : 'login';
     const { url, stateCookie } = await this.google.buildStart(intent, {
       collegeCode: college,
+      inviteToken,
     });
     res.cookie(stateCookie.name, stateCookie.value, {
       ...STATE_COOKIE_OPTS,
