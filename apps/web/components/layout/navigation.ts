@@ -33,6 +33,7 @@ const IMPLEMENTED_ROUTES: Array<{ href: string; label: string }> = [
   { href: '/community', label: 'Community' },
   { href: '/announcements', label: 'Announcements' },
   { href: '/moderation', label: 'Moderation' },
+  { href: '/verification', label: 'Verification' },
   // M9: settings + dashboards polish
 ];
 

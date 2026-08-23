@@ -1,5 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
+import { ROUTE_PERMISSIONS } from '@campusos/shared';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { LoginRateLimiterService } from '../src/auth/login-rate-limiter.service';
 import { createTestApp } from './test-app';
@@ -650,6 +651,106 @@ describe('M11-W3 — identity claims & evidence', () => {
           .send({ decision: 'REJECT', rejectionReason: 'nope' });
         expect(res.status).toBe(expected);
       }
+    });
+  });
+
+  describe('M11-W6 — admin queue UI contract', () => {
+    it('shared route map gates /verification with verification.manage', () => {
+      expect(ROUTE_PERMISSIONS['/verification']).toBe('verification.manage');
+    });
+
+    it('queue search (q) matches admission numbers, misses others', async () => {
+      const { token } = await makeStudent('w6search');
+      const up = await uploadEvidence(token);
+      const admissionNo = `W6-SRCH-${suffix}`;
+      await http
+        .post('/api/v1/verification/claims')
+        .set(auth(token))
+        .send({
+          claimedAdmissionNo: admissionNo,
+          evidenceFileKey: up.body.data.evidenceFileKey,
+        });
+
+      const hit = await http
+        .get(`/api/v1/verification/claims?q=W6-SRCH`)
+        .set(auth(adminToken));
+      expect(hit.status).toBe(200);
+      expect(hit.body.data.length).toBeGreaterThanOrEqual(1);
+      for (const item of hit.body.data) {
+        expect(item.claimedAdmissionNo).toContain('W6-SRCH');
+      }
+
+      const miss = await http
+        .get('/api/v1/verification/claims?q=NO-SUCH-ADMISSION-XYZ')
+        .set(auth(adminToken));
+      expect(miss.body.data).toHaveLength(0);
+      expect(miss.body.meta.total).toBe(0);
+    });
+
+    it('queue pagination returns correct meta and page slices', async () => {
+      // Three claims share a searchable prefix; page size 2 → 2 pages.
+      for (const tag of ['pg1', 'pg2', 'pg3']) {
+        const { token } = await makeStudent(`w6-${tag}`);
+        const up = await uploadEvidence(token);
+        await http
+          .post('/api/v1/verification/claims')
+          .set(auth(token))
+          .send({
+            claimedAdmissionNo: `W6-PAGE-${tag}-${suffix}`,
+            evidenceFileKey: up.body.data.evidenceFileKey,
+          });
+      }
+      const page1 = await http
+        .get('/api/v1/verification/claims?q=W6-PAGE&limit=2&page=1')
+        .set(auth(adminToken));
+      expect(page1.body.data).toHaveLength(2);
+      expect(page1.body.meta.total).toBe(3);
+      const page2 = await http
+        .get('/api/v1/verification/claims?q=W6-PAGE&limit=2&page=2')
+        .set(auth(adminToken));
+      expect(page2.body.data).toHaveLength(1);
+      const ids = new Set(
+        [...page1.body.data, ...page2.body.data].map((c: { id: string }) => c.id),
+      );
+      expect(ids.size).toBe(3);
+    });
+
+    it('status filters return only the requested status', async () => {
+      for (const status of ['APPROVED', 'REJECTED'] as const) {
+        const res = await http
+          .get(`/api/v1/verification/claims?status=${status}`)
+          .set(auth(adminToken));
+        expect(res.status).toBe(200);
+        for (const item of res.body.data) {
+          expect(item.status).toBe(status);
+        }
+      }
+    });
+
+    it('a decision on a claim decided moments earlier yields CLAIM_ALREADY_DECIDED', async () => {
+      const { token } = await makeStudent('w6race');
+      const up = await uploadEvidence(token);
+      const submit = await http
+        .post('/api/v1/verification/claims')
+        .set(auth(token))
+        .send({
+          claimedAdmissionNo: `W6-RACE-${suffix}`,
+          evidenceFileKey: up.body.data.evidenceFileKey,
+        });
+      const id = submit.body.data.id as string;
+
+      // Admin A rejects; admin B (stale UI) tries to reject again.
+      const first = await http
+        .post(`/api/v1/verification/claims/${id}/decision`)
+        .set(auth(adminToken))
+        .send({ decision: 'REJECT', rejectionReason: 'No matching record' });
+      expect(first.status).toBe(201);
+      const second = await http
+        .post(`/api/v1/verification/claims/${id}/decision`)
+        .set(auth(adminToken))
+        .send({ decision: 'REJECT', rejectionReason: 'Duplicate decision' });
+      expect(second.status).toBe(409);
+      expect(second.body.error.code).toBe('CLAIM_ALREADY_DECIDED');
     });
   });
 });

@@ -176,6 +176,7 @@ export const ROUTE_PERMISSIONS: Record<string, PermissionKey | null> = {
   '/fees': 'fees.read',
   '/community': 'community.participate',
   '/moderation': 'moderation.act',
+  '/verification': 'verification.manage',
   '/announcements': null,
   '/notifications': null,
   '/settings': 'settings.manage',

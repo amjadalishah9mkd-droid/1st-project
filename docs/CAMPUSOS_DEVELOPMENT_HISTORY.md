@@ -107,7 +107,8 @@ Principles applied consistently from M0 onward:
 | M11-W2 | Google OIDC core | `768fb05` |
 | M11-W3 | Identity claims + evidence API | `51069ab` |
 | M11-W4 | Verified student onboarding / invitation integration | `7901d18` |
-| M11-W5 | Student onboarding UI + lifecycle gate | *(this commit)* |
+| M11-W5 | Student onboarding UI + lifecycle gate | `b33af5f` |
+| M11-W6 | Admin verification queue UI | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -460,6 +461,42 @@ experience, and enforce the identity lifecycle server-side.
   "Check status" → automatic session refresh → dashboard with full student
   access. Demo accounts unaffected; test data purged.
 
+### M11-W6 — Admin verification queue UI
+**Goal:** the administrator-facing Verification Center, as a pure consumer
+of the W3 API — the UI never becomes an authorization layer.
+
+- **`/verification` page** (moderation-page pattern): queue defaulting to
+  PENDING with status filter, admission-number-labeled search, pagination
+  and loading/error/empty states via the existing `DataTable`/`useList`;
+  columns: claimant, claimed admission no, record-match badge (matches
+  claimant / another account / no matching record), submitted date, status.
+- **Claim detail dialog**: claimant account vs matched StudentProfile
+  comparison cards; explicit no-match panel; evidence metadata with
+  "View evidence" through the existing `openFile()` authorized-signing
+  flow (signed URLs never rendered or stored); "No evidence on file"
+  state; decided-claim summary with reason.
+- **Decisions**: Approve disabled (usability only) unless the profile
+  matches and belongs to the claimant — the backend remains authoritative;
+  Reject requires a reason (server-validated too); success toasts +
+  queue refetch; `CLAIM_ALREADY_DECIDED` / `PROFILE_HAS_ACCOUNT` /
+  `CLAIM_UNRESOLVED` / `NOT_FOUND` surface as conflict toasts with an
+  automatic queue resync.
+- **Navigation/routing**: `/verification → verification.manage` added to
+  the shared `ROUTE_PERMISSIONS` map (drives middleware + sidebar); one
+  nav entry. No role conditionals anywhere.
+- **API/schema**: zero changes — no new endpoints, no migration
+  (4 migrations, unchanged).
+- **Tests: 278** (5 new): shared route-map contract, queue search hit/miss,
+  pagination meta + page slices, status-filter purity, stale-decision
+  conflict (`CLAIM_ALREADY_DECIDED`).
+- **Alloy verification:** admin saw the nav entry, teacher did not and
+  direct navigation bounced; queue/search/filter/detail verified in the
+  browser; evidence downloaded via signed URL; unknown-admission claim
+  rejected with reason (student saw it); matching claim approved →
+  student VERIFIED; a decision made concurrently via API produced the
+  conflict toast and queue resync; demo accounts unaffected; all test
+  data (plus residue from an earlier failed suite teardown) purged.
+
 *(Future M11 workstreams will be appended here as they are implemented.)*
 
 ## 7. Architecture Evolution
@@ -565,6 +602,7 @@ reached 141 by the end of M9):
 | M11-W3 | 245 | claim lifecycle, evidence sign authorization, atomic decisions, exactly-once notifications |
 | M11-W4 | 266 | invitation onboarding (both methods × modes), supersession, token-neutral rollback, acceptance races |
 | M11-W5 | 273 | lifecycle permission gate, /auth/config exposure, hint-cookie verification field |
+| M11-W6 | 278 | admin queue search/pagination/filter contracts, stale-decision conflicts, route-permission map |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -672,14 +710,14 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M11-W5.*
+*Last updated after M11-W6.*
 
-- **Current milestone**: M11-W5 complete (M0–M10 accepted; M11 W1–W5
-  complete, W6+ awaiting approval)
-- **Latest commit**: see the M11-W5 milestone commit on branch
+- **Current milestone**: M11-W6 complete (M0–M10 accepted; M11 W1–W6
+  complete, W7 awaiting approval)
+- **Latest commit**: see the M11-W6 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
-- **Migrations**: 4 found, database schema up to date (W4/W5 required none)
-- **Tests**: **273/273 passing** (18 suites)
+- **Migrations**: 4 found, database schema up to date (W4/W5/W6 required none)
+- **Tests**: **278/278 passing** (18 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -687,8 +725,9 @@ milestone (see roadmap).
   demo admin/teacher/student logins verified; Google endpoints correctly
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13
-- **Next planned milestone**: M11-W6 (admin verification queue UI) —
-  pending explicit approval
+- **Next planned milestone**: M11-W7 (cutover + hardening: student
+  password cutover in `required` colleges, rate limits, evidence
+  retention, final M11 verification) — pending explicit approval
 
 ## 15. Future Roadmap
 
@@ -697,11 +736,11 @@ milestone (see roadmap).
 - M10 production hardening (W1–W5)
 - M11-W1 identity foundation, M11-W2 Google OIDC core, M11-W3 claims +
   evidence API, M11-W4 verified student onboarding, M11-W5 student
-  onboarding UI + lifecycle gate
+  onboarding UI + lifecycle gate, M11-W6 admin verification queue UI
 
 **IN PROGRESS**
-- M11 Identity & Student Verification (W6+ pending approval: admin
-  verification UI, cutover + hardening)
+- M11 Identity & Student Verification (W7 pending approval: cutover +
+  hardening)
 
 **PLANNED**
 - Per-college Google-only cutover with grace period (D7)
