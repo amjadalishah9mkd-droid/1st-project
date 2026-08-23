@@ -23,6 +23,7 @@ import { VerificationModule } from './verification/verification.module';
 import { RateLimitModule } from './common/rate-limiter.service';
 import { SettingsModule } from './settings/settings.module';
 import { MailModule } from './mail/mail.module';
+import { ExportsModule } from './exports/exports.module';
 
 /**
  * Complete module graph (M0–M9): the full CampusOS MVP per Blueprint §6.
@@ -52,6 +53,7 @@ import { MailModule } from './mail/mail.module';
     DashboardsModule,
     VerificationModule,
     SettingsModule,
+    ExportsModule,
     HealthModule,
   ],
 })

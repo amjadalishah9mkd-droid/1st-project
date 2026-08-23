@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import type { ResultsResponse, StudentItem } from '@campusos/shared';
 import { apiFetch, ApiError } from '@/lib/api/client';
 import { useOptions } from '@/lib/hooks/use-list';
@@ -100,6 +101,8 @@ export default function ResultsPage() {
 }
 
 function ResultCard({ results }: { results: ResultsResponse }) {
+  const { user } = useSession();
+  const isStudent = user?.studentProfile !== null;
   // Group rows by exam for a per-exam card layout.
   const byExam = new Map<string, typeof results.rows>();
   for (const row of results.rows) {
@@ -134,11 +137,19 @@ function ResultCard({ results }: { results: ResultsResponse }) {
           key={examId}
           className="rounded-card border border-line bg-surface-raised shadow-card"
         >
-          <h3 className="border-b border-line px-5 py-3 text-sm font-semibold">
+          <h3 className="flex items-center justify-between border-b border-line px-5 py-3 text-sm font-semibold">
+            <span>
             {rows[0].examTitle}{' '}
             <span className="font-normal text-ink-muted">
               · {rows[0].examType.charAt(0) + rows[0].examType.slice(1).toLowerCase()}
             </span>
+            </span>
+            <Link
+              href={`/results/report/${examId}${isStudent ? '' : `?studentId=${results.studentId}`}`}
+              className="text-xs font-medium text-brand-700 hover:underline"
+            >
+              Report card
+            </Link>
           </h3>
           <table className="w-full text-sm">
             <thead>

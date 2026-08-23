@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { Select } from '@/components/ui/select';
+import { ExportCsvButton } from '@/components/export-csv-button';
 
 const STATUSES = ['PRESENT', 'ABSENT', 'LATE', 'EXCUSED'] as const;
 type Status = (typeof STATUSES)[number];
@@ -105,6 +106,13 @@ function RecorderView() {
       <PageHeader
         title="Attendance"
         description="Generate class sessions from the timetable, then record attendance per session."
+        actions={
+          <ExportCsvButton
+            permission="attendance.read"
+            path="/exports/attendance.csv"
+            filename="attendance.csv"
+          />
+        }
       />
 
       <div className="mb-5 flex flex-wrap items-end gap-3 rounded-card border border-line bg-surface-raised p-4 shadow-card">

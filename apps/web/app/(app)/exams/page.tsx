@@ -14,6 +14,7 @@ import { useToast } from '@/components/providers/toast-provider';
 import { useSession } from '@/components/providers/session-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { DataTable } from '@/components/data/data-table';
+import { ExportCsvButton } from '@/components/export-csv-button';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
@@ -79,6 +80,21 @@ export default function ExamsPage() {
           },
           { key: 'papers', header: 'Papers', render: (row) => row.paperCount },
           { key: 'marks', header: 'Marks entered', render: (row) => row.markCount },
+          {
+            key: 'export',
+            header: '',
+            render: (row) =>
+              row.status === 'PUBLISHED' ? (
+                <span onClick={(event) => event.stopPropagation()}>
+                  <ExportCsvButton
+                    permission="results.read"
+                    path={`/exports/results.csv?examId=${row.id}`}
+                    filename={`results-${row.title.replace(/[^\w-]+/g, '_')}.csv`}
+                    label="Results CSV"
+                  />
+                </span>
+              ) : null,
+          },
           {
             key: 'status',
             header: 'Status',

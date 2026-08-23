@@ -111,7 +111,8 @@ Principles applied consistently from M0 onward:
 | M11-W6 | Admin verification queue UI | `6d7984d` |
 | M11-W7 | Cutover + production hardening | `f9632a4` |
 | M12-W1 | Email foundation | `cd0005c` |
-| M12-W2 | Notification email channel + opt-out | *(this commit)* |
+| M12-W2 | Notification email channel + opt-out | `3433959` |
+| M12-W3 | Report cards & CSV exports | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -623,6 +624,44 @@ self-service opt-out, reusing the W1 MailService untouched.
   all recipients with zero mail activity in the unconfigured
   environment, demo logins healthy, test data purged.
 
+### M12-W3 — Report cards & CSV exports
+**Goal:** institutional output — printable per-exam report cards and
+admin CSV exports — with zero schema changes.
+
+- **Report cards (decisions A1/A2/A4):** print-CSS page
+  `/results/report/[examId]` (college header, student block, per-paper
+  marks, grade bands, totals, signature footer) with browser
+  Print/Save-as-PDF — no PDF dependency. Data rides the existing
+  `GET /results`, whose `studentId` filter already enforced scope
+  correctly (OWN callers are pinned to their own record — A2 required no
+  API change). Per-exam only; transcripts/GPA remain deferred (A4).
+  "Report card" links added per exam on the results page; global
+  `@media print` rules hide the app chrome.
+- **CSV exports (decision A3):** new `exports` module —
+  `GET /exports/students|attendance|fees|results.csv` with filters.
+  Authorization is PolicyService-resolved **scope ALL only** (admins);
+  teachers (ASSIGNED) and students (OWN) are refused — data-driven, no
+  role conditionals. All queries tenant-scoped (foreign ids yield empty
+  files). RFC-4180 quoting + spreadsheet formula-injection guard
+  (leading = + - @ prefixed), 50k row cap (413 `EXPORT_TOO_LARGE`),
+  `exports.generated` audit (name + row count only). CSV responses
+  bypass the JSON envelope per the files-module precedent.
+- **Frontend:** shared `ExportCsvButton` (visible only with an ALL-scope
+  grant; server authoritative) on students/fees/attendance pages and
+  per-published-exam on the exams page; bearer-fetch blob download
+  helper.
+- **Migration:** none (still 6).
+- **Tests: 327** (13 new): CSV escaping/formula-guard/row-cap units,
+  401/403 matrices for every endpoint (student OWN + teacher ASSIGNED
+  refused), content/MIME/disposition/filters per export, **adversarial
+  rival-college admin receives header-only files for every export**,
+  report-card data path (ALL-scope studentId honored; OWN callers pinned
+  to self).
+- **Alloy verification:** admin exported students.csv through the UI
+  (content verified on disk), per-exam Results CSV button present on
+  published exams, report card rendered with real marks/grades/totals
+  and print chrome-hiding CSS in place; production images rebuilt.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -733,6 +772,7 @@ reached 141 by the end of M9):
 | M11-W7 | 294 | cross-instance OAuth state replay, rate-limit policies, retention purge (disk+DB), required-mode cutover |
 | M12-W1 | 306 | mail content/absolute links, failure isolation, audit hygiene, header-injection, feature-off |
 | M12-W2 | 314 | per-event email coverage, opt-out semantics, cross-college fan-out isolation, transactional exemption |
+| M12-W3 | 327 | export authorization/tenancy matrices, CSV injection guard, report-card scope pinning |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -841,14 +881,14 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M12-W2.*
+*Last updated after M12-W3.*
 
-- **Current milestone**: M12-W2 complete (M0–M11 accepted; M12-W3+
+- **Current milestone**: M12-W3 complete (M0–M11 accepted; M12-W4
   awaiting approval)
-- **Latest commit**: see the M12-W2 milestone commit on branch
+- **Latest commit**: see the M12-W3 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
-- **Migrations**: 6 found, database schema up to date
-- **Tests**: **314/314 passing** (21 suites)
+- **Migrations**: 6 found, database schema up to date (W3 required none)
+- **Tests**: **327/327 passing** (22 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -856,8 +896,8 @@ milestone (see roadmap).
   demo admin/teacher/student logins verified; Google endpoints correctly
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13
-- **Next planned milestone**: M12-W3 (report cards & CSV exports) —
-  pending explicit approval
+- **Next planned milestone**: M12-W4 (admin audit log viewer) — pending
+  explicit approval
 
 ## 15. Future Roadmap
 
@@ -870,11 +910,11 @@ milestone (see roadmap).
   queue UI, cutover + production hardening
 
 **IN PROGRESS**
-- M12 Communications & Institutional Output (W1–W2 complete; W3+ pending
-  approval: report cards & exports, audit viewer)
+- M12 Communications & Institutional Output (W1–W3 complete; W4 pending
+  approval: audit viewer)
 
 **PLANNED**
-- Report cards & CSV exports (M12-W3); admin audit viewer (M12-W4)
+- Admin audit viewer (M12-W4)
 - Payment gateway integration + accountant functionality
 - Parent/guardian portal
 - Complaint box

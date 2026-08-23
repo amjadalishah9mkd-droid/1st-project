@@ -10,3 +10,18 @@
     @apply bg-surface text-ink font-sans;
   }
 }
+
+/* M12-W3 — report-card printing: hide the app chrome, print content only. */
+@media print {
+  aside,
+  header,
+  .print-hide {
+    display: none !important;
+  }
+  main {
+    padding: 0 !important;
+  }
+  body {
+    background: #fff !important;
+  }
+}

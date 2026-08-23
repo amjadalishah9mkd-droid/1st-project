@@ -25,6 +25,7 @@ import {
   toAbsoluteLink,
   type CredentialLinkInfo,
 } from '@/components/invite-link-dialog';
+import { ExportCsvButton } from '@/components/export-csv-button';
 
 export default function StudentsPage() {
   const list = useList<StudentItem>('/students');
@@ -48,6 +49,11 @@ export default function StudentsPage() {
         actions={
           canManage ? (
             <>
+              <ExportCsvButton
+                permission="users.read"
+                path="/exports/students.csv"
+                filename="students.csv"
+              />
               <Button variant="secondary" onClick={() => setImportOpen(true)}>
                 Import CSV
               </Button>

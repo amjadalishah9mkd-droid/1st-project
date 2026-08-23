@@ -25,6 +25,7 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { invoiceTone } from './fee-utils';
 import { formatAmount } from '@/lib/format';
+import { ExportCsvButton } from '@/components/export-csv-button';
 
 export default function FeesPage() {
   const { hasPermission } = useSession();
@@ -102,6 +103,11 @@ function AdminFeesView() {
         description="Fee structures, invoices and manually recorded payments."
         actions={
           <>
+            <ExportCsvButton
+              permission="fees.read"
+              path="/exports/fees.csv"
+              filename="fees.csv"
+            />
             <Button variant="secondary" onClick={() => setStructureOpen(true)}>
               New structure
             </Button>

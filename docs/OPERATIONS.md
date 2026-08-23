@@ -402,7 +402,20 @@ are written first and are never affected by mail configuration, opt-out,
 or delivery failures. All other event categories (community activity,
 reminders, attendance) intentionally do not email.
 
-## 19. Rollback procedure
+## 19. Report cards & CSV exports (M12-W3)
+
+- **Report cards** are per-exam print views (`/results/report/<examId>`);
+  the official copy is produced with the browser's Print / Save-as-PDF —
+  there is no server-side PDF generation.
+- **CSV exports** (`/api/v1/exports/*.csv`: students, attendance, fees,
+  results) are restricted to callers whose resolved permission scope is
+  ALL (college admins). Teachers and students are refused server-side.
+  Every export is audited (`exports.generated` with export name and row
+  count only). Cells beginning with = + - @ are quoted to prevent
+  spreadsheet formula injection. Exports are capped at 50,000 rows
+  (HTTP 413 `EXPORT_TOO_LARGE` — narrow the filters).
+
+## 20. Rollback procedure
 
 1. `git checkout <previous-release-tag>` and rebuild images.
 2. If the bad release included a migration: restore the pre-deploy database
