@@ -110,7 +110,8 @@ Principles applied consistently from M0 onward:
 | M11-W5 | Student onboarding UI + lifecycle gate | `b33af5f` |
 | M11-W6 | Admin verification queue UI | `6d7984d` |
 | M11-W7 | Cutover + production hardening | `f9632a4` |
-| M12-W1 | Email foundation | *(this commit)* |
+| M12-W1 | Email foundation | `cd0005c` |
+| M12-W2 | Notification email channel + opt-out | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -587,6 +588,41 @@ generates, without touching any token/verification semantics.
 - **Alloy verification:** unconfigured default — invite dialogs
   unchanged, zero `mail.*` audit rows, demo logins and preview healthy.
 
+### M12-W2 — Notification email channel + per-user opt-out
+**Goal:** email the four institutional notification categories, with one
+self-service opt-out, reusing the W1 MailService untouched.
+
+- **`NotificationMailerService`**: thin recipient-resolution layer —
+  re-fetches users by id (tenant-scoped rows carry their own
+  collegeId/email; client-supplied addresses are impossible), filters
+  `emailOptOut=true` and inactive accounts, delegates to W1 MailService
+  (Noop/fire-and-forget/audit semantics unchanged).
+- **Events emailed:** `results.published`, `invoice.issued`,
+  `invoice.overdue`, `announcement.published` (audience resolved by the
+  existing server-side resolver, author excluded). All other events
+  (community, reminders, attendance, due-soon) deliberately excluded.
+  In-app notification rows are written first and are never affected by
+  mail configuration, opt-out or failures.
+- **Opt-out (decision O3):** `User.emailOptOut Boolean @default(false)` —
+  migration #6 (`m12_email_opt_out`, additive). Suppresses notification
+  email only; W1 transactional mail always ignores it (tested with a
+  reset link to an opted-out user). Exposed on `/me`; updated via
+  `PATCH /me/preferences` (self-only, strict Zod, audited
+  `preferences.updated {emailOptOut}` — boolean only, no PII); toggle on
+  the notifications page.
+- **Templates:** four new kinds in the W1 registry (results, invoice
+  issued/overdue, announcement) with absolute links via the W1 base-URL
+  logic.
+- **Tests: 314** (8 new): per-event coverage with opt-out filtering,
+  adversarial cross-college announcement fan-out (rival-college user
+  never mailed), excluded-event silence, transactional-mail exemption,
+  self-only audited preference updates with strict schema, transport
+  failure leaving in-app rows intact, unconfigured-SMTP zero-activity.
+- **Alloy verification:** toggle flipped off/on as the demo student
+  (DB flag + audit verified), announcement published → in-app rows for
+  all recipients with zero mail activity in the unconfigured
+  environment, demo logins healthy, test data purged.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -637,6 +673,7 @@ Key flows:
 | `20260822071747_m11_identity_foundation` | AuthIdentity, StudentIdentityClaim (+partial unique indexes), nullable passwordHash, verificationStatus | M11-W1 |
 | `20260822163204_m11_evidence_files` | Purpose-restricted evidence file metadata | M11-W3 |
 | `20260823050551_m11_oauth_state_consumption` | Atomic one-time OAuth state consumption (hashed) | M11-W7 |
+| `20260823055843_m12_email_opt_out` | Single per-user notification-email opt-out boolean | M12-W2 |
 
 Security-critical constraints:
 
@@ -695,6 +732,7 @@ reached 141 by the end of M9):
 | M11-W6 | 278 | admin queue search/pagination/filter contracts, stale-decision conflicts, route-permission map |
 | M11-W7 | 294 | cross-instance OAuth state replay, rate-limit policies, retention purge (disk+DB), required-mode cutover |
 | M12-W1 | 306 | mail content/absolute links, failure isolation, audit hygiene, header-injection, feature-off |
+| M12-W2 | 314 | per-event email coverage, opt-out semantics, cross-college fan-out isolation, transactional exemption |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -803,14 +841,14 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M12-W1.*
+*Last updated after M12-W2.*
 
-- **Current milestone**: M12-W1 complete (M0–M11 accepted; M12-W2+
+- **Current milestone**: M12-W2 complete (M0–M11 accepted; M12-W3+
   awaiting approval)
-- **Latest commit**: see the M12-W1 milestone commit on branch
+- **Latest commit**: see the M12-W2 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
-- **Migrations**: 5 found, database schema up to date (W1 required none)
-- **Tests**: **306/306 passing** (20 suites)
+- **Migrations**: 6 found, database schema up to date
+- **Tests**: **314/314 passing** (21 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -818,8 +856,8 @@ milestone (see roadmap).
   demo admin/teacher/student logins verified; Google endpoints correctly
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13
-- **Next planned milestone**: M12-W2 (notification email channel +
-  per-user opt-out, decision O3) — pending explicit approval
+- **Next planned milestone**: M12-W3 (report cards & CSV exports) —
+  pending explicit approval
 
 ## 15. Future Roadmap
 
@@ -832,12 +870,11 @@ milestone (see roadmap).
   queue UI, cutover + production hardening
 
 **IN PROGRESS**
-- M12 Communications & Institutional Output (W1 complete; W2+ pending
-  approval: notification email channel, report cards & exports, audit
-  viewer)
+- M12 Communications & Institutional Output (W1–W2 complete; W3+ pending
+  approval: report cards & exports, audit viewer)
 
 **PLANNED**
-- Notification email channel + opt-out (M12-W2)
+- Report cards & CSV exports (M12-W3); admin audit viewer (M12-W4)
 - Payment gateway integration + accountant functionality
 - Parent/guardian portal
 - Complaint box

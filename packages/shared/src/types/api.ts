@@ -45,6 +45,8 @@ export interface CurrentUser {
   lastName: string;
   avatarUrl: string | null;
   mustChangePassword: boolean;
+  /** M12-W2 — notification email opt-out (transactional mail unaffected). */
+  emailOptOut: boolean;
   permissions: PermissionGrant[];
 }
 

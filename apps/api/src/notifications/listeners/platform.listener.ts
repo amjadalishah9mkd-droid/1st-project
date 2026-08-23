@@ -9,6 +9,7 @@ import type {
 import { PrismaService } from '../../prisma/prisma.service';
 import { AnnouncementsService } from '../../announcements/announcements.module-parts';
 import { renderTemplate } from '../templates';
+import { NotificationMailerService } from '../notification-mailer.service';
 
 /** M8 listeners: moderation, announcements, scheduled reminders. */
 @Injectable()
@@ -18,6 +19,7 @@ export class PlatformListener {
   constructor(
     private readonly prisma: PrismaService,
     private readonly announcements: AnnouncementsService,
+    private readonly mailer: NotificationMailerService,
   ) {}
 
   @OnEvent('moderation.action_taken')
@@ -65,6 +67,13 @@ export class PlatformListener {
           linkPath: template.linkPath,
         })),
       });
+      // M12-W2 — email channel for announcements (opt-out respected).
+      await this.mailer.sendToUsers(recipients, ({ firstName }) => ({
+        kind: 'announcement',
+        firstName,
+        title: event.title,
+        url: this.mailer.absoluteUrl(template.linkPath ?? '/announcements'),
+      }));
     } catch (error) {
       this.logger.error('announcement notification failed', String(error));
     }

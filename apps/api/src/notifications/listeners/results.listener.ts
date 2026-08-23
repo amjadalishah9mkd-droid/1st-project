@@ -3,13 +3,17 @@ import { OnEvent } from '@nestjs/event-emitter';
 import type { ResultsPublishedEvent } from '@campusos/shared';
 import { PrismaService } from '../../prisma/prisma.service';
 import { renderTemplate } from '../templates';
+import { NotificationMailerService } from '../notification-mailer.service';
 
 /** Results notification listener (Blueprint §10, M5). */
 @Injectable()
 export class ResultsListener {
   private readonly logger = new Logger(ResultsListener.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mailer: NotificationMailerService,
+  ) {}
 
   @OnEvent('results.published')
   async onPublished(event: ResultsPublishedEvent): Promise<void> {
@@ -25,6 +29,13 @@ export class ResultsListener {
           linkPath: template.linkPath,
         })),
       });
+      // M12-W2 — email channel (opt-out respected in the mailer).
+      await this.mailer.sendToUsers(event.studentUserIds, ({ firstName }) => ({
+        kind: 'results_published',
+        firstName,
+        examTitle: event.examTitle,
+        url: this.mailer.absoluteUrl(template.linkPath ?? '/results'),
+      }));
     } catch (error) {
       this.logger.error(
         'Failed to create results notifications',

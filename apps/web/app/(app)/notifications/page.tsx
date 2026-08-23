@@ -1,10 +1,11 @@
 'use client';
 
-import type { NotificationItem } from '@campusos/shared';
+import type { MePayload, NotificationItem } from '@campusos/shared';
 import Link from 'next/link';
 import { apiFetch, ApiError } from '@/lib/api/client';
 import { useList } from '@/lib/hooks/use-list';
 import { useToast } from '@/components/providers/toast-provider';
+import { useSession } from '@/components/providers/session-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { EmptyState, ErrorState, Skeleton } from '@/components/data/data-table';
 import { Button } from '@/components/ui/button';
@@ -21,6 +22,27 @@ function timeAgo(iso: string): string {
 export default function NotificationsPage() {
   const list = useList<NotificationItem>('/notifications');
   const { toast } = useToast();
+  const { user, refreshUser } = useSession();
+
+  // M12-W2 — single notification-email opt-out (transactional mail such as
+  // invitations and password resets is unaffected; server enforces this).
+  async function toggleEmail() {
+    if (!user) return;
+    try {
+      const response = await apiFetch<MePayload>('/me/preferences', {
+        method: 'PATCH',
+        body: JSON.stringify({ emailOptOut: !user.emailOptOut }),
+      });
+      await refreshUser();
+      toast(
+        response.data.emailOptOut
+          ? 'Notification emails turned off'
+          : 'Notification emails turned on',
+      );
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Failed to update', 'error');
+    }
+  }
 
   async function markRead(id: string) {
     try {
@@ -51,9 +73,22 @@ export default function NotificationsPage() {
         title="Notifications"
         description="Everything that needs your attention, newest first."
         actions={
-          <Button variant="secondary" onClick={markAll}>
-            Mark all as read
-          </Button>
+          <div className="flex items-center gap-4">
+            {user ? (
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-secondary">
+                <input
+                  type="checkbox"
+                  checked={!user.emailOptOut}
+                  onChange={() => void toggleEmail()}
+                  className="h-4 w-4 rounded border-line-strong"
+                />
+                Email notifications
+              </label>
+            ) : null}
+            <Button variant="secondary" onClick={markAll}>
+              Mark all as read
+            </Button>
+          </div>
         }
       />
 

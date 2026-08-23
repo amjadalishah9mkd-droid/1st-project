@@ -6,6 +6,7 @@ import { FeesListener } from './listeners/fees.listener';
 import { CommunityListener } from './listeners/community.listener';
 import { PlatformListener } from './listeners/platform.listener';
 import { VerificationListener } from './listeners/verification.listener';
+import { NotificationMailerService } from './notification-mailer.service';
 import { InboxService, NotificationsController } from './inbox.controller';
 import { NotificationSchedulerService } from './notification-scheduler.service';
 import { AnnouncementsModule } from '../announcements/announcements.module';
@@ -25,6 +26,7 @@ import { AnnouncementsModule } from '../announcements/announcements.module';
     CommunityListener,
     PlatformListener,
     VerificationListener,
+    NotificationMailerService,
     InboxService,
     NotificationSchedulerService,
   ],

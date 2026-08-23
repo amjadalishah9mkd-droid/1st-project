@@ -198,6 +198,26 @@ export class AuthService {
     });
   }
 
+  /** M12-W2 — self-service preference update (caller's own row only). */
+  async updatePreferences(
+    user: AuthenticatedUser,
+    input: { emailOptOut: boolean },
+  ): Promise<MePayload> {
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { emailOptOut: input.emailOptOut },
+    });
+    await this.audit.log({
+      collegeId: user.collegeId,
+      actorId: user.id,
+      action: 'preferences.updated',
+      targetType: 'User',
+      targetId: user.id,
+      metadata: { emailOptOut: input.emailOptOut },
+    });
+    return this.buildMePayload(user.id);
+  }
+
   /**
    * /me payload (Blueprint §5 — permissions resolved from the database on
    * every request, never read from the JWT).
@@ -234,6 +254,7 @@ export class AuthService {
       lastName: user.lastName,
       avatarUrl: user.avatarUrl,
       mustChangePassword: user.mustChangePassword,
+      emailOptOut: user.emailOptOut,
       permissions: grants as PermissionGrant[],
       college: user.college,
       teacherProfile: user.teacherProfile

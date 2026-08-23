@@ -32,7 +32,24 @@ export type MailTemplate =
       firstName: string;
       reason: string | null;
       verifyUrl: string;
-    };
+    }
+  // M12-W2 — notification channel (respects User.emailOptOut upstream).
+  | { kind: 'results_published'; firstName: string; examTitle: string; url: string }
+  | {
+      kind: 'invoice_issued';
+      firstName: string;
+      amount: string;
+      dueDate: string;
+      url: string;
+    }
+  | {
+      kind: 'invoice_overdue';
+      firstName: string;
+      amount: string;
+      dueDate: string;
+      url: string;
+    }
+  | { kind: 'announcement'; firstName: string; title: string; url: string };
 
 export interface RenderedMail {
   subject: string;
@@ -95,6 +112,42 @@ export function renderMail(template: MailTemplate): RenderedMail {
           `Hi ${template.firstName},`,
           'Your student identity has been verified. Your CampusOS account now has full access.',
           template.loginUrl,
+        ]),
+      };
+    case 'results_published':
+      return {
+        subject: `Results published: ${template.examTitle}`,
+        ...layout([
+          `Hi ${template.firstName},`,
+          `Results for "${template.examTitle}" are now available in CampusOS.`,
+          template.url,
+        ]),
+      };
+    case 'invoice_issued':
+      return {
+        subject: 'New fee invoice',
+        ...layout([
+          `Hi ${template.firstName},`,
+          `A fee invoice of ${template.amount} is due by ${template.dueDate}.`,
+          template.url,
+        ]),
+      };
+    case 'invoice_overdue':
+      return {
+        subject: 'Fee invoice overdue',
+        ...layout([
+          `Hi ${template.firstName},`,
+          `An invoice of ${template.amount} was due on ${template.dueDate} and is now overdue.`,
+          template.url,
+        ]),
+      };
+    case 'announcement':
+      return {
+        subject: `Announcement: ${template.title}`,
+        ...layout([
+          `Hi ${template.firstName},`,
+          `A new announcement was published: "${template.title}".`,
+          template.url,
         ]),
       };
     case 'verification_rejected':

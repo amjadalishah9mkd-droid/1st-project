@@ -52,6 +52,12 @@ export const acceptInviteSchema = z.object({
 });
 export type AcceptInviteInput = z.infer<typeof acceptInviteSchema>;
 
+/** M12-W2 — self-service preferences (single email opt-out boolean, O3). */
+export const updatePreferencesSchema = z
+  .object({ emailOptOut: z.boolean() })
+  .strict();
+export type UpdatePreferencesInput = z.infer<typeof updatePreferencesSchema>;
+
 export interface CredentialLink {
   url: string; // path-only, e.g. /accept-invite?token=…
   expiresAt: string;

@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   HttpCode,
+  Patch,
   Post,
   Query,
   Req,
@@ -14,11 +15,13 @@ import {
   acceptInviteSchema,
   changePasswordSchema,
   loginSchema,
+  updatePreferencesSchema,
   type AcceptInviteInput,
   type AuthPayload,
   type ChangePasswordInput,
   type LoginInput,
   type MePayload,
+  type UpdatePreferencesInput,
 } from '@campusos/shared';
 import { AuthService } from './auth.service';
 import { CredentialTokensService } from './credential-tokens.service';
@@ -195,5 +198,15 @@ export class MeController {
   @AllowPendingPassword()
   async me(@CurrentUser() user: AuthenticatedUser): Promise<MePayload> {
     return this.auth.buildMePayload(user.id);
+  }
+
+  /** M12-W2 — single email opt-out preference; caller's own row only. */
+  @Patch('preferences')
+  updatePreferences(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body(new ZodValidationPipe(updatePreferencesSchema))
+    body: UpdatePreferencesInput,
+  ): Promise<MePayload> {
+    return this.auth.updatePreferences(user, body);
   }
 }

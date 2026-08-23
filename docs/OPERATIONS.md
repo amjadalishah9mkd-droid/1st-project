@@ -391,6 +391,17 @@ Operational notes:
 - There is no delivery-log table or retry queue by design; the audit log
   is the delivery record.
 
+**Notification email channel (M12-W2).** When mail is configured, four
+notification categories are also emailed: results published, invoice
+issued, invoice overdue, and announcements. Users control this with a
+single "Email notifications" toggle on their notifications page
+(`emailOptOut`, audited as `preferences.updated`). The opt-out affects
+notification email only — transactional mail (invitations, password
+resets, verification decisions) is always delivered. In-app notifications
+are written first and are never affected by mail configuration, opt-out,
+or delivery failures. All other event categories (community activity,
+reminders, attendance) intentionally do not email.
+
 ## 19. Rollback procedure
 
 1. `git checkout <previous-release-tag>` and rebuild images.
