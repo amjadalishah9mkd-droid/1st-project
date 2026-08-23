@@ -1,5 +1,6 @@
 import { PermissionKey } from '../permissions';
 import { PermissionScope, RoleKey, UserStatus } from '../enums';
+import type { UserVerificationStatus } from '../schemas/verification';
 
 /**
  * Uniform API envelopes (Blueprint §7).
@@ -39,6 +40,7 @@ export interface CurrentUser {
   email: string;
   role: RoleKey;
   status: UserStatus;
+  verificationStatus: UserVerificationStatus;
   firstName: string;
   lastName: string;
   avatarUrl: string | null;

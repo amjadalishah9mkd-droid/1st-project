@@ -85,11 +85,33 @@ export class PolicyService {
    * when denied. Services use this to self-scope list queries per the
    * OWN/ASSIGNED list-level contract.
    */
+  /**
+   * M11-W5 — identity lifecycle gate. Accounts that have not completed
+   * student identity verification (UNVERIFIED/PENDING/REJECTED) may only
+   * exercise the verification permission itself until an admin or an
+   * invitation verifies them. LEGACY and VERIFIED accounts are unaffected.
+   * This is lifecycle data, not a role conditional — the grant matrix
+   * still decides everything else.
+   */
+  private lifecycleAllows(
+    user: AuthenticatedUser,
+    permissionKey: PermissionKey,
+  ): boolean {
+    if (
+      user.verificationStatus === 'LEGACY' ||
+      user.verificationStatus === 'VERIFIED'
+    ) {
+      return true;
+    }
+    return permissionKey === 'verification.submit';
+  }
+
   async scopeFor(
     user: AuthenticatedUser,
     permissionKey: PermissionKey,
   ): Promise<PermissionScope | null> {
     if (user.status !== 'ACTIVE') return null;
+    if (!this.lifecycleAllows(user, permissionKey)) return null;
     const grants = await this.grantsForRole(user.role);
     return grants.find((entry) => entry.key === permissionKey)?.scope ?? null;
   }
@@ -101,6 +123,9 @@ export class PolicyService {
     context: ResourceContext = {},
   ): Promise<boolean> {
     if (user.status !== 'ACTIVE') {
+      return false;
+    }
+    if (!this.lifecycleAllows(user, permissionKey)) {
       return false;
     }
     const grants = await this.grantsForRole(user.role);

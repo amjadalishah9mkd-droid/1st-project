@@ -1,4 +1,4 @@
-import type { RoleKey, UserStatus } from '@prisma/client';
+import type { RoleKey, UserStatus, UserVerification } from '@prisma/client';
 
 /**
  * The request-scoped identity attached by JwtAuthGuard.
@@ -11,6 +11,7 @@ export interface AuthenticatedUser {
   email: string;
   role: RoleKey;
   status: UserStatus;
+  verificationStatus: UserVerification;
   firstName: string;
   lastName: string;
   avatarUrl: string | null;

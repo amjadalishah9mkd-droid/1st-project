@@ -330,6 +330,7 @@ describe('M1 — Auth & Access', () => {
       email: user.email,
       role: user.role as AuthenticatedUser['role'],
       status: 'ACTIVE',
+      verificationStatus: 'LEGACY',
       firstName: 'x',
       lastName: 'x',
       avatarUrl: null,

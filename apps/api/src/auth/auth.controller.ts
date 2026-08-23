@@ -55,6 +55,16 @@ export class AuthController {
   ) {}
 
   /**
+   * M11-W5 — public feature flags for the login page. Exposes only
+   * booleans; never client IDs or secrets.
+   */
+  @Public()
+  @Get('config')
+  authConfig(): { google: boolean } {
+    return { google: this.google.isConfigured() };
+  }
+
+  /**
    * M11-W4 — acceptance options for a valid invite (drives the accept
    * page). Invalid tokens get the same generic error as acceptance.
    */

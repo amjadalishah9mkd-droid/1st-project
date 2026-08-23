@@ -24,7 +24,12 @@ const ALWAYS_PUBLIC_PATHS = ['/accept-invite'];
 interface SessionHint {
   role: RoleKey;
   mustChangePassword: boolean;
+  /** M11-W5 identity lifecycle hint (LEGACY/UNVERIFIED/PENDING/VERIFIED/REJECTED). */
+  verification: string;
 }
+
+/** Lifecycle states pinned to the /verify flow (M11-W5). */
+const UNVERIFIED_STATES = ['UNVERIFIED', 'PENDING', 'REJECTED'];
 
 function readHint(request: NextRequest): SessionHint | null {
   const raw = request.cookies.get(SESSION_HINT_COOKIE)?.value;
@@ -32,7 +37,11 @@ function readHint(request: NextRequest): SessionHint | null {
   try {
     const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
     if (typeof parsed?.r !== 'string') return null;
-    return { role: parsed.r as RoleKey, mustChangePassword: parsed.mcp === true };
+    return {
+      role: parsed.r as RoleKey,
+      mustChangePassword: parsed.mcp === true,
+      verification: typeof parsed.v === 'string' ? parsed.v : 'LEGACY',
+    };
   } catch {
     return null;
   }
@@ -68,12 +77,26 @@ export function middleware(request: NextRequest): NextResponse {
     return NextResponse.next();
   }
 
+  // M11-W5: /verify requires a session; verified/legacy users don't belong there.
+  if (pathname === '/verify' || pathname.startsWith('/verify/')) {
+    if (!hint) {
+      return NextResponse.redirect(new URL('/login', request.url));
+    }
+    if (!UNVERIFIED_STATES.includes(hint.verification)) {
+      return NextResponse.redirect(new URL('/dashboard', request.url));
+    }
+    return NextResponse.next();
+  }
+
   // Root: send to the right place
   if (pathname === '/') {
     if (!hint) return NextResponse.redirect(new URL('/login', request.url));
-    return NextResponse.redirect(
-      new URL(hint.mustChangePassword ? '/change-password' : '/dashboard', request.url),
-    );
+    const target = hint.mustChangePassword
+      ? '/change-password'
+      : UNVERIFIED_STATES.includes(hint.verification)
+        ? '/verify'
+        : '/dashboard';
+    return NextResponse.redirect(new URL(target, request.url));
   }
 
   // Everything else is an authenticated application route
@@ -84,6 +107,12 @@ export function middleware(request: NextRequest): NextResponse {
 
   if (hint.mustChangePassword) {
     return NextResponse.redirect(new URL('/change-password', request.url));
+  }
+
+  // M11-W5: accounts mid-verification are pinned to the /verify flow (the
+  // API enforces this server-side too — this only shapes navigation).
+  if (UNVERIFIED_STATES.includes(hint.verification)) {
+    return NextResponse.redirect(new URL('/verify', request.url));
   }
 
   // Route-level permission gate from the shared map (hint only; the API is

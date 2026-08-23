@@ -40,8 +40,14 @@ export function setAuthCookies(
 }
 
 export function encodeSessionHint(me: MePayload): string {
+  // r: role, mcp: mustChangePassword, v: verificationStatus (M11-W5 —
+  // routing hint only; the API enforces the lifecycle server-side).
   return Buffer.from(
-    JSON.stringify({ r: me.role, mcp: me.mustChangePassword }),
+    JSON.stringify({
+      r: me.role,
+      mcp: me.mustChangePassword,
+      v: me.verificationStatus,
+    }),
   ).toString('base64url');
 }
 

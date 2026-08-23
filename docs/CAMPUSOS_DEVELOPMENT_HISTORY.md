@@ -106,7 +106,8 @@ Principles applied consistently from M0 onward:
 | M11-W1 | Identity & verification foundation | `2581a21` |
 | M11-W2 | Google OIDC core | `768fb05` |
 | M11-W3 | Identity claims + evidence API | `51069ab` |
-| M11-W4 | Verified student onboarding / invitation integration | *(this commit)* |
+| M11-W4 | Verified student onboarding / invitation integration | `7901d18` |
+| M11-W5 | Student onboarding UI + lifecycle gate | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -424,6 +425,41 @@ through the existing M10-W2 invitation, with either credential method.
   password form and the API refused it; demo accounts unaffected; demo
   data restored to canonical state.
 
+### M11-W5 — Student onboarding UI + identity lifecycle gate
+**Goal:** give unverified students a complete self-service verification
+experience, and enforce the identity lifecycle server-side.
+
+- **Server-side lifecycle gate** in PolicyService (the single authorization
+  path): accounts with `verificationStatus` UNVERIFIED/PENDING/REJECTED
+  resolve only `verification.submit`; all other permissions return
+  null/false until verified. LEGACY and VERIFIED are untouched — zero
+  behavior change for every pre-M11 account. This is lifecycle data, not a
+  role conditional.
+- **`AuthenticatedUser`/`/me`/hint cookie** now carry `verificationStatus`
+  (`cos_auth` gains `v` — still a routing hint only).
+- **Middleware pinning:** unverified-lifecycle students are routed to
+  `/verify` from any app route; `/verify` itself requires a session and
+  bounces verified/legacy users to the dashboard.
+- **`/verify` page:** claim form (admission number + ID-card upload via the
+  purpose-restricted evidence endpoint), PENDING waiting card with
+  check-status, REJECTED state showing the admin's reason with resubmit,
+  APPROVED state that forces a token refresh (so the hint unpins) and
+  routes to the dashboard.
+- **Login page:** "Continue with Google" button gated by the new public
+  `GET /auth/config` (`{google: boolean}` — booleans only, never client
+  IDs/secrets), plus friendly banners for Google-flow redirect errors and
+  the post-activation message.
+- **Migration:** none (4 migrations, unchanged).
+- **Tests: 273** (7 new): gate denial for UNVERIFIED/PENDING/REJECTED,
+  verification surface still allowed, VERIFIED full access, LEGACY demo
+  accounts unaffected, /auth/config exposure check, hint-cookie `v` field.
+  One pre-existing test helper updated for the extended AuthenticatedUser.
+- **Alloy verification:** full browser walk — UNVERIFIED student login →
+  pinned to /verify → claim submitted with ID upload → PENDING card →
+  admin rejection → reason + resubmit → second claim → admin approval →
+  "Check status" → automatic session refresh → dashboard with full student
+  access. Demo accounts unaffected; test data purged.
+
 *(Future M11 workstreams will be appended here as they are implemented.)*
 
 ## 7. Architecture Evolution
@@ -528,6 +564,7 @@ reached 141 by the end of M9):
 | M11-W2 | 221 | OIDC claim validation, state replay, PKCE, no email auto-link, unlink protection |
 | M11-W3 | 245 | claim lifecycle, evidence sign authorization, atomic decisions, exactly-once notifications |
 | M11-W4 | 266 | invitation onboarding (both methods × modes), supersession, token-neutral rollback, acceptance races |
+| M11-W5 | 273 | lifecycle permission gate, /auth/config exposure, hint-cookie verification field |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -635,14 +672,14 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M11-W4.*
+*Last updated after M11-W5.*
 
-- **Current milestone**: M11-W4 complete (M0–M10 accepted; M11 W1–W4
-  complete, W5+ awaiting approval)
-- **Latest commit**: see the M11-W4 milestone commit on branch
+- **Current milestone**: M11-W5 complete (M0–M10 accepted; M11 W1–W5
+  complete, W6+ awaiting approval)
+- **Latest commit**: see the M11-W5 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
-- **Migrations**: 4 found, database schema up to date (W4 required none)
-- **Tests**: **266/266 passing** (17 suites)
+- **Migrations**: 4 found, database schema up to date (W4/W5 required none)
+- **Tests**: **273/273 passing** (18 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -650,7 +687,7 @@ milestone (see roadmap).
   demo admin/teacher/student logins verified; Google endpoints correctly
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13
-- **Next planned milestone**: M11-W5 (student onboarding /verify UI) —
+- **Next planned milestone**: M11-W6 (admin verification queue UI) —
   pending explicit approval
 
 ## 15. Future Roadmap
@@ -659,12 +696,12 @@ milestone (see roadmap).
 - M0–M9 MVP (foundation → dashboards)
 - M10 production hardening (W1–W5)
 - M11-W1 identity foundation, M11-W2 Google OIDC core, M11-W3 claims +
-  evidence API, M11-W4 verified student onboarding (invitation integration
-  + auto-supersession)
+  evidence API, M11-W4 verified student onboarding, M11-W5 student
+  onboarding UI + lifecycle gate
 
 **IN PROGRESS**
-- M11 Identity & Student Verification (W5+ pending approval: student
-  onboarding UI, admin verification UI, cutover + hardening)
+- M11 Identity & Student Verification (W6+ pending approval: admin
+  verification UI, cutover + hardening)
 
 **PLANNED**
 - Per-college Google-only cutover with grace period (D7)

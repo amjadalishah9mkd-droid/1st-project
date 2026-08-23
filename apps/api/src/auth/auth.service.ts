@@ -199,6 +199,7 @@ export class AuthService {
       email: user.email,
       role: user.role,
       status: user.status,
+      verificationStatus: user.verificationStatus,
       firstName: user.firstName,
       lastName: user.lastName,
       avatarUrl: user.avatarUrl,

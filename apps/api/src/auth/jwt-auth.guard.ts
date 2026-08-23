@@ -65,6 +65,7 @@ export class JwtAuthGuard implements CanActivate {
         email: true,
         role: true,
         status: true,
+        verificationStatus: true,
         firstName: true,
         lastName: true,
         avatarUrl: true,
