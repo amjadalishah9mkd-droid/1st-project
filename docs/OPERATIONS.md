@@ -364,7 +364,34 @@ The same sweep clears expired `OauthStateConsumption` rows (one-time OAuth
 state records, stored as SHA-256 hashes; unique-insert makes replay
 detection atomic across all API instances). No manual maintenance needed.
 
-## 18. Rollback procedure
+## 18. Transactional email (M12-W1)
+
+Optional feature, disabled by default. Configure the all-or-none pair:
+
+```
+SMTP_URL=smtp://user:password@smtp.example.edu:587
+MAIL_FROM="CampusOS <no-reply@campus.example.edu>"
+APP_BASE_URL=https://campus.example.edu   # link base; falls back to OAUTH_REDIRECT_BASE
+```
+
+Behavior when configured: student/teacher invitations (incl. CSV import),
+admin-issued password resets, and verification decisions are emailed to
+the account's registered address. The admin copy-URL dialogs are
+unchanged — email is additive delivery of the same one-time links (same
+TTL/one-time/hashing semantics).
+
+Operational notes:
+- **Mail failure never fails the operation.** Failed deliveries are
+  audited as `mail.failed` (template + user only — never addresses,
+  tokens, URLs or bodies). Re-issue the link from the UI to retry.
+- Unset the SMTP pair to disable mail instantly (no deploy needed beyond
+  a restart). Partial configuration refuses to boot.
+- SMTP credentials live only in the environment; rotate by updating
+  `SMTP_URL` and restarting the API.
+- There is no delivery-log table or retry queue by design; the audit log
+  is the delivery record.
+
+## 19. Rollback procedure
 
 1. `git checkout <previous-release-tag>` and rebuild images.
 2. If the bad release included a migration: restore the pre-deploy database

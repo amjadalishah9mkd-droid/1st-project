@@ -180,7 +180,6 @@ export const ROUTE_PERMISSIONS: Record<string, PermissionKey | null> = {
   '/announcements': null,
   '/notifications': null,
   '/settings': 'settings.manage',
-  '/profile': null,
 };
 
 /**

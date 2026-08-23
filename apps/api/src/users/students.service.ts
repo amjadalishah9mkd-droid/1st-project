@@ -19,6 +19,7 @@ import {
   CredentialTokensService,
   type IssuedCredentialLink,
 } from '../auth/credential-tokens.service';
+import { MailService } from '../mail/mail.module';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 import { pageArgs, pageMeta } from '../common/pagination/pagination';
 import type { Prisma } from '@prisma/client';
@@ -68,6 +69,7 @@ export class StudentsService {
     private readonly policy: PolicyService,
     private readonly audit: AuditService,
     private readonly credentials: CredentialTokensService,
+    private readonly mail: MailService,
   ) {}
 
   /**
@@ -264,6 +266,22 @@ export class StudentsService {
       targetId: created.id,
     });
     const invite = await this.credentials.issue(created.user.id, 'INVITE', user);
+    // M12-W1: deliver the same invite link by email (fire-and-forget; the
+    // copy-URL dialog behavior is unchanged and never depends on mail).
+    const college = await this.prisma.college.findUniqueOrThrow({
+      where: { id: user.collegeId },
+      select: { name: true },
+    });
+    await this.mail.send(
+      { id: created.user.id, collegeId: user.collegeId, email: created.user.email },
+      {
+        kind: 'student_invite',
+        firstName: created.user.firstName,
+        collegeName: college.name,
+        inviteUrl: this.mail.absoluteUrl(invite.url),
+        expiresAt: invite.expiresAt,
+      },
+    );
     return { student: toItem(created), invite };
   }
 

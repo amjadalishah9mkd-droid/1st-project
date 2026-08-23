@@ -109,7 +109,8 @@ Principles applied consistently from M0 onward:
 | M11-W4 | Verified student onboarding / invitation integration | `7901d18` |
 | M11-W5 | Student onboarding UI + lifecycle gate | `b33af5f` |
 | M11-W6 | Admin verification queue UI | `6d7984d` |
-| M11-W7 | Cutover + production hardening | *(this commit)* |
+| M11-W7 | Cutover + production hardening | `f9632a4` |
+| M12-W1 | Email foundation | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -550,6 +551,42 @@ cutover, rate limiting, evidence retention, and multi-instance OAuth state.
 
 *(M11 is functionally complete: W1–W7 delivered.)*
 
+## 6b. M12 — Communications & Institutional Output
+
+### M12-W1 — Email foundation
+**Goal:** transactional email delivery for the links CampusOS already
+generates, without touching any token/verification semantics.
+
+- **Mail module** (`apps/api/src/mail/`): `MailService` + `MAIL_TRANSPORT`
+  DI boundary (SMTP via nodemailer — the milestone's single new
+  dependency; Noop when unconfigured; capturing fake in tests — no real
+  SMTP ever). Typed template registry (student/teacher invite, password
+  reset, verification approved/rejected) rendering subject/text/minimal
+  HTML with CRLF sanitization against header injection.
+- **Feature flag** mirrors the Google pattern: `SMTP_URL` + `MAIL_FROM`
+  all-or-none env pair (+ optional `APP_BASE_URL` link base with
+  `OAUTH_REDIRECT_BASE` fallback); unset → zero behavior change.
+- **Hooks at action sites:** student/teacher creation, CSV import
+  (one mail per created row), admin reset-link issuance, and
+  verification decisions via the existing listener (exactly-once
+  inherited from atomic transitions). Copy-URL invite dialogs unchanged.
+- **Guarantees:** mail failure never fails the business operation
+  (`mail.failed` audit, generic log); audit metadata is
+  `{template}` + target user only — never addresses, tokens, URLs or
+  bodies.
+- **Decision O4 executed:** dead `/profile` route mapping removed from
+  the shared route-permission map (no page ever existed).
+- **No migration** (decision O2: no MailDelivery table — audit-log-only).
+  Prisma upgrade deferred (O1); notification email preference deferred to
+  W2 (O3).
+- **Tests: 306** (12 new: invite/reset/decision content with absolute
+  links matching returned tokens, per-row import mails, header-injection
+  flattening, failure isolation, audit hygiene incl. no-@/no-URL
+  metadata, exactly-once on decision retry, env pair validation,
+  feature-off path with zero sends, O4 contract).
+- **Alloy verification:** unconfigured default — invite dialogs
+  unchanged, zero `mail.*` audit rows, demo logins and preview healthy.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -657,6 +694,7 @@ reached 141 by the end of M9):
 | M11-W5 | 273 | lifecycle permission gate, /auth/config exposure, hint-cookie verification field |
 | M11-W6 | 278 | admin queue search/pagination/filter contracts, stale-decision conflicts, route-permission map |
 | M11-W7 | 294 | cross-instance OAuth state replay, rate-limit policies, retention purge (disk+DB), required-mode cutover |
+| M12-W1 | 306 | mail content/absolute links, failure isolation, audit hygiene, header-injection, feature-off |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -765,14 +803,14 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M11-W7.*
+*Last updated after M12-W1.*
 
-- **Current milestone**: M11-W7 complete — **M11 delivered in full (W1–W7)**;
-  M0–M10 accepted
-- **Latest commit**: see the M11-W7 milestone commit on branch
+- **Current milestone**: M12-W1 complete (M0–M11 accepted; M12-W2+
+  awaiting approval)
+- **Latest commit**: see the M12-W1 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
-- **Migrations**: 5 found, database schema up to date
-- **Tests**: **294/294 passing** (19 suites)
+- **Migrations**: 5 found, database schema up to date (W1 required none)
+- **Tests**: **306/306 passing** (20 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -780,8 +818,8 @@ milestone (see roadmap).
   demo admin/teacher/student logins verified; Google endpoints correctly
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13
-- **Next planned milestone**: none authorized — M11 complete; future work
-  (M12 / Phase 3) awaits explicit approval
+- **Next planned milestone**: M12-W2 (notification email channel +
+  per-user opt-out, decision O3) — pending explicit approval
 
 ## 15. Future Roadmap
 
@@ -794,10 +832,12 @@ milestone (see roadmap).
   queue UI, cutover + production hardening
 
 **IN PROGRESS**
-- (nothing — awaiting explicit authorization for the next milestone)
+- M12 Communications & Institutional Output (W1 complete; W2+ pending
+  approval: notification email channel, report cards & exports, audit
+  viewer)
 
 **PLANNED**
-- Email delivery channel for notifications/invitations
+- Notification email channel + opt-out (M12-W2)
 - Payment gateway integration + accountant functionality
 - Parent/guardian portal
 - Complaint box

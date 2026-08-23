@@ -27,6 +27,14 @@ const baseSchema = z.object({
     .string()
     .url('OAUTH_REDIRECT_BASE must be a URL, e.g. https://campus.example.edu')
     .optional(),
+  // M12-W1 — transactional email (optional feature; unset → mail disabled).
+  // SMTP_URL and MAIL_FROM are an all-or-none pair.
+  SMTP_URL: z.string().optional(),
+  MAIL_FROM: z.string().optional(),
+  APP_BASE_URL: z
+    .string()
+    .url('APP_BASE_URL must be a URL, e.g. https://campus.example.edu')
+    .optional(),
 });
 
 export type AppEnv = z.infer<typeof baseSchema>;
@@ -86,6 +94,22 @@ export function validateEnv(
       .join(', ');
     throw new Error(
       `Invalid environment configuration — Google OIDC is partially configured; missing: ${missing}`,
+    );
+  }
+
+  // Mail (M12-W1): all-or-none pair, same philosophy as Google OIDC.
+  const mailVars: Array<[string, string | undefined]> = [
+    ['SMTP_URL', config.SMTP_URL],
+    ['MAIL_FROM', config.MAIL_FROM],
+  ];
+  const mailSet = mailVars.filter(([, v]) => v).length;
+  if (mailSet > 0 && mailSet < mailVars.length) {
+    const missing = mailVars
+      .filter(([, v]) => !v)
+      .map(([name]) => name)
+      .join(', ');
+    throw new Error(
+      `Invalid environment configuration — mail is partially configured; missing: ${missing}`,
     );
   }
 

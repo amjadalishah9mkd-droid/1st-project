@@ -22,6 +22,7 @@ import {
   CredentialTokensService,
   type IssuedCredentialLink,
 } from '../auth/credential-tokens.service';
+import { MailService } from '../mail/mail.module';
 
 const teacherInclude = {
   user: {
@@ -68,6 +69,7 @@ export class TeachersService {
     private readonly policy: PolicyService,
     private readonly audit: AuditService,
     private readonly credentials: CredentialTokensService,
+    private readonly mail: MailService,
   ) {}
 
   async list(
@@ -234,6 +236,20 @@ export class TeachersService {
       targetId: created.id,
     });
     const invite = await this.credentials.issue(created.user.id, 'INVITE', user);
+    const college = await this.prisma.college.findUniqueOrThrow({
+      where: { id: user.collegeId },
+      select: { name: true },
+    });
+    await this.mail.send(
+      { id: created.user.id, collegeId: user.collegeId, email: created.user.email },
+      {
+        kind: 'teacher_invite',
+        firstName: created.user.firstName,
+        collegeName: college.name,
+        inviteUrl: this.mail.absoluteUrl(invite.url),
+        expiresAt: invite.expiresAt,
+      },
+    );
     return { teacher: toItem(created), invite };
   }
 

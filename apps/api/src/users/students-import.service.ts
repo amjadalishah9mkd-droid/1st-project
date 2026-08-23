@@ -6,6 +6,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CredentialTokensService } from '../auth/credential-tokens.service';
+import { MailService } from '../mail/mail.module';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 
 /**
@@ -22,6 +23,7 @@ export class StudentsImportService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly credentials: CredentialTokensService,
+    private readonly mail: MailService,
   ) {}
 
   async import(
@@ -57,6 +59,12 @@ export class StudentsImportService {
       where: { collegeId: user.collegeId },
       select: { id: true, code: true },
     });
+    const collegeName = (
+      await this.prisma.college.findUniqueOrThrow({
+        where: { id: user.collegeId },
+        select: { name: true },
+      })
+    ).name;
     const departmentByCode = new Map(departments.map((d) => [d.code, d.id]));
 
     const summary: StudentImportSummary = {
@@ -170,6 +178,16 @@ export class StudentsImportService {
         createdProfile.user.id,
         'INVITE',
         user,
+      );
+      await this.mail.send(
+        { id: createdProfile.user.id, collegeId: user.collegeId, email: row.email },
+        {
+          kind: 'student_invite',
+          firstName: row.firstName,
+          collegeName,
+          inviteUrl: this.mail.absoluteUrl(invite.url),
+          expiresAt: invite.expiresAt,
+        },
       );
       seenEmails.add(row.email);
       seenAdmissionNos.add(row.admissionNo);

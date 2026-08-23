@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { TokenService } from './token.service';
 import { OnboardingService } from './onboarding.service';
+import { MailService } from '../mail/mail.module';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 
 export const INVITE_TTL_MS = 48 * 60 * 60 * 1000; // 48 hours
@@ -44,6 +45,7 @@ export class CredentialTokensService {
     private readonly audit: AuditService,
     private readonly tokens: TokenService,
     private readonly onboarding: OnboardingService,
+    private readonly mail: MailService,
   ) {}
 
   private hash(raw: string): string {
@@ -228,7 +230,7 @@ export class CredentialTokensService {
   ): Promise<IssuedCredentialLink> {
     const target = await this.prisma.user.findFirst({
       where: { id: targetUserId, collegeId: admin.collegeId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, email: true, firstName: true },
     });
     if (!target) {
       throw new NotFoundException({
@@ -242,6 +244,17 @@ export class CredentialTokensService {
         message: 'Reset links can only be issued for active accounts',
       });
     }
-    return this.issue(targetUserId, 'RESET', admin);
+    const link = await this.issue(targetUserId, 'RESET', admin);
+    // M12-W1: deliver the reset link by email as well (copy-URL unchanged).
+    await this.mail.send(
+      { id: target.id, collegeId: admin.collegeId, email: target.email },
+      {
+        kind: 'password_reset',
+        firstName: target.firstName,
+        resetUrl: this.mail.absoluteUrl(link.url),
+        expiresAt: link.expiresAt,
+      },
+    );
+    return link;
   }
 }
