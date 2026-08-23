@@ -23,6 +23,7 @@ import {
 import { AuthService } from './auth.service';
 import { CredentialTokensService } from './credential-tokens.service';
 import { GoogleAuthService } from './google/google-auth.service';
+import { RateLimiterService } from '../common/rate-limiter.service';
 import { REFRESH_TOKEN_TTL_MS } from './token.service';
 import {
   REFRESH_COOKIE,
@@ -52,6 +53,7 @@ export class AuthController {
     private readonly auth: AuthService,
     private readonly credentials: CredentialTokensService,
     private readonly google: GoogleAuthService,
+    private readonly limiter: RateLimiterService,
   ) {}
 
   /**
@@ -72,7 +74,9 @@ export class AuthController {
   @Get('invite-info')
   async inviteInfo(
     @Query('token') token: string | undefined,
+    @Req() req: Request,
   ): Promise<{ mode: 'password' | 'google' | 'both'; collegeName: string; firstName: string }> {
+    this.limiter.assert('inviteInfo', requestMeta(req).ip);
     const record = await this.credentials.lookupValid(token ?? '', 'INVITE');
     return {
       mode: this.credentials.inviteMode(record, this.google.isConfigured()),
@@ -87,7 +91,9 @@ export class AuthController {
   @HttpCode(200)
   acceptInvite(
     @Body(new ZodValidationPipe(acceptInviteSchema)) body: AcceptInviteInput,
+    @Req() req: Request,
   ): Promise<{ accepted: true }> {
+    this.limiter.assert('tokenEndpoints', requestMeta(req).ip);
     return this.credentials.accept(
       body.token,
       'INVITE',
@@ -102,7 +108,9 @@ export class AuthController {
   @HttpCode(200)
   resetPassword(
     @Body(new ZodValidationPipe(acceptInviteSchema)) body: AcceptInviteInput,
+    @Req() req: Request,
   ): Promise<{ accepted: true }> {
+    this.limiter.assert('tokenEndpoints', requestMeta(req).ip);
     return this.credentials.accept(body.token, 'RESET', body.password);
   }
 

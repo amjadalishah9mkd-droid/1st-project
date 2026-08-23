@@ -76,9 +76,6 @@ function authFailed(): UnauthorizedException {
 
 @Injectable()
 export class GoogleAuthService {
-  /** One-time state guard (replay prevention within the state TTL). */
-  private consumedStates = new Map<string, number>();
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -145,15 +142,22 @@ export class GoogleAuthService {
     }
   }
 
-  private consumeState(state: string): boolean {
-    // Sweep expired entries opportunistically.
-    const now = Date.now();
-    for (const [key, exp] of this.consumedStates) {
-      if (exp < now) this.consumedStates.delete(key);
+  /**
+   * M11-W7 — one-time state consumption, atomic across API instances.
+   * Only a SHA-256 hash of the state is stored; the unique index makes the
+   * insert an atomic claim, so a replayed state (any instance) hits P2002.
+   */
+  private async consumeState(state: string): Promise<boolean> {
+    const stateHash = createHash('sha256').update(state).digest('hex');
+    try {
+      await this.prisma.oauthStateConsumption.create({
+        data: { stateHash, expiresAt: new Date(Date.now() + STATE_TTL_MS) },
+      });
+      return true;
+    } catch (error) {
+      if ((error as { code?: string }).code === 'P2002') return false; // replay
+      throw error;
     }
-    if (this.consumedStates.has(state)) return false;
-    this.consumedStates.set(state, now + STATE_TTL_MS);
-    return true;
   }
 
   // ── Start: build the Google authorize redirect ──────────────────────────
@@ -298,7 +302,7 @@ export class GoogleAuthService {
       !state ||
       !query.state ||
       query.state !== state.s ||
-      !this.consumeState(state.s)
+      !(await this.consumeState(state.s))
     ) {
       // Missing/tampered/expired/replayed state → generic failure.
       return { kind: 'redirect', redirect: '/login?error=google_auth_failed' };

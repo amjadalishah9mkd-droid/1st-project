@@ -23,6 +23,7 @@ import {
 } from '@campusos/shared';
 import { z } from 'zod';
 import { VerificationService } from './verification.service';
+import { RateLimiterService } from '../common/rate-limiter.service';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { RequirePermission } from '../access/require-permission.decorator';
 import { CurrentUser } from '../access/current-user.decorator';
@@ -41,7 +42,10 @@ type ClaimListQuery = PaginationQuery & { status?: string };
  */
 @Controller('verification')
 export class VerificationController {
-  constructor(private readonly verification: VerificationService) {}
+  constructor(
+    private readonly verification: VerificationService,
+    private readonly limiter: RateLimiterService,
+  ) {}
 
   @Post('evidence')
   @RequirePermission(PERMISSIONS.VERIFICATION_SUBMIT)
@@ -52,6 +56,7 @@ export class VerificationController {
     @CurrentUser() user: AuthenticatedUser,
     @UploadedFile() file: Express.Multer.File | undefined,
   ): Promise<{ evidenceFileKey: string; name: string; size: number }> {
+    this.limiter.assert('evidenceUpload', user.id);
     return this.verification.uploadEvidence(user, file);
   }
 
@@ -61,6 +66,7 @@ export class VerificationController {
     @CurrentUser() user: AuthenticatedUser,
     @Body(new ZodValidationPipe(submitClaimSchema)) body: SubmitClaimInput,
   ): Promise<MyClaimItem> {
+    this.limiter.assert('claimSubmit', user.id);
     return this.verification.submitClaim(user, body);
   }
 

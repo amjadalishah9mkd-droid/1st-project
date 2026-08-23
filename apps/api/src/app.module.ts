@@ -20,6 +20,8 @@ import { CommunityModule } from './community/community.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
 import { DashboardsModule } from './dashboards/dashboards.module';
 import { VerificationModule } from './verification/verification.module';
+import { RateLimitModule } from './common/rate-limiter.service';
+import { SettingsModule } from './settings/settings.module';
 
 /**
  * Complete module graph (M0–M9): the full CampusOS MVP per Blueprint §6.
@@ -29,6 +31,7 @@ import { VerificationModule } from './verification/verification.module';
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),
     PrismaModule,
+    RateLimitModule,
     AuditModule,
     AccessModule,
     AuthModule,
@@ -46,6 +49,7 @@ import { VerificationModule } from './verification/verification.module';
     CommunityModule,
     DashboardsModule,
     VerificationModule,
+    SettingsModule,
     HealthModule,
   ],
 })

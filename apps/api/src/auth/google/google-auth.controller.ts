@@ -10,6 +10,7 @@ import {
 import type { Request, Response } from 'express';
 import { GoogleAuthService, type GoogleIntent } from './google-auth.service';
 import { setAuthCookies } from '../session-cookies';
+import { RateLimiterService } from '../../common/rate-limiter.service';
 import { Public } from '../../common/decorators/public.decorator';
 import { CurrentUser } from '../../access/current-user.decorator';
 import type { AuthenticatedUser } from '../../access/authenticated-user';
@@ -43,7 +44,10 @@ const STATE_COOKIE_OPTS = {
 
 @Controller('auth/google')
 export class GoogleAuthController {
-  constructor(private readonly google: GoogleAuthService) {}
+  constructor(
+    private readonly google: GoogleAuthService,
+    private readonly limiter: RateLimiterService,
+  ) {}
 
   @Public()
   @Get('start')
@@ -51,8 +55,10 @@ export class GoogleAuthController {
     @Query('intent') intentRaw: string | undefined,
     @Query('college') college: string | undefined,
     @Query('token') inviteToken: string | undefined,
+    @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
+    this.limiter.assert('googleStart', requestMeta(req).ip);
     // `link` intent must come through the authenticated POST /link route so
     // the state cookie is bound to a verified session, never a query param.
     // `invite` (M11-W4) is public by design: possession of the one-time

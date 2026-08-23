@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
-import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { join, normalize } from 'node:path';
 import { Injectable } from '@nestjs/common';
 import type { Readable } from 'node:stream';
@@ -13,6 +13,7 @@ export interface StoredFile {
 export interface StorageAdapter {
   save(buffer: Buffer, originalName: string): Promise<StoredFile>;
   open(key: string): Promise<{ stream: Readable; size: number; name: string } | null>;
+  delete(key: string): Promise<void>;
 }
 
 /**
@@ -28,6 +29,21 @@ export class LocalStorageAdapter implements StorageAdapter {
   private async ensureRoot(): Promise<void> {
     if (!existsSync(this.root)) {
       await mkdir(this.root, { recursive: true });
+    }
+  }
+
+  /**
+   * M11-W7 — idempotent, path-safe deletion (evidence retention).
+   * Missing files are a no-op so retries always converge.
+   */
+  async delete(key: string): Promise<void> {
+    if (key.includes('/') || key.includes('\\') || key.includes('..')) return;
+    const filePath = normalize(join(this.root, key));
+    if (!filePath.startsWith(this.root)) return;
+    try {
+      await unlink(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
 

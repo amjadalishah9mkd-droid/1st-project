@@ -515,8 +515,11 @@ describe('M11-W2 — Google OIDC core', () => {
     });
 
     it('students cannot unlink in required mode; unlink works in additive', async () => {
-      await setMode('required');
+      // M11-W7: required mode also blocks student password login, so the
+      // session must be obtained while the college is still additive.
+      await setMode('additive', true);
       const token = await login('student@campusos.dev');
+      await setMode('required');
       const denied = await http
         .delete('/api/v1/auth/google/link')
         .set('Authorization', `Bearer ${token}`);

@@ -108,7 +108,8 @@ Principles applied consistently from M0 onward:
 | M11-W3 | Identity claims + evidence API | `51069ab` |
 | M11-W4 | Verified student onboarding / invitation integration | `7901d18` |
 | M11-W5 | Student onboarding UI + lifecycle gate | `b33af5f` |
-| M11-W6 | Admin verification queue UI | *(this commit)* |
+| M11-W6 | Admin verification queue UI | `6d7984d` |
+| M11-W7 | Cutover + production hardening | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -497,7 +498,57 @@ of the W3 API — the UI never becomes an authorization layer.
   conflict toast and queue resync; demo accounts unaffected; all test
   data (plus residue from an earlier failed suite teardown) purged.
 
-*(Future M11 workstreams will be appended here as they are implemented.)*
+### M11-W7 — Cutover + production hardening
+**Goal:** close the remaining M11 security debt: required-mode student
+cutover, rate limiting, evidence retention, and multi-instance OAuth state.
+
+- **Required-mode cutover (R1/D6/D7):** in `googleAuth=required` colleges,
+  password login is refused for accounts owning a StudentProfile
+  (`403 USE_GOOGLE_LOGIN`, audited `google_required`) — data-driven, no
+  role checks, ALL profile owners including LEGACY; the explicit message
+  appears only after valid credentials + rate limiter (wrong passwords
+  stay generic 401 — no oracle). Staff unaffected; `googleAuthGraceDays`
+  documented as an operational transition window with **no hidden
+  password exception**.
+- **College settings (R2):** `GET/PATCH /settings/college`
+  (`settings.manage`, tenant-scoped, shared-Zod validated, merge-PATCH
+  preserving unknown keys, audited `settings.updated`) + minimal
+  `/settings` page (mode select with explanations, self-registration
+  toggle, grace days) and nav entry — the first consumer of the
+  M1-seeded `settings.manage` permission.
+- **Rate limiting:** new `RateLimiterService` with explicit named policies
+  in one file (invite/reset 30/min/IP, invite-info 30/min/IP, google
+  start 60/min/IP, evidence 15/h/user, claims 10/h/user, file upload
+  60/h/user, sign 300/min/user), standard `RATE_LIMITED` 429 envelope,
+  test reset hook; M1 login-failure backoff limiter unchanged. In-memory
+  per instance by design (no Redis, Blueprint §14) — documented.
+- **Evidence retention (R3):** `LocalStorageAdapter.delete()` (idempotent,
+  path-safe) + `EvidenceRetentionService` daily 03:00 sweep: APPROVED
+  +30d purged, CANCELLED purged, REJECTED retained, orphans purged after
+  7 days; binary + metadata row removed, claim rows/audit history always
+  preserved; every purge audited `verification.evidence_purged`
+  (system, no actor); storage-first ordering converges after crashes.
+- **OAuth state (R4):** new `OauthStateConsumption` table (SHA-256 state
+  hash `@unique`, expiry) — consumption is an atomic insert, so replay is
+  a unique violation **across all API instances**; expired rows swept
+  daily. Cookie HMAC/PKCE/nonce/JWKS behavior untouched. Migration #5
+  (`m11_oauth_state_consumption`), additive.
+- **Migration count:** 5 (additive only).
+- **Tests: 294** (16 new adversarial tests incl. cross-instance state
+  replay using two live app instances on one database, per-user vs per-IP
+  limit keying, disk+DB purge assertions, retention idempotence, cutover
+  bypass attempts straight against the API, settings merge/audit/strict
+  validation). One W2 test updated: it must now log in before switching
+  the college to required — the very behavior W7 introduces.
+- **Docs:** OPERATIONS.md gained cutover/grace procedure, rate-limit
+  table, retention/state-hygiene sections and the purged-evidence
+  rollback caveat.
+- **Alloy verification:** Settings page flip to Required → demo student
+  password login refused with `USE_GOOGLE_LOGIN` while teacher/admin
+  unaffected; audit recorded; flipped back and all demo logins verified;
+  production Docker images rebuilt successfully; demo data restored.
+
+*(M11 is functionally complete: W1–W7 delivered.)*
 
 ## 7. Architecture Evolution
 
@@ -548,6 +599,7 @@ Key flows:
 | `20260822062836_credential_tokens` | Hashed one-time INVITE/RESET tokens | M10-W2 |
 | `20260822071747_m11_identity_foundation` | AuthIdentity, StudentIdentityClaim (+partial unique indexes), nullable passwordHash, verificationStatus | M11-W1 |
 | `20260822163204_m11_evidence_files` | Purpose-restricted evidence file metadata | M11-W3 |
+| `20260823050551_m11_oauth_state_consumption` | Atomic one-time OAuth state consumption (hashed) | M11-W7 |
 
 Security-critical constraints:
 
@@ -580,6 +632,7 @@ Security-critical constraints:
 | M10-W4 | Seed protection | Demo accounts with public passwords must never reach production → loud refusal guard + explicit override → decision-logic + seed-CLI tests |
 | M11-W1 | Identity uniqueness in PostgreSQL | Duplicate student accounts via racing signups → partial unique indexes → 5-way race test (exactly one winner) |
 | M11-W2 | Google OIDC state/PKCE/nonce, JWKS, sub-keyed identity | OAuth CSRF/replay/pre-hijack via email match → signed one-time state cookie, PKCE S256, nonce, JWKS with rotation, `sub`-only identity, no email auto-link → 29 e2e tests incl. replayed state and email-squatting |
+| M11-W7 | Cutover, rate limits, retention, shared OAuth state | Student password bypass of Google-only policy; disk-fill via uploads; token-endpoint flooding; state replay across instances; indefinite ID-card storage → server-side required-mode gate, explicit rate policies, R3 retention sweep with audit, DB-backed one-time state → 16 adversarial e2e tests |
 | M11-W3 | Verification claims + evidence access control | ID-card evidence must be evidence, never a credential, and never publicly readable → purpose-restricted uploads (magic-byte MIME), sign-time authorization (owner/reviewer only, 404 otherwise), full audit → 24 e2e tests incl. signing matrix and enumeration safety |
 | M11-W4 | Invitation-anchored verification + auto-supersession | Admin-created students had no duplicate-proof VERIFIED path; impostor claims could squat identity slots → transactional acceptance writing a synthetic APPROVED claim (DB slot held forever) and superseding impostor PENDING claims; token consumption is rollback-safe → 21 e2e tests incl. races and rollback |
 
@@ -603,6 +656,7 @@ reached 141 by the end of M9):
 | M11-W4 | 266 | invitation onboarding (both methods × modes), supersession, token-neutral rollback, acceptance races |
 | M11-W5 | 273 | lifecycle permission gate, /auth/config exposure, hint-cookie verification field |
 | M11-W6 | 278 | admin queue search/pagination/filter contracts, stale-decision conflicts, route-permission map |
+| M11-W7 | 294 | cross-instance OAuth state replay, rate-limit policies, retention purge (disk+DB), required-mode cutover |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -698,11 +752,12 @@ milestone (see roadmap).
 
 | Item | Why Deferred | Current Status | Planned Phase |
 |---|---|---|---|
-| Evidence retention deletion job (30 days post-approval, D5) | W3 delivered access control; deletion is operational tooling | documented decision, not implemented | M11 (later workstream) |
-| OAuth consumed-state store is in-memory | single-instance deployments are the current target | acceptable; degrades to TTL-only protection if scaled out | M11-W7 hardening |
+| Evidence retention deletion job (30 days post-approval, D5) | — | **Resolved in M11-W7** (daily sweep per policy R3) | done |
+| OAuth consumed-state store is in-memory | — | **Resolved in M11-W7** (`OauthStateConsumption`, atomic across instances) | done |
 | `FILE_URL_SECRET` rotation has no dual-key grace window | 300 s TTL makes impact negligible | documented in OPERATIONS.md | future ops enhancement |
 | Account merging for claims on provisioned profiles | D3 locked: reject-with-guidance in v1 | `PROFILE_HAS_ACCOUNT` behavior in place | post-M11 design |
-| Student password cutover enforcement at login (`required` colleges) | W7 scope by plan; invitations already Google-capable | password login still works for legacy students | M11-W7 |
+| Student password cutover enforcement at login (`required` colleges) | — | **Resolved in M11-W7** (server-side USE_GOOGLE_LOGIN gate) | done |
+| Rate limits are per API instance (no shared store) | Blueprint §14 deliberately avoids Redis | documented ceiling = policy × instances | revisit if horizontally scaled |
 | Student `/verify` UI + admin verification UI | backend-first ordering | API complete (W3) | M11-W5/W6 |
 | Prisma major-version upgrade available | upgrade advisory only | pinned to 5.22 | maintenance window |
 | Backups are documented cron scripts, not shipped automation | doc-only scope of M10-W5 | OPERATIONS.md §6 | future ops work |
@@ -710,14 +765,14 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M11-W6.*
+*Last updated after M11-W7.*
 
-- **Current milestone**: M11-W6 complete (M0–M10 accepted; M11 W1–W6
-  complete, W7 awaiting approval)
-- **Latest commit**: see the M11-W6 milestone commit on branch
+- **Current milestone**: M11-W7 complete — **M11 delivered in full (W1–W7)**;
+  M0–M10 accepted
+- **Latest commit**: see the M11-W7 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
-- **Migrations**: 4 found, database schema up to date (W4/W5/W6 required none)
-- **Tests**: **278/278 passing** (18 suites)
+- **Migrations**: 5 found, database schema up to date
+- **Tests**: **294/294 passing** (19 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -725,26 +780,23 @@ milestone (see roadmap).
   demo admin/teacher/student logins verified; Google endpoints correctly
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13
-- **Next planned milestone**: M11-W7 (cutover + hardening: student
-  password cutover in `required` colleges, rate limits, evidence
-  retention, final M11 verification) — pending explicit approval
+- **Next planned milestone**: none authorized — M11 complete; future work
+  (M12 / Phase 3) awaits explicit approval
 
 ## 15. Future Roadmap
 
 **COMPLETED**
 - M0–M9 MVP (foundation → dashboards)
 - M10 production hardening (W1–W5)
-- M11-W1 identity foundation, M11-W2 Google OIDC core, M11-W3 claims +
-  evidence API, M11-W4 verified student onboarding, M11-W5 student
-  onboarding UI + lifecycle gate, M11-W6 admin verification queue UI
+- **M11 Identity & Student Verification — complete (W1–W7)**: identity
+  foundation, Google OIDC core, claims + evidence API, verified student
+  onboarding, student onboarding UI + lifecycle gate, admin verification
+  queue UI, cutover + production hardening
 
 **IN PROGRESS**
-- M11 Identity & Student Verification (W7 pending approval: cutover +
-  hardening)
+- (nothing — awaiting explicit authorization for the next milestone)
 
 **PLANNED**
-- Per-college Google-only cutover with grace period (D7)
-- Evidence retention automation (D5)
 - Email delivery channel for notifications/invitations
 - Payment gateway integration + accountant functionality
 - Parent/guardian portal

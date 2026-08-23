@@ -2,8 +2,10 @@ import {
   Injectable,
   UnauthorizedException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
+import { readCollegeSettings } from '@campusos/shared';
 import type {
   ChangePasswordInput,
   LoginInput,
@@ -48,6 +50,10 @@ export class AuthService {
 
     const user = await this.prisma.user.findFirst({
       where: { email: input.email },
+      include: {
+        college: { select: { settings: true } },
+        studentProfile: { select: { id: true } },
+      },
     });
 
     // Fail closed for password-less accounts (M11: Google-born users have
@@ -75,6 +81,30 @@ export class AuthService {
     }
 
     this.rateLimiter.recordSuccess(input.email);
+
+    // M11-W7 cutover (decisions R1/D6): in googleAuth=required colleges,
+    // password login is refused for accounts that own a StudentProfile —
+    // data-driven, never a role check. The explicit message is only shown
+    // AFTER valid credentials and the rate limiter (no enumeration oracle:
+    // wrong passwords stay generic 401).
+    if (user.studentProfile) {
+      const settings = readCollegeSettings(user.college.settings);
+      if (settings.googleAuth === 'required') {
+        await this.audit.log({
+          collegeId: user.collegeId,
+          actorId: user.id,
+          action: 'auth.login.failure',
+          targetType: 'User',
+          targetId: user.id,
+          metadata: { reason: 'google_required' },
+        });
+        throw new ForbiddenException({
+          code: 'USE_GOOGLE_LOGIN',
+          message:
+            'Your college requires Google sign-in for student accounts. Use "Continue with Google".',
+        });
+      }
+    }
 
     const tokens = await this.tokens.issueFamily(user, meta);
     await this.prisma.user.update({

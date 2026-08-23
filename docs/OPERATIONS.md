@@ -296,7 +296,75 @@ reachable from the internet.
 - Invalid/expired/reused tokens always return the same generic
   `400 INVALID_TOKEN` — this is deliberate (no account enumeration).
 
-## 15. Rollback procedure
+## 15. Google-auth rollout & student cutover (M11-W7)
+
+Per-college rollout is controlled from **Settings** (admin UI, `settings.manage`)
+or `PATCH /api/v1/settings/college`:
+
+| Mode | Behavior |
+|---|---|
+| `off` | Google endpoints disabled for the college; passwords + password invitations only |
+| `additive` | Google login/linking available; student password login still works |
+| `required` | **Google-only for student-record owners**: password login returns `403 USE_GOOGLE_LOGIN`; staff accounts (no StudentProfile) are unaffected |
+
+**Cutover procedure:**
+1. Configure Google env vars (§3) and switch the college to `additive`.
+2. Announce the transition using `googleAuthGraceDays` (default 30) — this
+   value is an operational communication window, **not** an enforcement
+   timer: nothing changes automatically, and there is no hidden password
+   exception during or after it.
+3. During the grace window, students connect Google (invitation links,
+   account linking, or self-registration if enabled). Linked students
+   auto-verify.
+4. After the announced window, switch the college to `required`. From that
+   moment student password login is refused server-side.
+5. Rollback: switch back to `additive` — password login resumes
+   immediately; no data changes are involved.
+
+Every settings change is audited (`settings.updated`).
+
+## 16. Rate limiting (M11-W7)
+
+Policies are defined in one place (`apps/api/src/common/rate-limiter.service.ts`)
+and return the uniform `429 {"error":{"code":"RATE_LIMITED"}}`:
+
+| Endpoint | Key | Policy |
+|---|---|---|
+| POST /auth/login (failures) | IP + account | 5 fails/min, exponential backoff (M1) |
+| accept-invite / reset-password | IP | 30/min |
+| GET /auth/invite-info | IP | 30/min |
+| GET /auth/google/start | IP | 60/min |
+| POST /verification/evidence | user | 15/hour |
+| POST /verification/claims | user | 10/hour |
+| POST /files | user | 60/hour |
+| POST /files/sign | user | 300/min |
+
+Limits are in-memory per API instance (Blueprint §14 — no Redis): with N
+instances the effective ceiling is policy × N. Tune the constants and
+redeploy if legitimate traffic ever hits them.
+
+## 17. Evidence retention (M11-W7, policy locked by decision R3)
+
+A daily 03:00 sweep (`EvidenceRetentionService`) purges ID-card evidence:
+
+- APPROVED claims: evidence deleted **30 days after decidedAt**
+- CANCELLED claims: evidence deleted at the next sweep
+- REJECTED claims: evidence retained (referenced by the decision)
+- Orphaned uploads (never attached to a claim): deleted after **7 days**
+
+Purging removes the binary and its metadata row only — claim rows keep
+their `evidenceFileKey` string and all audit history. Each purge is audited
+as `verification.evidence_purged`. Deletion is idempotent and storage-first,
+so interrupted sweeps converge on the next run. **Purged evidence cannot be
+restored by rolling back code** — only from the uploads-volume backups (§6);
+keep backup retention shorter than or aligned with evidence retention if
+your policy demands true deletion.
+
+The same sweep clears expired `OauthStateConsumption` rows (one-time OAuth
+state records, stored as SHA-256 hashes; unique-insert makes replay
+detection atomic across all API instances). No manual maintenance needed.
+
+## 18. Rollback procedure
 
 1. `git checkout <previous-release-tag>` and rebuild images.
 2. If the bad release included a migration: restore the pre-deploy database

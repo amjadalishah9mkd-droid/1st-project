@@ -23,6 +23,7 @@ import {
 import { LocalStorageAdapter } from './storage.adapter';
 import { FileUrlSignerService } from './url-signer.service';
 import { EvidenceAuthzService } from './evidence-authz.service';
+import { RateLimiterService } from '../common/rate-limiter.service';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { CurrentUser } from '../access/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
@@ -47,6 +48,7 @@ export class FilesController {
     private readonly storage: LocalStorageAdapter,
     private readonly signer: FileUrlSignerService,
     private readonly evidenceAuthz: EvidenceAuthzService,
+    private readonly limiter: RateLimiterService,
   ) {}
 
   @Post()
@@ -54,9 +56,10 @@ export class FilesController {
     FileInterceptor('file', { limits: { fileSize: MAX_FILE_BYTES } }),
   )
   async upload(
-    @CurrentUser() _user: AuthenticatedUser,
+    @CurrentUser() user: AuthenticatedUser,
     @UploadedFile() file: Express.Multer.File | undefined,
   ): Promise<UploadedFileInfo> {
+    this.limiter.assert('fileUpload', user.id);
     if (!file || file.size === 0) {
       throw new BadRequestException({
         code: 'MISSING_FILE',
@@ -82,6 +85,7 @@ export class FilesController {
     @CurrentUser() user: AuthenticatedUser,
     @Body(new ZodValidationPipe(signFileUrlSchema)) body: SignFileUrlInput,
   ): Promise<SignedFileUrl> {
+    this.limiter.assert('fileSign', user.id);
     // Strictly internal URLs only: exact prefix, then a single key segment
     // that must survive the storage adapter's own key rules.
     if (!body.url.startsWith(FILE_URL_PREFIX)) {

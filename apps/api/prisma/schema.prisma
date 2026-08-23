@@ -404,6 +404,19 @@ model AuthIdentity {
   @@index([userId])
 }
 
+// M11-W7 — one-time OAuth state consumption, shared across API instances.
+// Stores only a SHA-256 hash of the state value; insert-as-claim makes
+// consumption atomic (a unique violation = replay). Expired rows are swept
+// by the daily retention job.
+model OauthStateConsumption {
+  id        String   @id @default(cuid())
+  stateHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
 // M11-W3 — student-ID evidence uploads. Purpose-restricted file metadata:
 // only keys registered here are treated as verification evidence, and only
 // authorized parties can obtain signed URLs for them (files.controller).
