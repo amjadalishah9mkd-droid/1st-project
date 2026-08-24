@@ -9,6 +9,7 @@ export const RoleKey = {
   ADMIN: 'ADMIN',
   TEACHER: 'TEACHER',
   STUDENT: 'STUDENT',
+  GUARDIAN: 'GUARDIAN',
 } as const;
 export type RoleKey = (typeof RoleKey)[keyof typeof RoleKey];
 
@@ -20,6 +21,8 @@ export const UserStatus = {
 export type UserStatus = (typeof UserStatus)[keyof typeof UserStatus];
 
 export const PermissionScope = {
+  /** M13 — access to a linked child's records (ACTIVE GuardianLink). */
+  CHILD: 'CHILD',
   OWN: 'OWN',
   ASSIGNED: 'ASSIGNED',
   DEPARTMENT: 'DEPARTMENT',

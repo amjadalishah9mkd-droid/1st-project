@@ -19,6 +19,7 @@ enum RoleKey {
   ADMIN
   TEACHER
   STUDENT
+  GUARDIAN
 }
 
 enum UserStatus {
@@ -56,6 +57,7 @@ enum PermissionScope {
   ASSIGNED
   DEPARTMENT
   ALL
+  CHILD
 }
 
 enum StudentStatus {
@@ -254,6 +256,7 @@ model College {
   auditLogs        AuditLog[]
   identityClaims   StudentIdentityClaim[]
   evidenceFiles    EvidenceFile[]
+  guardianLinks    GuardianLink[]
 }
 
 // ────────────────────── Identity & Access ──────────────────────
@@ -294,6 +297,8 @@ model User {
   identityClaims         StudentIdentityClaim[] @relation("ClaimUser")
   identityClaimsDecided  StudentIdentityClaim[] @relation("ClaimDecidedBy")
   evidenceFiles          EvidenceFile[]
+  guardianLinks          GuardianLink[] @relation("GuardianLinks")
+  guardianLinksCreated   GuardianLink[] @relation("GuardianLinkCreator")
 
   sessionsTaken     ClassSession[]     @relation("SessionTakenBy")
   attendanceMarked  AttendanceRecord[] @relation("AttendanceMarkedBy")
@@ -418,6 +423,38 @@ model OauthStateConsumption {
   createdAt DateTime @default(now())
 
   @@index([expiresAt])
+}
+
+// M13-W1 — guardian ↔ student relationship (Blueprint M13, decisions
+// G1–G7). Many-to-many: one guardian may have several children, one
+// student several guardians. Duplicate prevention lives in PostgreSQL
+// (@@unique). Access dies with status=REVOKED — every CHILD-scope check
+// reads ACTIVE links at request time.
+enum GuardianLinkStatus {
+  ACTIVE
+  REVOKED
+}
+
+model GuardianLink {
+  id               String             @id @default(cuid())
+  collegeId        String
+  guardianUserId   String
+  studentProfileId String
+  relationship     String
+  status           GuardianLinkStatus @default(ACTIVE)
+  createdById      String?
+  revokedAt        DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  college        College        @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  guardian       User           @relation("GuardianLinks", fields: [guardianUserId], references: [id], onDelete: Cascade)
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Restrict)
+  createdBy      User?          @relation("GuardianLinkCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([guardianUserId, studentProfileId])
+  @@index([studentProfileId])
+  @@index([guardianUserId, status])
 }
 
 // M11-W3 — student-ID evidence uploads. Purpose-restricted file metadata:
@@ -625,6 +662,7 @@ model StudentProfile {
   marks             Mark[]
   invoices          Invoice[]
   identityClaims    StudentIdentityClaim[]
+  guardianLinks     GuardianLink[]
 
   @@unique([collegeId, admissionNo])
   @@index([departmentId])

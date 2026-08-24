@@ -114,7 +114,8 @@ Principles applied consistently from M0 onward:
 | M12-W2 | Notification email channel + opt-out | `3433959` |
 | M12-W3 | Report cards & CSV exports | `0adaad2` |
 | M12-W4 | Admin audit log viewer | `6a7d712` |
-| M13-H0 | Post-M12 hardening (F1/F4) | *(this commit)* |
+| M13-H0 | Post-M12 hardening (F1/F4) | `d55a3d5` |
+| M13-W1 | Guardian foundation | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -709,6 +710,35 @@ M12 Final Deep Inspection, before any Guardian Portal work:
   50,001-row synthetic fees export returning `413 EXPORT_TOO_LARGE`.
 - **No migration** (still 6). **Tests: 338** (+2).
 
+## 6c. M13 — Guardian Portal
+
+### M13-W1 — Guardian foundation (decisions G1–G7 approved)
+**Goal:** the identity, relationship and authorization substrate for the
+guardian portal — with zero behavior change for existing roles.
+
+- **Schema (migration #7, `m13_guardian_foundation`, additive):**
+  `RoleKey + GUARDIAN`, `PermissionScope + CHILD`, and `GuardianLink`
+  (guardian↔student many-to-many, `@@unique([guardianUserId,
+  studentProfileId])` duplicate prevention in PostgreSQL, ACTIVE/REVOKED
+  lifecycle, collegeId + createdBy/revokedAt, indexed for per-guardian
+  and per-student lookups; Restrict on profile, Cascade on guardian).
+- **Permissions:** seven seeded GUARDIAN grants — `guardian.children` and
+  `dashboard.guardian` (OWN) plus results/attendance/fees/timetable/
+  assignments `read` at the new **CHILD** scope; `/children` route
+  mapping. Two new permission keys, descriptions, idempotent seed.
+- **PolicyService:** `ResourceContext.studentProfileId` + `checkChild` —
+  an ACTIVE GuardianLink within the caller's college, read per request
+  (revocation is immediate; nothing cached). No role conditionals.
+- **Tests: 348** (10 new): shared enum/matrix/route contracts, link
+  P2002, CHILD grant/deny/missing-context, immediate revocation, the
+  cross-college forged-link analysis proving why W2's creation invariant
+  is mandatory, guardian login + grant surface + M11 lifecycle-gate
+  compatibility (LEGACY), guardian denial across
+  students/audit/exports/verification/settings/community/moderation,
+  and an existing-roles regression guard.
+- **Alloy:** stack healthy; all demo logins unchanged; 7 GUARDIAN grants
+  present in the seeded matrix.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -760,6 +790,7 @@ Key flows:
 | `20260822163204_m11_evidence_files` | Purpose-restricted evidence file metadata | M11-W3 |
 | `20260823050551_m11_oauth_state_consumption` | Atomic one-time OAuth state consumption (hashed) | M11-W7 |
 | `20260823055843_m12_email_opt_out` | Single per-user notification-email opt-out boolean | M12-W2 |
+| `20260824163131_m13_guardian_foundation` | GUARDIAN role, CHILD scope, GuardianLink relation | M13-W1 |
 
 Security-critical constraints:
 
@@ -822,6 +853,7 @@ reached 141 by the end of M9):
 | M12-W3 | 327 | export authorization/tenancy matrices, CSV injection guard, report-card scope pinning |
 | M12-W4 | 336 | audit viewer authorization/read-only contracts, filter matrix, cross-college audit isolation |
 | M13-H0 | 338 | mailer tenant belt (adversarial), real 50k+1 over-cap 413 |
+| M13-W1 | 348 | GuardianLink constraints, CHILD scope grant/deny/revoke, guardian surface denial matrix |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -932,12 +964,12 @@ milestone (see roadmap).
 
 *Last updated after M12-W4.*
 
-- **Current milestone**: M13-H0 hardening complete (M12 delivered in
-  full; M0–M11 accepted)
+- **Current milestone**: M13-W1 complete (guardian foundation; M0–M12 +
+  H0 accepted; W2+ awaiting approval)
 - **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
-- **Migrations**: 6 found, database schema up to date (W3/W4 required none)
-- **Tests**: **338/338 passing** (23 suites)
+- **Migrations**: 7 found, database schema up to date
+- **Tests**: **348/348 passing** (24 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -945,8 +977,8 @@ milestone (see roadmap).
   demo admin/teacher/student logins verified; Google endpoints correctly
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13
-- **Next planned milestone**: M13 (Guardian Portal, per decision O5) —
-  pending explicit approval
+- **Next planned milestone**: M13-W2 (guardian onboarding/link
+  lifecycle) — pending explicit approval
 
 ## 15. Future Roadmap
 
@@ -959,7 +991,8 @@ milestone (see roadmap).
   queue UI, cutover + production hardening
 
 **IN PROGRESS**
-- (nothing — M12 complete; awaiting explicit authorization for M13)
+- M13 Guardian Portal (W1 complete; W2–W5 pending approval: onboarding,
+  child-scoped data APIs, guardian UI, hardening)
 
 **PLANNED**
 - Guardian/parent portal (M13, per decision O5); payments afterward

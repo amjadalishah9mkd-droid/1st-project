@@ -37,6 +37,8 @@ export const PERMISSIONS = {
   VERIFICATION_MANAGE: 'verification.manage',
   VERIFICATION_SUBMIT: 'verification.submit',
   AUDIT_READ: 'audit.read',
+  GUARDIAN_CHILDREN: 'guardian.children',
+  DASHBOARD_GUARDIAN: 'dashboard.guardian',
   DASHBOARD_ADMIN: 'dashboard.admin',
   DASHBOARD_TEACHER: 'dashboard.teacher',
   DASHBOARD_STUDENT: 'dashboard.student',
@@ -78,6 +80,8 @@ export const PERMISSION_DESCRIPTIONS: Record<PermissionKey, string> = {
   'verification.submit':
     'Submit and manage own student identity verification claim',
   'audit.read': 'View the college security audit log',
+  'guardian.children': 'List and view own linked children',
+  'dashboard.guardian': 'View the guardian dashboard',
   'dashboard.admin': 'View the admin dashboard',
   'dashboard.teacher': 'View the teacher dashboard',
   'dashboard.student': 'View the student dashboard',
@@ -157,6 +161,15 @@ export const ROLE_PERMISSION_MATRIX: RolePermissionGrant[] = [
   { role: 'STUDENT', permission: 'community.report', scope: 'ALL' },
   { role: 'STUDENT', permission: 'dashboard.student', scope: 'OWN' },
   { role: 'STUDENT', permission: 'verification.submit', scope: 'OWN' },
+
+  // ── GUARDIAN (M13, decisions G1–G7): read-only, CHILD-scoped ─────────
+  { role: 'GUARDIAN', permission: 'guardian.children', scope: 'OWN' },
+  { role: 'GUARDIAN', permission: 'dashboard.guardian', scope: 'OWN' },
+  { role: 'GUARDIAN', permission: 'results.read', scope: 'CHILD' },
+  { role: 'GUARDIAN', permission: 'attendance.read', scope: 'CHILD' },
+  { role: 'GUARDIAN', permission: 'fees.read', scope: 'CHILD' },
+  { role: 'GUARDIAN', permission: 'timetable.read', scope: 'CHILD' },
+  { role: 'GUARDIAN', permission: 'assignments.read', scope: 'CHILD' },
 ];
 
 /**
@@ -181,6 +194,7 @@ export const ROUTE_PERMISSIONS: Record<string, PermissionKey | null> = {
   '/moderation': 'moderation.act',
   '/verification': 'verification.manage',
   '/audit': 'audit.read',
+  '/children': 'guardian.children',
   '/announcements': null,
   '/notifications': null,
   '/settings': 'settings.manage',

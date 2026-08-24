@@ -19,6 +19,8 @@ export interface ResourceContext {
   sectionId?: string;
   /** The department the resource belongs to (DEPARTMENT scope). */
   departmentId?: string;
+  /** The student profile the resource belongs to (CHILD scope, M13). */
+  studentProfileId?: string;
 }
 
 interface GrantCacheEntry {
@@ -143,9 +145,34 @@ export class PolicyService {
         return this.checkAssigned(user, context);
       case 'DEPARTMENT':
         return this.checkDepartment(user, context);
+      case 'CHILD':
+        return this.checkChild(user, context);
       default:
         return false;
     }
+  }
+
+  /**
+   * M13 (decision G1): CHILD scope — the caller holds an ACTIVE
+   * GuardianLink to the student profile the resource belongs to.
+   * Revocation takes effect immediately: status is read per request,
+   * never cached. Tenancy is double-belted via collegeId on the link.
+   */
+  private async checkChild(
+    user: AuthenticatedUser,
+    context: ResourceContext,
+  ): Promise<boolean> {
+    if (!context.studentProfileId) return false;
+    const link = await this.prisma.guardianLink.findFirst({
+      where: {
+        guardianUserId: user.id,
+        studentProfileId: context.studentProfileId,
+        collegeId: user.collegeId,
+        status: 'ACTIVE',
+      },
+      select: { id: true },
+    });
+    return link !== null;
   }
 
   private checkOwn(
