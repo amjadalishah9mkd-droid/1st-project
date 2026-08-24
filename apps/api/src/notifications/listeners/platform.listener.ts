@@ -68,7 +68,8 @@ export class PlatformListener {
         })),
       });
       // M12-W2 — email channel for announcements (opt-out respected).
-      await this.mailer.sendToUsers(recipients, ({ firstName }) => ({
+      // F4: collegeId anchored to the announcement aggregate.
+      await this.mailer.sendToUsers(announcement.collegeId, recipients, ({ firstName }) => ({
         kind: 'announcement',
         firstName,
         title: event.title,

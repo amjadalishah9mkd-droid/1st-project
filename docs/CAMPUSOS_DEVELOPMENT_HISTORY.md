@@ -113,7 +113,8 @@ Principles applied consistently from M0 onward:
 | M12-W1 | Email foundation | `cd0005c` |
 | M12-W2 | Notification email channel + opt-out | `3433959` |
 | M12-W3 | Report cards & CSV exports | `0adaad2` |
-| M12-W4 | Admin audit log viewer | *(this commit)* |
+| M12-W4 | Admin audit log viewer | `6a7d712` |
+| M13-H0 | Post-M12 hardening (F1/F4) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -690,6 +691,24 @@ platform has been writing since M0 — completing the M12 scope.
   listed with pagination; detail dialog rendered actor/target/metadata;
   teacher and student `GET /audit` → 403.
 
+### M13-H0 — Post-M12 hardening (inspection items F1 + F4)
+Isolated hardening commit implementing exactly the two P2 items from the
+M12 Final Deep Inspection, before any Guardian Portal work:
+
+- **F4 — NotificationMailer tenant belt:** `sendToUsers` now takes an
+  explicit `collegeId` and filters recipients by it at the query level;
+  listeners anchor the value to the owning aggregate (exam / invoice /
+  announcement), never to the user ids themselves. A foreign-college
+  user id passed to the mailer can no longer be mailed (adversarial
+  test added). W1/W2 behavior and opt-out semantics unchanged; two W2
+  event fixtures updated to reference real aggregates (the hardening
+  correctly rejected their synthetic ids).
+- **F1 — CSV memory cap:** all four export queries now fetch at most
+  `CSV_ROW_CAP + 1` rows (`take`), so the 50k cap bounds query
+  materialization, not just the response. Proven end-to-end with a
+  50,001-row synthetic fees export returning `413 EXPORT_TOO_LARGE`.
+- **No migration** (still 6). **Tests: 338** (+2).
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -802,6 +821,7 @@ reached 141 by the end of M9):
 | M12-W2 | 314 | per-event email coverage, opt-out semantics, cross-college fan-out isolation, transactional exemption |
 | M12-W3 | 327 | export authorization/tenancy matrices, CSV injection guard, report-card scope pinning |
 | M12-W4 | 336 | audit viewer authorization/read-only contracts, filter matrix, cross-college audit isolation |
+| M13-H0 | 338 | mailer tenant belt (adversarial), real 50k+1 over-cap 413 |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -912,12 +932,12 @@ milestone (see roadmap).
 
 *Last updated after M12-W4.*
 
-- **Current milestone**: M12-W4 complete — **M12 delivered in full
-  (W1–W4)**; M0–M11 accepted
+- **Current milestone**: M13-H0 hardening complete (M12 delivered in
+  full; M0–M11 accepted)
 - **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 6 found, database schema up to date (W3/W4 required none)
-- **Tests**: **336/336 passing** (23 suites)
+- **Tests**: **338/338 passing** (23 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)

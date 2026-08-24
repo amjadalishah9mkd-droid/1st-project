@@ -95,9 +95,13 @@ describe('M12-W2 — notification email channel', () => {
     it('results.published: in-app rows for all, email only to non-opted-out', async () => {
       const a = await makeUser('res-a', collegeId, false);
       const b = await makeUser('res-b', collegeId, true); // opted out
+      // F4: the listener anchors collegeId to the real exam aggregate.
+      const exam = await prisma.exam.findFirstOrThrow({
+        where: { collegeId, status: 'PUBLISHED' },
+      });
       events.emit({
         type: 'results.published',
-        examId: 'x',
+        examId: exam.id,
         examTitle: 'Midterm CS101',
         studentUserIds: [a.id, b.id],
       });
@@ -120,17 +124,21 @@ describe('M12-W2 — notification email channel', () => {
 
     it('invoice.issued and invoice.overdue email the student', async () => {
       const u = await makeUser('inv', collegeId);
+      // F4: the listener anchors collegeId to the real invoice aggregate.
+      const invoice = await prisma.invoice.findFirstOrThrow({
+        where: { collegeId },
+      });
       events.emit({
         type: 'invoice.issued',
         studentUserId: u.id,
-        invoiceId: 'i1',
+        invoiceId: invoice.id,
         amount: '1,500',
         dueDate: '2026-09-30',
       });
       events.emit({
         type: 'invoice.overdue',
         studentUserId: u.id,
-        invoiceId: 'i1',
+        invoiceId: invoice.id,
         amount: '1,500',
         dueDate: '2026-09-30',
       });
@@ -259,6 +267,29 @@ describe('M12-W2 — notification email channel', () => {
     });
   });
 
+  describe('F4 tenant belt (M13 hardening)', () => {
+    it('a foreign-college user id passed to the mailer is never mailed', async () => {
+      const { NotificationMailerService } = await import(
+        '../src/notifications/notification-mailer.service'
+      );
+      const mailer = app.get(NotificationMailerService);
+      const foreign = await makeUser('belt-foreign', rivalCollegeId, false);
+      const local = await makeUser('belt-local', collegeId, false);
+
+      // Both ids passed, but the event's college is the demo college:
+      // the belt filters the rival user out at the query level.
+      await mailer.sendToUsers(collegeId, [foreign.id, local.id], () => ({
+        kind: 'announcement',
+        firstName: 'X',
+        title: 'Belt check',
+        url: 'https://campus.test.example/announcements',
+      }));
+      const recipients = fake.sent.map((m) => m.to);
+      expect(recipients).toContain(local.email);
+      expect(recipients).not.toContain(foreign.email);
+    });
+  });
+
   describe('resilience', () => {
     it('mail transport failure leaves in-app notifications intact', async () => {
       const u = await makeUser('resil', collegeId);
@@ -272,10 +303,13 @@ describe('M12-W2 — notification email channel', () => {
       (fake as { deliver: (m: OutgoingMail) => Promise<void> }).deliver =
         failing.deliver;
       try {
+        const invoice = await prisma.invoice.findFirstOrThrow({
+          where: { collegeId },
+        });
         events.emit({
           type: 'invoice.issued',
           studentUserId: u.id,
-          invoiceId: 'i2',
+          invoiceId: invoice.id,
           amount: '900',
           dueDate: '2026-10-01',
         });

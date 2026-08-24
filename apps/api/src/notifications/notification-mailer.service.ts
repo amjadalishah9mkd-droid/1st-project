@@ -7,9 +7,10 @@ import type { MailTemplate } from '../mail/templates';
  * M12-W2 — notification email channel.
  *
  * Thin recipient-resolution layer over the W1 MailService. Rules:
- *  - Recipients are always re-fetched from the database by user id
- *    (tenant-scoped rows carry their own collegeId/email) — never from
- *    client-supplied addresses.
+ *  - Recipients are always re-fetched from the database by user id AND
+ *    constrained to the event's collegeId (M13 hardening F4): even if a
+ *    future caller ever passed a foreign user id, it cannot be mailed.
+ *    Addresses never come from client input.
  *  - Users with emailOptOut=true are filtered here. Transactional mail
  *    (invites, resets, verification decisions) does NOT go through this
  *    service and therefore always ignores the opt-out.
@@ -32,6 +33,7 @@ export class NotificationMailerService {
   }
 
   async sendToUsers(
+    collegeId: string,
     userIds: string[],
     template: (user: { firstName: string }) => Exclude<
       MailTemplate,
@@ -41,7 +43,12 @@ export class NotificationMailerService {
     if (userIds.length === 0 || !this.mail.isConfigured()) return;
     try {
       const recipients = await this.prisma.user.findMany({
-        where: { id: { in: userIds }, emailOptOut: false, status: 'ACTIVE' },
+        where: {
+          id: { in: userIds },
+          collegeId, // F4 tenant belt — never mail outside the event's college
+          emailOptOut: false,
+          status: 'ACTIVE',
+        },
         select: {
           id: true,
           collegeId: true,

@@ -15,7 +15,7 @@ import type { PermissionKey } from '@campusos/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
-import { toCsv, CsvTooLargeError } from '../common/csv';
+import { toCsv, CsvTooLargeError, CSV_ROW_CAP } from '../common/csv';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { CurrentUser } from '../access/current-user.decorator';
 import type { AuthenticatedUser } from '../access/authenticated-user';
@@ -100,6 +100,8 @@ export class ExportsService {
         department: { select: { name: true } },
       },
       orderBy: { rollNo: 'asc' },
+      // F1: cap materialization memory, not just the response.
+      take: CSV_ROW_CAP + 1,
     });
     const csv = toCsv(
       ['firstName', 'lastName', 'email', 'admissionNo', 'rollNo', 'department', 'batch', 'status'],
@@ -161,6 +163,8 @@ export class ExportsService {
         },
       },
       orderBy: [{ session: { date: 'asc' } }],
+      // F1: cap materialization memory, not just the response.
+      take: CSV_ROW_CAP + 1,
     });
     const csv = toCsv(
       ['date', 'course', 'section', 'rollNo', 'admissionNo', 'student', 'status'],
@@ -200,6 +204,8 @@ export class ExportsService {
         payments: { select: { amount: true } },
       },
       orderBy: { createdAt: 'asc' },
+      // F1: cap materialization memory, not just the response.
+      take: CSV_ROW_CAP + 1,
     });
     const csv = toCsv(
       ['invoiceNo', 'student', 'rollNo', 'admissionNo', 'amount', 'paid', 'status', 'dueDate'],
@@ -250,6 +256,8 @@ export class ExportsService {
         },
       },
       orderBy: [{ student: { rollNo: 'asc' } }],
+      // F1: cap materialization memory, not just the response.
+      take: CSV_ROW_CAP + 1,
     });
     const csv = toCsv(
       ['exam', 'course', 'section', 'rollNo', 'admissionNo', 'student', 'marksObtained', 'maxMarks'],

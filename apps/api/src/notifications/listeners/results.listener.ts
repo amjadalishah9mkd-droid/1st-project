@@ -30,12 +30,23 @@ export class ResultsListener {
         })),
       });
       // M12-W2 — email channel (opt-out respected in the mailer).
-      await this.mailer.sendToUsers(event.studentUserIds, ({ firstName }) => ({
-        kind: 'results_published',
-        firstName,
-        examTitle: event.examTitle,
-        url: this.mailer.absoluteUrl(template.linkPath ?? '/results'),
-      }));
+      // F4: collegeId anchored to the exam aggregate, not the user ids.
+      const exam = await this.prisma.exam.findUnique({
+        where: { id: event.examId },
+        select: { collegeId: true },
+      });
+      if (exam) {
+        await this.mailer.sendToUsers(
+          exam.collegeId,
+          event.studentUserIds,
+          ({ firstName }) => ({
+            kind: 'results_published',
+            firstName,
+            examTitle: event.examTitle,
+            url: this.mailer.absoluteUrl(template.linkPath ?? '/results'),
+          }),
+        );
+      }
     } catch (error) {
       this.logger.error(
         'Failed to create results notifications',

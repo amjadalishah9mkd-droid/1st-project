@@ -42,7 +42,13 @@ export class FeesListener {
         },
       });
       // M12-W2 — email channel (opt-out respected in the mailer).
-      await this.mailer.sendToUsers([userId], ({ firstName }) =>
+      // F4: collegeId anchored to the invoice aggregate, not the user id.
+      const invoice = await this.prisma.invoice.findUnique({
+        where: { id: event.invoiceId },
+        select: { collegeId: true },
+      });
+      if (!invoice) return;
+      await this.mailer.sendToUsers(invoice.collegeId, [userId], ({ firstName }) =>
         event.type === 'invoice.issued'
           ? {
               kind: 'invoice_issued',

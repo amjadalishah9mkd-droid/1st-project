@@ -242,6 +242,47 @@ describe('M12-W3 — exports & report cards', () => {
     });
   });
 
+  describe('F1 memory cap (M13 hardening)', () => {
+    it('an export exceeding CSV_ROW_CAP returns 413 EXPORT_TOO_LARGE (take-capped query)', async () => {
+      const student = await prisma.studentProfile.findFirstOrThrow({
+        where: { user: { email: 'student@campusos.dev' } },
+      });
+      const structure = await prisma.feeStructure.findFirstOrThrow({
+        where: { collegeId: student.collegeId },
+      });
+      // 50,001 synthetic invoices — the query itself is take-capped at
+      // CAP+1, so this also proves materialization is bounded.
+      const batch = 10_000;
+      let created = 0;
+      while (created < CSV_ROW_CAP + 1) {
+        const size = Math.min(batch, CSV_ROW_CAP + 1 - created);
+        await prisma.invoice.createMany({
+          data: Array.from({ length: size }, (_, i) => ({
+            collegeId: student.collegeId,
+            studentId: student.id,
+            structureId: structure.id,
+            invoiceNo: `F1-${suffix}-${created + i}`,
+            amount: '1.00',
+            dueDate: new Date('2027-01-01'),
+            status: 'CANCELLED' as const,
+          })),
+        });
+        created += size;
+      }
+      try {
+        const res = await http
+          .get('/api/v1/exports/fees.csv?status=CANCELLED')
+          .set(auth(adminToken));
+        expect(res.status).toBe(413);
+        expect(res.body.error.code).toBe('EXPORT_TOO_LARGE');
+      } finally {
+        await prisma.invoice.deleteMany({
+          where: { invoiceNo: { startsWith: `F1-${suffix}-` } },
+        });
+      }
+    }, 120_000);
+  });
+
   describe('report-card data path (A2/A4)', () => {
     it('staff with ALL scope can read any student result card via studentId', async () => {
       const student = await prisma.studentProfile.findFirstOrThrow({
