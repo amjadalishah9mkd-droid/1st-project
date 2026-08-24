@@ -116,7 +116,8 @@ Principles applied consistently from M0 onward:
 | M12-W4 | Admin audit log viewer | `6a7d712` |
 | M13-H0 | Post-M12 hardening (F1/F4) | `d55a3d5` |
 | M13-W1 | Guardian foundation | `8a8e698` |
-| M13-W2 | Guardian onboarding & link lifecycle | *(this commit)* |
+| M13-W2 | Guardian onboarding & link lifecycle | `a1d14e9` |
+| M13-W3 | Child-scoped data APIs | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -782,6 +783,49 @@ entirely from proven pieces (M10-W2 tokens, M12 mail, W1 CHILD scope).
   returned the child → guardian 403 on `/students` → revoke in UI →
   children list empty immediately; demo regression green; data purged.
 
+### M13-W3 — Child-scoped data APIs
+**Goal:** the five read surfaces guardians care about — results,
+attendance summary, fee invoices, timetable, assignments — honor CHILD
+scope, with the ACTIVE GuardianLink as the sole authorizer.
+
+- **Pattern (uniform across all five):** the service resolves the scope
+  via `policy.scopeFor`; under CHILD the caller must name the child
+  explicitly (`studentId` query, or `view=student:<profileId>` for
+  timetable), and `policy.can(user, perm, { studentProfileId })` verifies
+  an ACTIVE link in the caller's college **per request** — client input
+  never selects data directly. Missing target → 400 `MISSING_TARGET`;
+  unlinked/revoked/rival-college targets → 403 (invoice detail → 404,
+  indistinguishable from nonexistent).
+- **Publication boundaries hold:** results ride the existing
+  `exam.status = 'PUBLISHED'` marks filter (guardians can never see
+  draft marks); assignments mirror OWN's `publishedAt: { not: null }`.
+  Attendance's per-section staff breakdown is closed to CHILD alongside
+  OWN.
+- **PolicyService contract refinement:** `checkChild` with *no*
+  `studentProfileId` in context is now list-level-true (exactly mirroring
+  `checkOwn`), so the route guard passes and the owning service performs
+  the concrete child check; an explicit-but-empty id still denies. This
+  is the only foundation change.
+- **Timetable hole caught by the adversarial suite:** the first cut of
+  `view=student:<id>` let OWN-scoped students query other students
+  (list-level `checkOwn` passed). Fixed: only resolved CHILD (with a
+  verified link) or ALL scopes may name another student.
+- **Report card:** the guardian path works unchanged — `/results?
+  studentId=<child>` returns exam-tagged rows the print page filters.
+- **Migration: none** (still 7). **No W4 UI** — no guardian dashboard,
+  `/children` pages, or nav changes.
+- **Tests: 379** (16 new, IDOR matrix A–Q): own-child reads on all five
+  surfaces, PUBLISHED-only proof against real drafts, unrelated/other-
+  guardian's-child/rival-college/garbage-id denials, second-child
+  isolation, multi-guardian independence, zero-link guardian shutout,
+  revocation killing all five surfaces at once (other child unaffected),
+  fees MISSING_TARGET + detail 404 non-leak, assignment write surface
+  closed, OWN pinning/ASSIGNED/ALL regression, anon 401, guardian still
+  blocked from exports/community/audit/verification.
+- **Alloy:** live invite → guardian login → all five endpoints 200 for
+  the linked child → admin revoke → immediate 403; smoke data purged,
+  demo accounts untouched.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -898,6 +942,7 @@ reached 141 by the end of M9):
 | M13-H0 | 338 | mailer tenant belt (adversarial), real 50k+1 over-cap 413 |
 | M13-W1 | 348 | GuardianLink constraints, CHILD scope grant/deny/revoke, guardian surface denial matrix |
 | M13-W2 | 363 | onboarding lifecycle, token reissue/replay, cross-college isolation, immediate revocation |
+| M13-W3 | 379 | CHILD-scope IDOR matrix across results/attendance/fees/timetable/assignments, publication boundaries, revocation sweep |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1008,12 +1053,12 @@ milestone (see roadmap).
 
 *Last updated after M12-W4.*
 
-- **Current milestone**: M13-W2 complete (M0–M12 + H0 accepted; W3+
+- **Current milestone**: M13-W3 complete (M0–M12 + H0 accepted; W4+
   awaiting approval)
 - **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 7 found, database schema up to date
-- **Tests**: **363/363 passing** (25 suites)
+- **Tests**: **379/379 passing** (26 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -1021,8 +1066,8 @@ milestone (see roadmap).
   demo admin/teacher/student logins verified; Google endpoints correctly
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13
-- **Next planned milestone**: M13-W3 (child-scoped data APIs) — pending
-  explicit approval
+- **Next planned milestone**: M13-W4 (guardian UI) — pending explicit
+  approval
 
 ## 15. Future Roadmap
 
@@ -1035,8 +1080,8 @@ milestone (see roadmap).
   queue UI, cutover + production hardening
 
 **IN PROGRESS**
-- M13 Guardian Portal (W1–W2 complete; W3–W5 pending approval:
-  child-scoped data APIs, guardian UI, hardening)
+- M13 Guardian Portal (W1–W3 complete; W4–W5 pending approval:
+  guardian UI, hardening)
 
 **PLANNED**
 - Guardian/parent portal (M13, per decision O5); payments afterward

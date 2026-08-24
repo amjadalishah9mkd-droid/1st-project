@@ -554,6 +554,14 @@ export class ExamsService {
     if (!student) {
       throw new NotFoundException({ code: 'NOT_FOUND', message: 'Student not found' });
     }
+    // M13-W3: CHILD scope — an ACTIVE GuardianLink to exactly this
+    // profile, verified by PolicyService (never by client input).
+    if (scope === 'CHILD') {
+      const allowed = await this.policy.can(user, 'results.read', {
+        studentProfileId,
+      });
+      if (!allowed) throw forbidden();
+    }
     if (scope === 'ASSIGNED') {
       const shared = await this.prisma.enrollment.findFirst({
         where: {

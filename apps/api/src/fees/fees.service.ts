@@ -330,10 +330,26 @@ export class FeesService {
     if (!scope) throw forbidden();
     await this.applyOverdueTransitions(user.collegeId);
 
+    // M13-W3: CHILD scope requires an explicit child and an ACTIVE link.
+    if (scope === 'CHILD') {
+      if (!query.studentId) {
+        throw new BadRequestException({
+          code: 'MISSING_TARGET',
+          message: 'Provide studentId',
+        });
+      }
+      const allowed = await this.policy.can(user, 'fees.read', {
+        studentProfileId: query.studentId,
+      });
+      if (!allowed) throw forbidden();
+    }
+
     const where: Prisma.InvoiceWhereInput = {
       collegeId: user.collegeId,
       ...(query.status ? { status: query.status as never } : {}),
-      ...(query.studentId && scope === 'ALL' ? { studentId: query.studentId } : {}),
+      ...(query.studentId && (scope === 'ALL' || scope === 'CHILD')
+        ? { studentId: query.studentId }
+        : {}),
       ...(scope === 'OWN' ? { student: { userId: user.id } } : {}),
       ...(query.q
         ? {
@@ -387,6 +403,16 @@ export class FeesService {
     });
     if (!row) {
       throw new NotFoundException({ code: 'NOT_FOUND', message: 'Invoice not found' });
+    }
+    // M13-W3: CHILD scope — the invoice must belong to a linked child;
+    // anything else is indistinguishable from a nonexistent invoice.
+    if (scope === 'CHILD') {
+      const allowed = await this.policy.can(user, 'fees.read', {
+        studentProfileId: row.studentId,
+      });
+      if (!allowed) {
+        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Invoice not found' });
+      }
     }
     return {
       ...toInvoiceItem(row),

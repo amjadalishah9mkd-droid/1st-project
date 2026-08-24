@@ -381,7 +381,7 @@ export class AttendanceService {
 
     if (query.sectionId) {
       // Per-student breakdown for one section.
-      if (scope === 'OWN') throw forbidden();
+      if (scope === 'OWN' || scope === 'CHILD') throw forbidden();
       if (scope === 'ASSIGNED') {
         const allowed = await this.policy.can(user, 'attendance.read', {
           sectionId: query.sectionId,
@@ -408,6 +408,13 @@ export class AttendanceService {
         code: 'MISSING_TARGET',
         message: 'Provide studentId or sectionId',
       });
+    }
+    // M13-W3: CHILD scope — PolicyService verifies the ACTIVE link.
+    if (scope === 'CHILD') {
+      const allowed = await this.policy.can(user, 'attendance.read', {
+        studentProfileId,
+      });
+      if (!allowed) throw forbidden();
     }
     if (scope === 'ASSIGNED') {
       const shared = await this.prisma.enrollment.findFirst({

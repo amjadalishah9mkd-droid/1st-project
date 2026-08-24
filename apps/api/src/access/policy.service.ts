@@ -162,6 +162,12 @@ export class PolicyService {
     user: AuthenticatedUser,
     context: ResourceContext,
   ): Promise<boolean> {
+    if (context.studentProfileId === undefined) {
+      // List-level access (guard has no target yet): mirror checkOwn —
+      // the owning service MUST re-invoke can() with the concrete
+      // studentProfileId before returning any data (M13-W3 contract).
+      return true;
+    }
     if (!context.studentProfileId) return false;
     const link = await this.prisma.guardianLink.findFirst({
       where: {

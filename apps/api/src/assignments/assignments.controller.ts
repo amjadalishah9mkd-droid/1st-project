@@ -29,6 +29,8 @@ import type { AuthenticatedUser } from '../access/authenticated-user';
 
 const listQuerySchema = paginationQuerySchema.extend({
   sectionId: z.string().optional(),
+  // M13-W3: CHILD-scoped callers name the linked child explicitly.
+  studentId: z.string().optional(),
 });
 
 @Controller()

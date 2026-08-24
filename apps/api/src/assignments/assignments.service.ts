@@ -117,10 +117,25 @@ export class AssignmentsService {
    */
   async list(
     user: AuthenticatedUser,
-    query: PaginationQuery & { sectionId?: string },
+    query: PaginationQuery & { sectionId?: string; studentId?: string },
   ): Promise<{ data: AssignmentItem[]; meta: PageMeta }> {
     const scope = await this.policy.scopeFor(user, 'assignments.read');
     if (!scope) throw forbidden();
+
+    // M13-W3: CHILD scope — read-only view of a linked child's published
+    // assignments; the link is verified by PolicyService per request.
+    if (scope === 'CHILD') {
+      if (!query.studentId) {
+        throw new BadRequestException({
+          code: 'MISSING_TARGET',
+          message: 'Provide studentId',
+        });
+      }
+      const allowed = await this.policy.can(user, 'assignments.read', {
+        studentProfileId: query.studentId,
+      });
+      if (!allowed) throw forbidden();
+    }
 
     const where: Prisma.AssignmentWhereInput = {
       section: { collegeId: user.collegeId },
@@ -143,6 +158,17 @@ export class AssignmentsService {
               collegeId: user.collegeId,
               enrollments: {
                 some: { student: { userId: user.id }, status: 'ACTIVE' },
+              },
+            },
+          }
+        : {}),
+      ...(scope === 'CHILD'
+        ? {
+            publishedAt: { not: null }, // published only, like OWN
+            section: {
+              collegeId: user.collegeId,
+              enrollments: {
+                some: { studentId: query.studentId, status: 'ACTIVE' },
               },
             },
           }

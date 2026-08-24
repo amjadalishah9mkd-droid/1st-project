@@ -208,8 +208,13 @@ describe('M13-W1 — guardian foundation', () => {
           studentProfileId: otherChild.id,
         }),
       ).toBe(false);
-      // Missing context never grants.
-      expect(await policy.can(user, 'results.read', {})).toBe(false);
+      // M13-W3: missing context is list-level (mirrors OWN) — the guard
+      // passes and the owning service MUST re-verify the concrete child.
+      expect(await policy.can(user, 'results.read', {})).toBe(true);
+      // An explicit-but-empty target still never grants.
+      expect(
+        await policy.can(user, 'results.read', { studentProfileId: '' }),
+      ).toBe(false);
     });
 
     it('REVOKED links lose access immediately', async () => {

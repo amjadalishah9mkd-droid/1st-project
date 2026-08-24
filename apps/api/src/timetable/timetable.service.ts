@@ -87,7 +87,34 @@ export class TimetableService {
     }
 
     let where: Prisma.TimetableSlotWhereInput;
-    if (view.startsWith('section:')) {
+    if (view.startsWith('student:')) {
+      // M13-W3: guardian view of a linked child's timetable. PolicyService
+      // CHILD check is the sole authorizer; staff with ALL pass too.
+      const studentProfileId = view.slice('student:'.length);
+      if (readScope !== 'ALL') {
+        // Only CHILD scope (guardians) may name another student; OWN and
+        // ASSIGNED callers must use view=me / section:<id>.
+        const allowed =
+          readScope === 'CHILD' &&
+          (await this.policy.can(user, 'timetable.read', {
+            studentProfileId,
+          }));
+        if (!allowed) {
+          throw new ForbiddenException({
+            code: 'FORBIDDEN',
+            message: 'You do not have permission to perform this action',
+          });
+        }
+      }
+      where = {
+        section: {
+          collegeId: user.collegeId,
+          enrollments: {
+            some: { studentId: studentProfileId, status: 'ACTIVE' },
+          },
+        },
+      };
+    } else if (view.startsWith('section:')) {
       const sectionId = view.slice('section:'.length);
       const academicsScope = await this.policy.scopeFor(user, 'academics.read');
       where = {

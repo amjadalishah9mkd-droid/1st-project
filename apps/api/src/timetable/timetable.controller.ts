@@ -25,7 +25,10 @@ import type { AuthenticatedUser } from '../access/authenticated-user';
 const viewQuerySchema = z.object({
   view: z
     .string()
-    .regex(/^(me|section:[\w-]+)$/, 'view must be me or section:<id>')
+    .regex(
+      /^(me|section:[\w-]+|student:[\w-]+)$/,
+      'view must be me, section:<id> or student:<id>',
+    )
     .default('me'),
 });
 
