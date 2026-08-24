@@ -35,6 +35,7 @@ const IMPLEMENTED_ROUTES: Array<{ href: string; label: string }> = [
   { href: '/moderation', label: 'Moderation' },
   { href: '/verification', label: 'Verification' },
   { href: '/settings', label: 'Settings' },
+  { href: '/audit', label: 'Audit log' },
   // M9: settings + dashboards polish
 ];
 

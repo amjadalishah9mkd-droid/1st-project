@@ -112,7 +112,8 @@ Principles applied consistently from M0 onward:
 | M11-W7 | Cutover + production hardening | `f9632a4` |
 | M12-W1 | Email foundation | `cd0005c` |
 | M12-W2 | Notification email channel + opt-out | `3433959` |
-| M12-W3 | Report cards & CSV exports | *(this commit)* |
+| M12-W3 | Report cards & CSV exports | `0adaad2` |
+| M12-W4 | Admin audit log viewer | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -662,6 +663,33 @@ admin CSV exports — with zero schema changes.
   published exams, report card rendered with real marks/grades/totals
   and print chrome-hiding CSS in place; production images rebuilt.
 
+### M12-W4 — Admin audit log viewer
+**Goal:** give admins a read-only window into the audit trail the
+platform has been writing since M0 — completing the M12 scope.
+
+- **Permission (decision B1):** new `audit.read` (ADMIN/ALL) in the
+  shared catalog/matrix/route map — seeded idempotently, **no
+  migration** (still 6). First read surface for AuditLog; the write path
+  (`AuditService.log`) is untouched.
+- **API:** `GET /audit` (the module's only route — read-only by
+  construction): tenant-scoped, newest-first (rides the
+  `[collegeId, createdAt]` index), filters for action prefix, actorId,
+  inclusive from/to date window, and `q` (action substring or exact
+  targetId); standard `{data, meta}` pagination; actor joined
+  (SetNull-safe: system entries render actor-less).
+- **Frontend:** `/audit` page — static category-prefix filter (decision
+  B3), date inputs, search, badge-toned action column, actor/target/
+  metadata columns, row-click metadata detail dialog (decision B2);
+  "Audit log" nav entry via the shared route map.
+- **Tests: 336** (9 new): 401/403 matrix, seeded-grant + route-map
+  contracts, read-only contract (mutation verbs 404/405), newest-first
+  ordering, every filter, pagination slices, and **adversarial tenancy**
+  (rival admin sees only own rows even when filtering by foreign
+  actor/target ids; demo admin can't see rival rows).
+- **Alloy verification:** admin nav entry present; 218 real audit rows
+  listed with pagination; detail dialog rendered actor/target/metadata;
+  teacher and student `GET /audit` → 403.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -773,6 +801,7 @@ reached 141 by the end of M9):
 | M12-W1 | 306 | mail content/absolute links, failure isolation, audit hygiene, header-injection, feature-off |
 | M12-W2 | 314 | per-event email coverage, opt-out semantics, cross-college fan-out isolation, transactional exemption |
 | M12-W3 | 327 | export authorization/tenancy matrices, CSV injection guard, report-card scope pinning |
+| M12-W4 | 336 | audit viewer authorization/read-only contracts, filter matrix, cross-college audit isolation |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -881,14 +910,14 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M12-W3.*
+*Last updated after M12-W4.*
 
-- **Current milestone**: M12-W3 complete (M0–M11 accepted; M12-W4
-  awaiting approval)
-- **Latest commit**: see the M12-W3 milestone commit on branch
+- **Current milestone**: M12-W4 complete — **M12 delivered in full
+  (W1–W4)**; M0–M11 accepted
+- **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
-- **Migrations**: 6 found, database schema up to date (W3 required none)
-- **Tests**: **327/327 passing** (22 suites)
+- **Migrations**: 6 found, database schema up to date (W3/W4 required none)
+- **Tests**: **336/336 passing** (23 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -896,8 +925,8 @@ milestone (see roadmap).
   demo admin/teacher/student logins verified; Google endpoints correctly
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13
-- **Next planned milestone**: M12-W4 (admin audit log viewer) — pending
-  explicit approval
+- **Next planned milestone**: M13 (Guardian Portal, per decision O5) —
+  pending explicit approval
 
 ## 15. Future Roadmap
 
@@ -910,11 +939,10 @@ milestone (see roadmap).
   queue UI, cutover + production hardening
 
 **IN PROGRESS**
-- M12 Communications & Institutional Output (W1–W3 complete; W4 pending
-  approval: audit viewer)
+- (nothing — M12 complete; awaiting explicit authorization for M13)
 
 **PLANNED**
-- Admin audit viewer (M12-W4)
+- Guardian/parent portal (M13, per decision O5); payments afterward
 - Payment gateway integration + accountant functionality
 - Parent/guardian portal
 - Complaint box

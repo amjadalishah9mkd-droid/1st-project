@@ -415,7 +415,17 @@ reminders, attendance) intentionally do not email.
   spreadsheet formula injection. Exports are capped at 50,000 rows
   (HTTP 413 `EXPORT_TOO_LARGE` — narrow the filters).
 
-## 20. Rollback procedure
+## 20. Audit log viewer (M12-W4)
+
+Admins with `audit.read` (ADMIN/ALL by default) can review the college's
+security audit trail at `/audit`: authentication events, verification
+decisions, settings/preference changes, mail delivery outcomes, exports
+and moderation actions — newest first, filterable by category, date
+window, actor and target id, with a per-entry metadata detail view. The
+viewer is strictly read-only (the module exposes no mutation routes) and
+tenant-scoped; audit rows are never purged.
+
+## 21. Rollback procedure
 
 1. `git checkout <previous-release-tag>` and rebuild images.
 2. If the bad release included a migration: restore the pre-deploy database

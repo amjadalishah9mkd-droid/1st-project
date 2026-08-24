@@ -36,6 +36,7 @@ export const PERMISSIONS = {
   SETTINGS_MANAGE: 'settings.manage',
   VERIFICATION_MANAGE: 'verification.manage',
   VERIFICATION_SUBMIT: 'verification.submit',
+  AUDIT_READ: 'audit.read',
   DASHBOARD_ADMIN: 'dashboard.admin',
   DASHBOARD_TEACHER: 'dashboard.teacher',
   DASHBOARD_STUDENT: 'dashboard.student',
@@ -76,6 +77,7 @@ export const PERMISSION_DESCRIPTIONS: Record<PermissionKey, string> = {
     'Review student identity claims, view verification evidence and decide approvals',
   'verification.submit':
     'Submit and manage own student identity verification claim',
+  'audit.read': 'View the college security audit log',
   'dashboard.admin': 'View the admin dashboard',
   'dashboard.teacher': 'View the teacher dashboard',
   'dashboard.student': 'View the student dashboard',
@@ -120,6 +122,7 @@ export const ROLE_PERMISSION_MATRIX: RolePermissionGrant[] = [
   { role: 'ADMIN', permission: 'announcements.create', scope: 'ALL' },
   { role: 'ADMIN', permission: 'settings.manage', scope: 'ALL' },
   { role: 'ADMIN', permission: 'verification.manage', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'audit.read', scope: 'ALL' },
   { role: 'ADMIN', permission: 'dashboard.admin', scope: 'ALL' },
 
   // ── TEACHER ────────────────────────────────────────────
@@ -177,6 +180,7 @@ export const ROUTE_PERMISSIONS: Record<string, PermissionKey | null> = {
   '/community': 'community.participate',
   '/moderation': 'moderation.act',
   '/verification': 'verification.manage',
+  '/audit': 'audit.read',
   '/announcements': null,
   '/notifications': null,
   '/settings': 'settings.manage',
