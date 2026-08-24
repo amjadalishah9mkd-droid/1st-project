@@ -15,6 +15,7 @@ import type {
   LoginInput,
   MePayload,
   PermissionKey,
+  PermissionScope,
 } from '@campusos/shared';
 import { apiFetch, ApiError } from '@/lib/api/client';
 import { setAccessToken } from '@/lib/auth/token-store';
@@ -27,6 +28,12 @@ interface SessionState {
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   hasPermission: (key: PermissionKey) => boolean;
+  /**
+   * Resolved scope for a granted permission (undefined when not granted).
+   * Used only as a NAVIGATION hint (e.g. CHILD-scoped grants surface under
+   * /children instead of the generic pages) — never as authorization.
+   */
+  scopeOf: (key: PermissionKey) => PermissionScope | undefined;
 }
 
 const SessionContext = createContext<SessionState | null>(null);
@@ -113,9 +120,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     [user],
   );
 
+  const scopeOf = useCallback(
+    (key: PermissionKey) =>
+      user?.permissions.find((grant) => grant.key === key)?.scope,
+    [user],
+  );
+
   const value = useMemo(
-    () => ({ user, status, login, logout, refreshUser, hasPermission }),
-    [user, status, login, logout, refreshUser, hasPermission],
+    () => ({ user, status, login, logout, refreshUser, hasPermission, scopeOf }),
+    [user, status, login, logout, refreshUser, hasPermission, scopeOf],
   );
 
   return (

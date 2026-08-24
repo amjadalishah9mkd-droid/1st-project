@@ -13,7 +13,7 @@ import { navItemsFor } from './navigation';
  * the session's resolved grants — never from role names in UI code.
  */
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { user, status, logout, hasPermission } = useSession();
+  const { user, status, logout, hasPermission, scopeOf } = useSession();
   const pathname = usePathname();
   const router = useRouter();
   const [unread, setUnread] = useState<number | null>(null);
@@ -62,7 +62,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return null;
   }
 
-  const items = navItemsFor(hasPermission);
+  const items = navItemsFor(hasPermission, scopeOf);
   const initials =
     `${user.firstName[0] ?? ''}${user.lastName[0] ?? ''}`.toUpperCase();
 

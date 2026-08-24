@@ -1,4 +1,4 @@
-import type { PermissionKey } from '@campusos/shared';
+import type { PermissionKey, PermissionScope } from '@campusos/shared';
 import { ROUTE_PERMISSIONS } from '@campusos/shared';
 
 export interface NavItem {
@@ -19,6 +19,7 @@ export interface NavItem {
  */
 const IMPLEMENTED_ROUTES: Array<{ href: string; label: string }> = [
   { href: '/dashboard', label: 'Dashboard' },
+  { href: '/children', label: 'My children' }, // M13-W4 guardian portal
   { href: '/students', label: 'Students' },
   { href: '/teachers', label: 'Teachers' },
   { href: '/departments', label: 'Departments' },
@@ -41,10 +42,22 @@ const IMPLEMENTED_ROUTES: Array<{ href: string; label: string }> = [
 
 export function navItemsFor(
   hasPermission: (key: PermissionKey) => boolean,
+  scopeOf?: (key: PermissionKey) => PermissionScope | undefined,
 ): NavItem[] {
   return IMPLEMENTED_ROUTES.flatMap(({ href, label }) => {
     const permission = ROUTE_PERMISSIONS[href];
     if (permission !== null && permission !== undefined && !hasPermission(permission)) {
+      return [];
+    }
+    // M13-W4: CHILD-scoped grants (guardians) are served by the /children
+    // pages — hide the generic OWN/staff pages for those permissions. This
+    // is a navigation hint derived from the resolved grant scope, not a
+    // role check; the API remains the authorization boundary.
+    if (
+      permission !== null &&
+      permission !== undefined &&
+      scopeOf?.(permission) === 'CHILD'
+    ) {
       return [];
     }
     return [{ href, label, permission: permission ?? null }];

@@ -117,7 +117,8 @@ Principles applied consistently from M0 onward:
 | M13-H0 | Post-M12 hardening (F1/F4) | `d55a3d5` |
 | M13-W1 | Guardian foundation | `8a8e698` |
 | M13-W2 | Guardian onboarding & link lifecycle | `a1d14e9` |
-| M13-W3 | Child-scoped data APIs | *(this commit)* |
+| M13-W3 | Child-scoped data APIs | `7d1e541` |
+| M13-W4 | Guardian portal UI | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -826,6 +827,45 @@ scope, with the ACTIVE GuardianLink as the sole authorizer.
   the linked child → admin revoke → immediate 403; smoke data purged,
   demo accounts untouched.
 
+### M13-W4 — Guardian portal UI
+**Goal:** a real guardian-facing portal on top of the W3 CHILD APIs —
+zero new backend, zero new authorization logic in the frontend.
+
+- **Guardian dashboard branch** in the existing permission-dispatched
+  dashboard (`hasPermission('dashboard.guardian')` — no role names): one
+  card per ACTIVE child (identity, department, relationship) with
+  attendance %, latest published result and fee balance assembled
+  client-side from the three CHILD APIs; each stat degrades to "—"
+  independently on failure; clean empty state for zero links.
+- **`/children`** — the child list straight from `GET /guardian/children`
+  (ACTIVE links only, server-side; no id inputs anywhere in the UI).
+- **`/children/[profileId]`** — tabbed detail (Overview / Attendance /
+  Results / Fees / Timetable / Assignments), each tab a read-only view
+  over its W3 endpoint (`?studentId=` / `view=student:<id>`). The child's
+  identity resolves from the caller's own `/guardian/children`; an
+  unlinked/revoked/bogus id gets a "Child not available" state (and every
+  data call would 403 regardless). Results reuse the exam-grouped card
+  layout and link to the existing `/results/report/[examId]?studentId=`
+  print route. 403/404 responses render as a friendly "not available"
+  error state.
+- **Navigation:** `/children` ("My children") added to the shared
+  implemented-routes list; a new `scopeOf` hint from the session's
+  resolved grants hides generic pages whose grant scope is CHILD (the
+  guardian's data lives under /children). This is grant-scope-driven —
+  no `user.role` conditionals; admin/teacher/student navs are unchanged
+  (their scopes are ALL/ASSIGNED/OWN).
+- **No backend changes**, no migration (still 7), no W5 hardening, no
+  payments/submissions/exports — the portal is read-only by construction.
+- **Alloy walkthrough:** guardian login → dashboard child card (100%
+  attendance, Midterm 92.5%, fee balance) → /children → detail →
+  all six tabs live → report card print view → /students redirected to
+  /dashboard → bogus /children/<id> "Child not available" → admin
+  revoked the link from the Guardians card → guardian dashboard showed
+  the empty state and the child page denied → student demo nav/dashboard
+  unchanged → walkthrough data purged.
+- **Tests: 379** (unchanged — the repo has no frontend test harness; the
+  W3 suite already pins every API contract these pages consume).
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1053,7 +1093,7 @@ milestone (see roadmap).
 
 *Last updated after M12-W4.*
 
-- **Current milestone**: M13-W3 complete (M0–M12 + H0 accepted; W4+
+- **Current milestone**: M13-W4 complete (M0–M12 + H0 accepted; W5
   awaiting approval)
 - **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
@@ -1066,8 +1106,8 @@ milestone (see roadmap).
   demo admin/teacher/student logins verified; Google endpoints correctly
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13
-- **Next planned milestone**: M13-W4 (guardian UI) — pending explicit
-  approval
+- **Next planned milestone**: M13-W5 (guardian hardening + docs) —
+  pending explicit approval
 
 ## 15. Future Roadmap
 
@@ -1080,8 +1120,7 @@ milestone (see roadmap).
   queue UI, cutover + production hardening
 
 **IN PROGRESS**
-- M13 Guardian Portal (W1–W3 complete; W4–W5 pending approval:
-  guardian UI, hardening)
+- M13 Guardian Portal (W1–W4 complete; W5 pending approval: hardening)
 
 **PLANNED**
 - Guardian/parent portal (M13, per decision O5); payments afterward

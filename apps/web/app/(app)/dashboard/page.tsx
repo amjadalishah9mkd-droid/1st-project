@@ -4,6 +4,10 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import type {
   AdminDashboard,
+  AttendanceSummaryResponse,
+  GuardianChildItem,
+  InvoiceItem,
+  ResultsResponse,
   StudentDashboard,
   TeacherDashboard,
   TodaySessionInfo,
@@ -11,7 +15,7 @@ import type {
 import { apiFetch, ApiError } from '@/lib/api/client';
 import { formatAmount, formatDateTime } from '@/lib/format';
 import { useSession } from '@/components/providers/session-provider';
-import { ErrorState, Skeleton } from '@/components/data/data-table';
+import { EmptyState, ErrorState, Skeleton } from '@/components/data/data-table';
 import { Badge } from '@/components/ui/badge';
 
 /** Role dashboards (M9) — every number is a live API aggregate. */
@@ -20,6 +24,7 @@ export default function DashboardPage() {
   if (!user) return null;
   if (hasPermission('dashboard.admin')) return <AdminView name={user.firstName} />;
   if (hasPermission('dashboard.teacher')) return <TeacherView name={user.firstName} />;
+  if (hasPermission('dashboard.guardian')) return <GuardianView name={user.firstName} />;
   return <StudentView name={user.firstName} />;
 }
 
@@ -314,6 +319,190 @@ function StudentView({ name }: { name: string }) {
           <span className="text-ink-muted">· {formatDateTime(data.nextEvent.startsAt)}</span>
         </Link>
       ) : null}
+    </div>
+  );
+}
+
+// ── Guardian (M13-W4) ────────────────────────────────────────
+
+interface ChildOverviewStats {
+  attendancePct: number | null;
+  latestExam: { title: string; percentage: number | null; band: string | null } | null;
+  feeBalance: number | null;
+  feeOverdue: boolean;
+}
+
+/**
+ * Per-child overview assembled client-side from the W3 CHILD-scoped APIs —
+ * no new backend aggregation. Each fetch is independent; a failure in one
+ * stat degrades to "—" instead of breaking the card.
+ */
+function useChildStats(studentProfileId: string): ChildOverviewStats | null {
+  const [stats, setStats] = useState<ChildOverviewStats | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      apiFetch<AttendanceSummaryResponse>(
+        `/attendance/summary?studentId=${studentProfileId}`,
+      ).then(
+        (r) => r.data,
+        () => null,
+      ),
+      apiFetch<ResultsResponse>(`/results?studentId=${studentProfileId}`).then(
+        (r) => r.data,
+        () => null,
+      ),
+      apiFetch<InvoiceItem[]>(`/fees/invoices?studentId=${studentProfileId}`).then(
+        (r) => r.data,
+        () => null,
+      ),
+    ]).then(([attendance, results, invoices]) => {
+      if (cancelled) return;
+      let attendancePct: number | null = null;
+      if (attendance && attendance.kind === 'student') {
+        const held = attendance.sections.reduce((sum, s) => sum + s.held, 0);
+        const present = attendance.sections.reduce(
+          (sum, s) => sum + s.present + s.late,
+          0,
+        );
+        attendancePct = held > 0 ? Math.round((present / held) * 1000) / 10 : null;
+      }
+      let latestExam: ChildOverviewStats['latestExam'] = null;
+      if (results && results.rows.length > 0) {
+        const lastRow = results.rows[results.rows.length - 1];
+        const examRows = results.rows.filter((row) => row.examId === lastRow.examId);
+        const obtained = examRows.reduce((sum, r) => sum + Number(r.marksObtained), 0);
+        const max = examRows.reduce((sum, r) => sum + Number(r.maxMarks), 0);
+        latestExam = {
+          title: lastRow.examTitle,
+          percentage: max > 0 ? Math.round((obtained / max) * 1000) / 10 : null,
+          band: results.overall.bandLabel,
+        };
+      }
+      let feeBalance: number | null = null;
+      let feeOverdue = false;
+      if (invoices) {
+        feeBalance = invoices
+          .filter((invoice) => invoice.status !== 'CANCELLED')
+          .reduce((sum, invoice) => sum + Number(invoice.balance), 0);
+        feeOverdue = invoices.some((invoice) => invoice.status === 'OVERDUE');
+      }
+      setStats({ attendancePct, latestExam, feeBalance, feeOverdue });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [studentProfileId]);
+  return stats;
+}
+
+function GuardianChildCard({ child }: { child: GuardianChildItem }) {
+  const stats = useChildStats(child.studentProfileId);
+  return (
+    <section className="rounded-card border border-line bg-surface-raised p-5 shadow-card transition-colors hover:border-brand-300">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold tracking-tight">
+            {child.firstName} {child.lastName}
+          </h2>
+          <p className="mt-0.5 text-xs text-ink-muted">
+            {child.departmentName} · Batch {child.batch}
+          </p>
+          <p className="font-mono text-xs text-ink-muted">
+            Roll {child.rollNo} · Adm {child.admissionNo}
+          </p>
+        </div>
+        <Badge tone="brand">{child.relationship}</Badge>
+      </div>
+
+      <dl className="mt-4 grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
+        <div className="rounded-lg bg-surface px-3 py-2">
+          <dt className="text-xs text-ink-muted">Attendance</dt>
+          <dd
+            className={`mt-0.5 font-semibold ${
+              stats?.attendancePct != null && stats.attendancePct < 75
+                ? 'text-danger-700'
+                : stats?.attendancePct != null
+                  ? 'text-success-700'
+                  : ''
+            }`}
+          >
+            {stats === null ? '…' : stats.attendancePct === null ? '—' : `${stats.attendancePct}%`}
+          </dd>
+        </div>
+        <div className="rounded-lg bg-surface px-3 py-2">
+          <dt className="text-xs text-ink-muted">Latest result</dt>
+          <dd className="mt-0.5 font-semibold">
+            {stats === null
+              ? '…'
+              : stats.latestExam === null
+                ? '—'
+                : `${stats.latestExam.title}${
+                    stats.latestExam.percentage === null
+                      ? ''
+                      : ` · ${stats.latestExam.percentage}%`
+                  }`}
+          </dd>
+        </div>
+        <div className="rounded-lg bg-surface px-3 py-2">
+          <dt className="text-xs text-ink-muted">Fee balance</dt>
+          <dd
+            className={`mt-0.5 font-semibold ${
+              stats?.feeOverdue ? 'text-danger-700' : ''
+            }`}
+          >
+            {stats === null
+              ? '…'
+              : stats.feeBalance === null
+                ? '—'
+                : formatAmount(stats.feeBalance)}
+            {stats?.feeOverdue ? ' · overdue' : ''}
+          </dd>
+        </div>
+      </dl>
+
+      <div className="mt-4">
+        <Link
+          href={`/children/${child.studentProfileId}`}
+          className="text-sm font-medium text-brand-700 hover:underline"
+        >
+          View {child.firstName}&rsquo;s details →
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+function GuardianView({ name }: { name: string }) {
+  const { data, error, load } = useDashboard<GuardianChildItem[]>('/guardian/children');
+  if (error) return <ErrorState message={error} onRetry={load} />;
+  if (!data) return <Skeleton rows={6} />;
+
+  return (
+    <div className="mx-auto flex max-w-5xl flex-col gap-6">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Welcome, {name}</h1>
+        <p className="mt-1 text-sm text-ink-secondary">
+          {data.length === 0
+            ? 'Your guardian account is active.'
+            : `An overview of ${data.length === 1 ? 'your child' : 'your children'} at a glance.`}
+        </p>
+      </div>
+
+      {data.length === 0 ? (
+        <div className="rounded-card border border-line bg-surface-raised shadow-card">
+          <EmptyState
+            title="No linked children"
+            message="When the college links a student to your account, their information appears here."
+          />
+        </div>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {data.map((child) => (
+            <GuardianChildCard key={child.studentProfileId} child={child} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
