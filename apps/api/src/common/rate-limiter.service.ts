@@ -34,12 +34,17 @@ export const RATE_POLICIES = {
 
 export type RatePolicyName = keyof typeof RATE_POLICIES;
 
+/** F2: sweep fully-expired buckets at most this often (lazy, in-band). */
+const PRUNE_INTERVAL_MS = 5 * 60_000;
+
 @Injectable()
 export class RateLimiterService {
   private buckets = new Map<string, number[]>();
+  private lastPruneAt = Date.now();
 
   /** Throws the standard RATE_LIMITED envelope (429) when over policy. */
   assert(policy: RatePolicyName, key: string): void {
+    this.maybePrune();
     const { limit, windowMs } = RATE_POLICIES[policy];
     const now = Date.now();
     const bucketKey = `${policy}:${key}`;
@@ -58,6 +63,37 @@ export class RateLimiterService {
     }
     hits.push(now);
     this.buckets.set(bucketKey, hits);
+  }
+
+  /**
+   * F2 (M13-W5): drop buckets whose every hit is outside its policy window.
+   * Without this, one-off keys (e.g. per-IP token-endpoint hits) accumulate
+   * forever on long uptimes. Runs lazily inside assert() at most once per
+   * PRUNE_INTERVAL_MS — no timers, no behavior change for live buckets.
+   */
+  private maybePrune(now = Date.now()): void {
+    if (now - this.lastPruneAt < PRUNE_INTERVAL_MS) return;
+    this.prune(now);
+  }
+
+  /** Exposed for tests; prunes immediately regardless of the interval. */
+  prune(now = Date.now()): void {
+    this.lastPruneAt = now;
+    for (const [bucketKey, hits] of this.buckets) {
+      const policy = bucketKey.slice(
+        0,
+        bucketKey.indexOf(':'),
+      ) as RatePolicyName;
+      const windowMs = RATE_POLICIES[policy]?.windowMs ?? 60 * 60_000;
+      if (!hits.some((t) => now - t < windowMs)) {
+        this.buckets.delete(bucketKey);
+      }
+    }
+  }
+
+  /** Test hook: number of live bucket keys (F2 regression coverage). */
+  bucketCount(): number {
+    return this.buckets.size;
   }
 
   /** Test hook (mirrors LoginRateLimiterService.reset). */

@@ -610,6 +610,27 @@ export class AssignmentsService {
               },
             }
           : {}),
+        // M13-W5: CHILD scope — published assignments in sections where an
+        // ACTIVE-linked child of this guardian is enrolled. The link is the
+        // authorizer (no client input); everything else reads as NOT_FOUND.
+        ...(scope === 'CHILD'
+          ? {
+              publishedAt: { not: null },
+              section: {
+                collegeId: user.collegeId,
+                enrollments: {
+                  some: {
+                    status: 'ACTIVE',
+                    student: {
+                      guardianLinks: {
+                        some: { guardianUserId: user.id, status: 'ACTIVE' },
+                      },
+                    },
+                  },
+                },
+              },
+            }
+          : {}),
       },
       include: assignmentInclude,
     });

@@ -118,7 +118,8 @@ Principles applied consistently from M0 onward:
 | M13-W1 | Guardian foundation | `8a8e698` |
 | M13-W2 | Guardian onboarding & link lifecycle | `a1d14e9` |
 | M13-W3 | Child-scoped data APIs | `7d1e541` |
-| M13-W4 | Guardian portal UI | *(this commit)* |
+| M13-W4 | Guardian portal UI | `789e123` |
+| M13-W5 | Guardian hardening & M13 close-out | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -866,6 +867,50 @@ zero new backend, zero new authorization logic in the frontend.
 - **Tests: 379** (unchanged — the repo has no frontend test harness; the
   W3 suite already pins every API contract these pages consume).
 
+### M13-W5 — Guardian hardening, operations & final M13 verification
+**Goal:** inspect-first close-out of M13. The full-surface audit found
+two CHILD-scope gaps that W3's five-surface mandate had not covered,
+both fixed with link-driven filters (no role conditionals):
+
+- **P1 `GET /assignments/:id`** — `findScoped` had no CHILD branch, so a
+  guardian could read any same-college assignment detail **including
+  unpublished drafts** (description/attachments). Now CHILD resolves to
+  *published assignments in sections where an ACTIVE-linked child of the
+  caller is enrolled*; everything else is 404.
+- **P1 `GET /sections/:id/sessions`** — CHILD fell through the
+  OWN/ASSIGNED checks and could list session metadata for any
+  same-college section. Closed (403), matching the per-section summary
+  posture; guardians use `/attendance/summary?studentId=` only.
+- **F2 fixed** — RateLimiterService now lazily sweeps fully-expired
+  buckets inside `assert()` at most once per 5 minutes (`prune()` +
+  `bucketCount()` test hooks). No timers, no infrastructure, no change
+  for live buckets; regression-covered with mocked clocks.
+- **F3 dispositioned, not changed** — `results.csv` is an admin
+  (resolved-ALL) marks export for a chosen exam and intentionally
+  includes unpublished marks; guardians/students never reach it and
+  their published-only surface is `/results`. Documented in OPERATIONS
+  §19/§21.
+- **Rate limiting reviewed:** invitation/link creation was already
+  covered (20/h/admin); remaining guardian endpoints are cheap
+  authenticated reads or admin-guarded mutations consistent with the
+  rest of the API — no new policies warranted.
+- **Docs:** OPERATIONS §21 replaced with a full guardian runbook
+  (invite/accept/link/login, CHILD semantics, revocation, multi-child/
+  multi-guardian, dormant accounts, rate limits, mail failure,
+  troubleshooting table, security expectations).
+- **Final inspection (clean):** permission matrix (7 GUARDIAN grants,
+  read-only, CHILD/OWN), tenancy double-belts on GuardianLink, audit
+  metadata ids/flags-only, no role-name conditionals in request handling
+  (community `MODERATOR` matches are group-membership roles), token
+  lifecycle unchanged, migrations untouched, no dependency changes.
+- **Tests: 386** (7 new): assignment detail allowed/draft-404/
+  unrelated-404/revoke-404 with student regression, session list 403 for
+  guardians (child's own + unrelated section) with student 200, F2 sweep
+  + lazy-interval behavior.
+
+**M13 COMPLETE** — W1 foundation, W2 onboarding/lifecycle, W3
+child-scoped APIs, W4 portal UI, W5 hardening/close-out.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -983,6 +1028,7 @@ reached 141 by the end of M9):
 | M13-W1 | 348 | GuardianLink constraints, CHILD scope grant/deny/revoke, guardian surface denial matrix |
 | M13-W2 | 363 | onboarding lifecycle, token reissue/replay, cross-college isolation, immediate revocation |
 | M13-W3 | 379 | CHILD-scope IDOR matrix across results/attendance/fees/timetable/assignments, publication boundaries, revocation sweep |
+| M13-W5 | 386 | assignment-detail CHILD gap, session-list CHILD closure, F2 limiter pruning |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1088,17 +1134,20 @@ milestone (see roadmap).
 | Prisma major-version upgrade available | upgrade advisory only | pinned to 5.22 | maintenance window |
 | Backups are documented cron scripts, not shipped automation | doc-only scope of M10-W5 | OPERATIONS.md §6 | future ops work |
 | GPA/transcripts | out of MVP scope | dormant hooks (grade bands, marks) | roadmap |
+| F2 rate-limiter bucket pruning | — | **Resolved in M13-W5** (lazy in-band sweep) | done |
+| F3 `results.csv` includes unpublished marks | intentional: admin ALL-scope marks export; published-only surface is `/results` | documented (OPERATIONS §19/§21) | accepted behavior |
+| Guardian link revoke/list endpoints unlimited | admin-only, state-guarded (409 on repeat), consistent with other admin mutations | reviewed M13-W5, no limit needed | revisit only on abuse evidence |
+| `GET /grade-bands` readable by guardians | college-wide grading config, no PII; grades already visible on results | reviewed M13-W5, acceptable | none |
 
 ## 14. Current System State
 
-*Last updated after M12-W4.*
+*Last updated after M13-W5.*
 
-- **Current milestone**: M13-W4 complete (M0–M12 + H0 accepted; W5
-  awaiting approval)
+- **Current milestone**: **M13 COMPLETE** (W1–W5); M0–M13 all accepted
 - **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 7 found, database schema up to date
-- **Tests**: **379/379 passing** (26 suites)
+- **Tests**: **386/386 passing** (27 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -1106,13 +1155,14 @@ milestone (see roadmap).
   demo admin/teacher/student logins verified; Google endpoints correctly
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13
-- **Next planned milestone**: M13-W5 (guardian hardening + docs) —
-  pending explicit approval
+- **Next planned milestone**: none scheduled — M14+ (payments etc.)
+  requires explicit approval
 
 ## 15. Future Roadmap
 
 **COMPLETED**
 - M0–M9 MVP (foundation → dashboards)
+- **M13 Guardian Portal — complete (W1–W5)**
 - M10 production hardening (W1–W5)
 - **M11 Identity & Student Verification — complete (W1–W7)**: identity
   foundation, Google OIDC core, claims + evidence API, verified student
@@ -1120,7 +1170,7 @@ milestone (see roadmap).
   queue UI, cutover + production hardening
 
 **IN PROGRESS**
-- M13 Guardian Portal (W1–W4 complete; W5 pending approval: hardening)
+(none — M13 closed)
 
 **PLANNED**
 - Guardian/parent portal (M13, per decision O5); payments afterward

@@ -147,6 +147,11 @@ export class AttendanceService {
         select: { id: true },
       });
       if (!enrolled) throw forbidden();
+    } else if (readScope === 'CHILD') {
+      // M13-W5: session lists are a staff/student surface; guardians get
+      // attendance through /attendance/summary?studentId= only (same
+      // posture as the per-section summary breakdown).
+      throw forbidden();
     }
 
     const rows = await this.prisma.classSession.findMany({

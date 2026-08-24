@@ -425,19 +425,92 @@ window, actor and target id, with a per-entry metadata detail view. The
 viewer is strictly read-only (the module exposes no mutation routes) and
 tenant-scoped; audit rows are never purged.
 
-## 21. Guardian accounts (M13)
+## 21. Guardian portal runbook (M13)
 
-Admins (`users.manage`) manage guardians from the student detail page:
-invite by email (creates or links a same-college GUARDIAN account; the
-invitation reuses the standard one-time 48-hour credential link and the
-transactional mailer), list, and revoke. Revocation flips the link to
-REVOKED — access disappears on the guardian's next request because CHILD
-authorization reads ACTIVE links per request. Re-inviting a revoked
-relationship reactivates the same link (audited). Guardians are
-invite-only, read-only, cannot use student password cutover paths, and a
-cross-college guardian needs a separate account per college. Invitations
-are rate-limited (20/hour per admin) and audited
-(`guardian.invited` / `guardian.link_created` / `guardian.link_revoked`).
+### Inviting a guardian
+Admins (`users.manage`) invite guardians from **Students → student detail
+→ Guardians card → Invite guardian** (email + relationship). Server-side
+(`POST /students/:id/guardians`, rate-limited **20/hour per admin**):
+
+- **New email** → a GUARDIAN account is created (unusable password,
+  `mustChangePassword`) together with the link and a one-time 48-hour
+  INVITE token, in a single transaction — a partial guardian cannot
+  exist. The `guardian_invite` mail names the child as "FirstName L."
+  only.
+- **Existing same-college GUARDIAN email** → link-only. Not-yet-onboarded
+  guardians get a token reissue; onboarded ones get a token-less
+  `guardian_link_added` mail.
+- **Existing non-guardian email** → 409 `EMAIL_IN_USE` (no linking staff
+  or student accounts). Suspended guardian → 409 `USER_INACTIVE`.
+  Duplicate ACTIVE link → 409 `LINK_EXISTS`.
+- **Re-inviting a REVOKED relationship** reactivates the *same* link row
+  (full history preserved, audited).
+
+### Acceptance & login
+Invitations ride the standard `/accept-invite` flow (same as staff and
+students): set a password, then sign in at `/login`. Guardians skip the
+student verification flow entirely (no StudentProfile → the onboarding
+hook no-ops). After login they land on the guardian dashboard.
+
+### Child access model (CHILD scope)
+All guardian data access is authorized by **ACTIVE GuardianLink rows**,
+resolved by PolicyService **on every request** — never by role names and
+never by client-supplied ids alone. Guardians hold read-only CHILD-scope
+grants for results (published exams only), attendance summaries, fee
+invoices, timetables and published assignments, plus `guardian.children`
+and `dashboard.guardian`. Everything else — students/teachers directory,
+exports, audit, community, verification, moderation, settings, marks
+entry, payment recording, assignment submission — is refused server-side.
+The portal surfaces are `/dashboard`, `/children` and
+`/children/<profileId>` (Overview / Attendance / Results / Fees /
+Timetable / Assignments tabs, plus the report-card print view).
+
+### Revocation
+**Guardians card → Revoke** flips the link to REVOKED (row kept,
+`revokedAt` stamped, audited). Access dies on the guardian's **next
+request** — no token invalidation is needed because CHILD checks read
+link status live. Repeat revoke → 409 `ALREADY_REVOKED`. The guardian's
+other ACTIVE children are unaffected.
+
+### Multiple children / multiple guardians
+A guardian may be linked to any number of same-college students, and a
+student to any number of guardians; each (guardian, student) pair is one
+link row and each is authorized independently. A guardian for children
+in two colleges needs one account per college (tenancy is absolute:
+links, guardian and child are constrained to one college at creation).
+
+### Dormant guardians
+A guardian whose links are all REVOKED can still log in — they simply
+see the "No linked children" empty state everywhere and can read nothing
+child-related. Suspend the account from the user directory if login
+itself should stop.
+
+### Rate limits & mail failures
+Guardian invitations: 20/hour per admin (429 `RATE_LIMITED`). Mail
+delivery is fire-and-forget: an SMTP failure never fails the invite/link
+operation — the invite URL dialog in the admin UI is the fallback
+delivery path, and mail outcomes are audited.
+
+### Troubleshooting
+| Symptom | Likely cause / fix |
+|---|---|
+| Guardian sees "No linked children" | All links REVOKED, or linked in a different college — check the student's Guardians card. |
+| Invite → 409 `EMAIL_IN_USE` | Email belongs to a staff/student account; use a different guardian email. |
+| Invite → 429 | Admin hit 20/hour; wait for the window. |
+| Guardian invite mail missing | Check SMTP config + audit mail events; reissue via the invite-URL dialog. |
+| "Child not available" on a child page | Link revoked or URL from another account; the API also 403s all data for it. |
+| Guardian still "sees" a child after revoke | Impossible server-side (status read per request); a stale browser tab only shows already-fetched data and every refresh/API call fails. |
+
+### Security expectations
+No role-name conditionals anywhere in request handling; PolicyService +
+seeded grants are the single authorization source. `studentId` query
+parameters never select data by themselves — they are verified against
+an ACTIVE link first. Cross-college ids behave as nonexistent (404).
+CSV exports remain resolved-ALL-scope only; `results.csv` is an **admin
+marks export for a chosen exam and intentionally includes unpublished
+marks** (guardians/students never reach it — their published-only view
+is `/results`). Audit metadata for guardian events carries ids/flags
+only — no emails, names, tokens or URLs.
 
 ## 22. Rollback procedure
 
