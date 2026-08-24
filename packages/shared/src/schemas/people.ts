@@ -66,3 +66,32 @@ export const studentImportRowSchema = z.object({
   departmentCode: z.string().trim().min(1, 'departmentCode is required').max(20),
 });
 export type StudentImportRow = z.infer<typeof studentImportRowSchema>;
+
+/** M13-W2 — guardian invitation (decisions H1–H6). */
+export const inviteGuardianSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Enter a valid email').max(254),
+  relationship: z.string().trim().min(1, 'Relationship is required').max(40),
+});
+export type InviteGuardianInput = z.infer<typeof inviteGuardianSchema>;
+
+export interface GuardianLinkItem {
+  id: string;
+  relationship: string;
+  status: 'ACTIVE' | 'REVOKED';
+  createdAt: string;
+  revokedAt: string | null;
+  guardian: { id: string; firstName: string; lastName: string; email: string };
+  createdBy: { firstName: string; lastName: string } | null;
+}
+
+export interface GuardianChildItem {
+  studentProfileId: string;
+  firstName: string;
+  lastName: string;
+  admissionNo: string;
+  rollNo: string;
+  batch: string;
+  departmentName: string;
+  relationship: string;
+  linkedAt: string;
+}

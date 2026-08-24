@@ -49,7 +49,23 @@ export type MailTemplate =
       dueDate: string;
       url: string;
     }
-  | { kind: 'announcement'; firstName: string; title: string; url: string };
+  | { kind: 'announcement'; firstName: string; title: string; url: string }
+  // M13-W2 — guardian onboarding (H3: child shown as "FirstName L.").
+  | {
+      kind: 'guardian_invite';
+      firstName: string;
+      collegeName: string;
+      studentName: string;
+      inviteUrl: string;
+      expiresAt: string;
+    }
+  | {
+      kind: 'guardian_link_added';
+      firstName: string;
+      collegeName: string;
+      studentName: string;
+      url: string;
+    };
 
 export interface RenderedMail {
   subject: string;
@@ -147,6 +163,25 @@ export function renderMail(template: MailTemplate): RenderedMail {
         ...layout([
           `Hi ${template.firstName},`,
           `A new announcement was published: "${template.title}".`,
+          template.url,
+        ]),
+      };
+    case 'guardian_invite':
+      return {
+        subject: `Activate your ${template.collegeName} guardian account`,
+        ...layout([
+          `Hi ${template.firstName},`,
+          `${template.collegeName} has added you as a guardian of ${template.studentName}. Use the link below to activate your CampusOS guardian account.`,
+          template.inviteUrl,
+          `This one-time link expires ${fmt(template.expiresAt)}.`,
+        ]),
+      };
+    case 'guardian_link_added':
+      return {
+        subject: `You now have guardian access for ${template.studentName}`,
+        ...layout([
+          `Hi ${template.firstName},`,
+          `${template.collegeName} has linked ${template.studentName} to your existing CampusOS guardian account. Sign in to view their information.`,
           template.url,
         ]),
       };

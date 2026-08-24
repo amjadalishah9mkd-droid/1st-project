@@ -115,7 +115,8 @@ Principles applied consistently from M0 onward:
 | M12-W3 | Report cards & CSV exports | `0adaad2` |
 | M12-W4 | Admin audit log viewer | `6a7d712` |
 | M13-H0 | Post-M12 hardening (F1/F4) | `d55a3d5` |
-| M13-W1 | Guardian foundation | *(this commit)* |
+| M13-W1 | Guardian foundation | `8a8e698` |
+| M13-W2 | Guardian onboarding & link lifecycle | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -739,6 +740,48 @@ guardian portal — with zero behavior change for existing roles.
 - **Alloy:** stack healthy; all demo logins unchanged; 7 GUARDIAN grants
   present in the seeded matrix.
 
+### M13-W2 — Guardian onboarding & link lifecycle (decisions H1–H6)
+**Goal:** the complete invite → accept → list → revoke lifecycle, built
+entirely from proven pieces (M10-W2 tokens, M12 mail, W1 CHILD scope).
+
+- **`POST /students/:id/guardians`** (`users.manage`, rate-limited
+  20/h/admin): resolves the student strictly in the admin's college;
+  same-college GUARDIAN email → link-only (reactivating a REVOKED pair
+  reuses the same row, H5; not-yet-onboarded guardians get a token
+  reissue, onboarded ones a token-less `guardian_link_added` mail, H4);
+  non-guardian email → 409 `EMAIL_IN_USE`; suspended guardian → 409
+  `USER_INACTIVE`; duplicates → 409 `LINK_EXISTS` (PG unique authoritative).
+  New guardians: GUARDIAN role, unusable password, mustChangePassword,
+  **one transaction for user + link + INVITE token** — the creation
+  invariant (guardian/profile/link same college) makes cross-tenant links
+  unconstructible via the API. `guardian_invite` mail names the child as
+  "FirstName L." only (H3).
+- **`GET /students/:id/guardians`** — ACTIVE + REVOKED history, newest
+  first, no credential data. **`DELETE …/:linkId`** — guarded
+  ACTIVE→REVOKED with `revokedAt`; repeat → 409 `ALREADY_REVOKED` (H2);
+  row never deleted; CHILD access dies on the next request (verified via
+  a live PolicyService probe flipping true→false across the revoke).
+- **`GET /guardian/children`** (`guardian.children`, H6): the caller's
+  ACTIVE links only — no client-supplied ids exist in the query.
+- **Admin UI (H1):** Guardians card on the student detail page (list with
+  status badges, invite dialog, invite-URL dialog reuse, revoke).
+- **Acceptance:** the existing `/accept-invite` flow needed **zero
+  changes** — guardians ride the password path; the M11 onboarding hook
+  no-ops (no StudentProfile), leaving them LEGACY with no claims.
+- **Audit:** `guardian.invited/link_created/link_revoked` with ids/flags
+  only. **Migration: none** (still 7).
+- **Tests: 363** (15 new): auth matrices, full happy path with mail/audit
+  hygiene, acceptance + replay/expiry/reissue, existing-guardian link-only
+  + token-less mail, EMAIL_IN_USE, LINK_EXISTS, H5 reactivation,
+  cross-college student 404 + College-B email isolation (fresh A-account,
+  B untouched), rate limit 429, SMTP failure isolation, listing incl.
+  rival-admin 404s, revoke semantics + immediate CHILD denial,
+  multi-child/multi-guardian children matrix.
+- **Alloy:** full browser walk — invite from the Guardians card → invite
+  URL dialog → API acceptance → guardian login → `/guardian/children`
+  returned the child → guardian 403 on `/students` → revoke in UI →
+  children list empty immediately; demo regression green; data purged.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -854,6 +897,7 @@ reached 141 by the end of M9):
 | M12-W4 | 336 | audit viewer authorization/read-only contracts, filter matrix, cross-college audit isolation |
 | M13-H0 | 338 | mailer tenant belt (adversarial), real 50k+1 over-cap 413 |
 | M13-W1 | 348 | GuardianLink constraints, CHILD scope grant/deny/revoke, guardian surface denial matrix |
+| M13-W2 | 363 | onboarding lifecycle, token reissue/replay, cross-college isolation, immediate revocation |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -964,12 +1008,12 @@ milestone (see roadmap).
 
 *Last updated after M12-W4.*
 
-- **Current milestone**: M13-W1 complete (guardian foundation; M0–M12 +
-  H0 accepted; W2+ awaiting approval)
+- **Current milestone**: M13-W2 complete (M0–M12 + H0 accepted; W3+
+  awaiting approval)
 - **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 7 found, database schema up to date
-- **Tests**: **348/348 passing** (24 suites)
+- **Tests**: **363/363 passing** (25 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -977,8 +1021,8 @@ milestone (see roadmap).
   demo admin/teacher/student logins verified; Google endpoints correctly
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13
-- **Next planned milestone**: M13-W2 (guardian onboarding/link
-  lifecycle) — pending explicit approval
+- **Next planned milestone**: M13-W3 (child-scoped data APIs) — pending
+  explicit approval
 
 ## 15. Future Roadmap
 
@@ -991,7 +1035,7 @@ milestone (see roadmap).
   queue UI, cutover + production hardening
 
 **IN PROGRESS**
-- M13 Guardian Portal (W1 complete; W2–W5 pending approval: onboarding,
+- M13 Guardian Portal (W1–W2 complete; W3–W5 pending approval:
   child-scoped data APIs, guardian UI, hardening)
 
 **PLANNED**

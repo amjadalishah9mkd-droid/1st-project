@@ -425,7 +425,21 @@ window, actor and target id, with a per-entry metadata detail view. The
 viewer is strictly read-only (the module exposes no mutation routes) and
 tenant-scoped; audit rows are never purged.
 
-## 21. Rollback procedure
+## 21. Guardian accounts (M13)
+
+Admins (`users.manage`) manage guardians from the student detail page:
+invite by email (creates or links a same-college GUARDIAN account; the
+invitation reuses the standard one-time 48-hour credential link and the
+transactional mailer), list, and revoke. Revocation flips the link to
+REVOKED — access disappears on the guardian's next request because CHILD
+authorization reads ACTIVE links per request. Re-inviting a revoked
+relationship reactivates the same link (audited). Guardians are
+invite-only, read-only, cannot use student password cutover paths, and a
+cross-college guardian needs a separate account per college. Invitations
+are rate-limited (20/hour per admin) and audited
+(`guardian.invited` / `guardian.link_created` / `guardian.link_revoked`).
+
+## 22. Rollback procedure
 
 1. `git checkout <previous-release-tag>` and rebuild images.
 2. If the bad release included a migration: restore the pre-deploy database

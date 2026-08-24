@@ -21,6 +21,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { ResetLinkButton } from '@/components/invite-link-dialog';
+import { GuardiansCard } from '@/components/guardians-card';
 
 export default function StudentDetailPage() {
   const params = useParams<{ id: string }>();
@@ -130,6 +131,12 @@ export default function StudentDetailPage() {
           )}
         </section>
       </div>
+
+      {canManage ? (
+        <div className="mt-4">
+          <GuardiansCard studentProfileId={student.id} />
+        </div>
+      ) : null}
 
       {canManage ? (
         <EditStudentDialog

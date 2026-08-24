@@ -28,6 +28,8 @@ export const RATE_POLICIES = {
   fileUpload: { limit: 60, windowMs: 60 * 60_000 },
   /** POST /files/sign — per user (one signature per download click). */
   fileSign: { limit: 300, windowMs: 60_000 },
+  /** POST /students/:id/guardians — per admin user (M13-W2). */
+  guardianInvite: { limit: 20, windowMs: 60 * 60_000 },
 } as const;
 
 export type RatePolicyName = keyof typeof RATE_POLICIES;
