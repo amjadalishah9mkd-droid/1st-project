@@ -126,7 +126,8 @@ Principles applied consistently from M0 onward:
 | M14-W3 | Webhook settlement & verification | `ca5585e` |
 | M14-W4 | Student payment UI | `362cf2d` |
 | M14-W5 | Admin reconciliation | `ad5188b` |
-| M14-W6 | Payments hardening & M14 close-out | *(this commit)* |
+| M14-W6 | Payments hardening & M14 close-out | `e228fd9` |
+| M14-SBX | Real Safepay sandbox verification & adapter fixes | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1209,6 +1210,51 @@ idempotency, W4 student UI, W5 reconciliation, W6 hardening/close-out.
 Remaining before first production payment: merchant onboarding + real
 sandbox walkthrough.
 
+### M14-SBX — Real Safepay sandbox verification (adapter contract fixes)
+**The first genuine end-to-end payment.** Sandbox merchant credentials +
+Cloudflare quick tunnels (public web/API) were provisioned; the real
+provider exposed two contract divergences from its own documentation,
+both fixed as approved one-liners inside the adapter:
+
+1. **Metadata whitelist (LIVE-VERIFIED):** `POST /order/payments/v3/`
+   rejects unknown metadata keys with 500 "unsupported meta key" —
+   `attempt_id` removed; `{order_id, source: 'campusos'}` (both
+   live-verified accepted). Correlation never relied on metadata (the
+   tracker/providerRef is the join key).
+2. **Reporter shape (LIVE-VERIFIED):** `GET /reporter/api/v1/payments/
+   {tracker}` returns the tracker object directly under `data.*`
+   (`data.state`), not the documented `data.tracker.*`. `verifyPayment`
+   now supports both shapes (`report.data?.tracker ?? report.data`),
+   with a unit test pinning each. **Tests: 443.**
+
+**LIVE-VERIFIED against the real sandbox:** credentials/auth header;
+session+TBT creation; hosted checkout rendering **Rs.800.00** for the
+PKR 800 invoice (paisa conversion exact: 80000 sent, `quote_amount
+{PKR, 80000}` reported back); payment completed with official test card
+4456…1005 (frictionless success); provider redirect returned to our
+public URL; **browser authority boundary held** (redirect alone changed
+nothing); tracker genuinely `TRACKER_ENDED`; **admin Verify-with-gateway
+settled the real payment through the W1 core** — attempt SUCCEEDED with
+confirmedAt/paymentId, one Payment(ONLINE, null recorder), invoice
+PAID, exactly one payment.succeeded notification, clean audits,
+reconciliation row, fees.csv `1500,1500,PAID`; repeat verify NO_ACTION
+with one Payment (idempotent). **Declined-card behavior (official
+…1013):** the provider keeps the tracker at `TRACKER_STARTED` for
+retry — CampusOS correctly stays PENDING with zero Payments and no
+invented failure (STILL_PENDING; the 1h TTL expires abandonments; hard
+FAILED comes only from a payment.failed webhook).
+
+**NOT TESTABLE this session (webhook endpoint not yet registered in the
+provider dashboard — no delivery observed):** genuine webhook
+signature/settlement, redelivery/replay, wrong-secret drill,
+payment.failed webhook. Everything webhook-side remains covered by the
+deterministic W3 suite; the missing-webhook recovery path was proven
+against the REAL provider instead. UNRESOLVED at provider: webhook
+retry cadence/event-id stability, settlement timing, fees, limits,
+refund API. SAFEPAY_INTENT: both CYBERSOURCE and MPGS accepted at
+session-create on this merchant; CYBERSOURCE processed the live card
+payment successfully.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1333,6 +1379,7 @@ reached 141 by the end of M9):
 | M14-W3 | 431 | webhook HMAC auth, settle-once idempotency matrix, verify-on-return ownership + truth routing |
 | M14-W5 | 439 | reconciliation authz/tenancy matrix, gateway-verify routing, overpaid visibility, export ONLINE |
 | M14-W6 | 442 | true-concurrency settlement races (manual vs gateway, dual attempts, settle vs fail) |
+| M14-SBX | 443 | reporter dual-shape verifyPayment unit vectors |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1444,7 +1491,7 @@ milestone (see roadmap).
 | Login limiter unbounded memory | — | **Resolved in M14-W0** (lazy sweep, mirrors F2) | done |
 | Guardian section-timetable over-read (P2-GUARD-1) | — | **Resolved in M14-W0** (academics.read scope gate) | done |
 | Ordinary-file signing has no ownership record (P2-IDOR-1) | capability-URL design (random keys); evidence files fully authorized | untouched by design through M14 | when files are next touched |
-| Real Safepay sandbox verification | no merchant credentials available | **pending merchant onboarding** (OPERATIONS §22 lists UNRESOLVED items) | first college onboarding |
+| Real Safepay sandbox verification | — | **Substantially resolved (M14-SBX)**: real payment, decline, paisa, verify-recovery all LIVE-VERIFIED; genuine webhook delivery/replay still pending dashboard endpoint registration | register webhook endpoint |
 | Single global webhook secret (env-only) | V1 decision #7: single-tenant start | per-college gateway config table when a second college onboards | multi-college payments |
 | `GET /grade-bands` readable by guardians | college-wide grading config, no PII; grades already visible on results | reviewed M13-W5, acceptable | none |
 
@@ -1452,11 +1499,11 @@ milestone (see roadmap).
 
 *Last updated after M14-W6.*
 
-- **Current milestone**: **M14 COMPLETE (code-side)**; M0–M14 delivered — real Safepay sandbox verification pending merchant credentials
+- **Current milestone**: **M14 COMPLETE**; real-sandbox payment/verification LIVE-VERIFIED (success, decline, amount authority, recovery); genuine webhook delivery still pending provider-dashboard endpoint registration
 - **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 8 found, database schema up to date
-- **Tests**: **442/442 passing** (33 suites)
+- **Tests**: **443/443 passing** (33 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)

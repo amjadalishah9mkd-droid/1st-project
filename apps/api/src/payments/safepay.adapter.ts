@@ -204,21 +204,24 @@ export class SafepayAdapter implements PaymentGatewayAdapter {
 
   async verifyPayment(providerRef: string): Promise<GatewayVerification> {
     const config = this.requireConfig();
-    const report = await this.request<{
-      data?: {
-        tracker?: {
-          state?: string;
-          purchase_totals?: {
-            quote_amount?: { currency?: string; amount?: number };
-          };
-        };
+    interface TrackerShape {
+      state?: string;
+      purchase_totals?: {
+        quote_amount?: { currency?: string; amount?: number };
       };
+    }
+    const report = await this.request<{
+      // Docs show data.tracker.*; the live API returns data.* directly.
+      data?: TrackerShape & { tracker?: TrackerShape };
     }>(
       config,
       'GET',
       `/reporter/api/v1/payments/${encodeURIComponent(providerRef)}`,
     );
-    const tracker = report.data?.tracker;
+    // LIVE-VERIFIED (2026-08-25, real sandbox): the reporter returns the
+    // tracker object DIRECTLY under data.* (data.state, data.purchase_totals);
+    // the docs show it nested under data.tracker.*. Support both shapes.
+    const tracker = report.data?.tracker ?? report.data;
     if (!tracker?.state) {
       throw new BadGatewayException({
         code: 'GATEWAY_ERROR',

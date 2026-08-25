@@ -396,6 +396,34 @@ describe('M14-W2 — payment initiation endpoint', () => {
       process.env = saved;
     });
 
+    it('verifyPayment supports both the documented (data.tracker.*) and live (data.*) reporter shapes', async () => {
+      const saved = { ...process.env };
+      process.env.SAFEPAY_API_KEY = 'test-key';
+      process.env.SAFEPAY_SECRET_KEY = 'test-secret';
+      const adapter = new SafepayAdapter();
+      const shapes = [
+        // Documented shape (Express Checkout guide).
+        { data: { tracker: { state: 'TRACKER_ENDED', purchase_totals: { quote_amount: { currency: 'PKR', amount: 80000 } } } } },
+        // LIVE-VERIFIED shape (real sandbox, 2026-08-25): tracker fields at data.*.
+        { data: { state: 'TRACKER_ENDED', purchase_totals: { quote_amount: { currency: 'PKR', amount: 80000 } } } },
+      ];
+      const realFetch = global.fetch;
+      try {
+        for (const body of shapes) {
+          global.fetch = (async () =>
+            new Response(JSON.stringify(body), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            })) as typeof fetch;
+          const result = await adapter.verifyPayment('track_test');
+          expect(result).toEqual({ state: 'PAID', amount: '800.00', currency: 'PKR' });
+        }
+      } finally {
+        global.fetch = realFetch;
+        process.env = saved;
+      }
+    });
+
     it('converts PKR to/from the lowest denomination (paisa) exactly', () => {
       expect(toLowestDenomination('3500')).toBe(350000);
       expect(toLowestDenomination('3500.50')).toBe(350050);
