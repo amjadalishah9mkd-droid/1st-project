@@ -117,6 +117,16 @@ export class TimetableService {
     } else if (view.startsWith('section:')) {
       const sectionId = view.slice('section:'.length);
       const academicsScope = await this.policy.scopeFor(user, 'academics.read');
+      // M14-W0 (P2-GUARD-1): the section view is an academics surface —
+      // callers without any academics.read grant (e.g. guardians, whose
+      // timetable access is CHILD-scoped via view=student:<id>) must not
+      // browse arbitrary sections. Scope-driven, no role names.
+      if (!academicsScope) {
+        throw new ForbiddenException({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission to perform this action',
+        });
+      }
       where = {
         sectionId,
         section: {

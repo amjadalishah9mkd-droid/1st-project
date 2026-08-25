@@ -119,7 +119,8 @@ Principles applied consistently from M0 onward:
 | M13-W2 | Guardian onboarding & link lifecycle | `a1d14e9` |
 | M13-W3 | Child-scoped data APIs | `7d1e541` |
 | M13-W4 | Guardian portal UI | `789e123` |
-| M13-W5 | Guardian hardening & M13 close-out | *(this commit)* |
+| M13-W5 | Guardian hardening & M13 close-out | `7b03fed` |
+| M14-W0 | P2 security hardening (pre-payments gate) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -911,6 +912,32 @@ both fixed with link-driven filters (no role conditionals):
 **M13 COMPLETE** — W1 foundation, W2 onboarding/lifecycle, W3
 child-scoped APIs, W4 portal UI, W5 hardening/close-out.
 
+### M14-W0 — P2 security hardening (final-inspection follow-ups)
+The M0→M13 deep inspection gate found 0×P0/0×P1 and three P2s; the two
+in-code P2s are fixed here (P2-IDOR-1, the capability-URL file-signing
+design, is deliberately untouched pending file-ownership records):
+
+- **P2-GUARD-1 fixed** — `GET /timetable?view=section:<id>` now refuses
+  callers with no `academics.read` grant (guardians): the section view is
+  an academics surface, and the previous code only applied its ownership
+  filter when that scope was OWN, letting a null scope fall through
+  unfiltered. Scope-driven, no role names; ALL/OWN staff+student behavior
+  and tenancy conjunct unchanged; guardians keep `view=student:<id>`.
+- **P2-AUTH-1 fixed** — LoginRateLimiterService received the same lazy
+  prune as the F2 fix in RateLimiterService: buckets with no in-window
+  failures and no live block are swept in-band from `assertAllowed`, at
+  most once per 5 minutes (`prune()`/`bucketCount()` test hooks, no
+  timers). Attacker-cycled emails/IPs no longer grow the map forever;
+  live blocks, limits and successful-login cleanup are unchanged. Note:
+  escalation `strikes` on fully-idle buckets are now forgotten after a
+  sweep — consistent with "expired" semantics.
+- **Tests: 394** (8 new): guardian section-view denial (child's own,
+  rival-college and garbage ids), guardian student-view intact,
+  student/teacher/admin section behavior pinned incl. rival-college
+  empty-not-leak and nonexistent-id conventions; limiter sweep of 100
+  attacker keys, live-block survival + still-enforced limit after a
+  sweep, 5-minute lazy interval determinism, recordSuccess cleanup.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1029,6 +1056,7 @@ reached 141 by the end of M9):
 | M13-W2 | 363 | onboarding lifecycle, token reissue/replay, cross-college isolation, immediate revocation |
 | M13-W3 | 379 | CHILD-scope IDOR matrix across results/attendance/fees/timetable/assignments, publication boundaries, revocation sweep |
 | M13-W5 | 386 | assignment-detail CHILD gap, session-list CHILD closure, F2 limiter pruning |
+| M14-W0 | 394 | timetable section-view scope gate, login-limiter pruning |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1137,17 +1165,20 @@ milestone (see roadmap).
 | F2 rate-limiter bucket pruning | — | **Resolved in M13-W5** (lazy in-band sweep) | done |
 | F3 `results.csv` includes unpublished marks | intentional: admin ALL-scope marks export; published-only surface is `/results` | documented (OPERATIONS §19/§21) | accepted behavior |
 | Guardian link revoke/list endpoints unlimited | admin-only, state-guarded (409 on repeat), consistent with other admin mutations | reviewed M13-W5, no limit needed | revisit only on abuse evidence |
+| Login limiter unbounded memory | — | **Resolved in M14-W0** (lazy sweep, mirrors F2) | done |
+| Guardian section-timetable over-read (P2-GUARD-1) | — | **Resolved in M14-W0** (academics.read scope gate) | done |
+| Ordinary-file signing has no ownership record (P2-IDOR-1) | capability-URL design (random keys); evidence files fully authorized | untouched by design in M14-W0 | when files are next touched |
 | `GET /grade-bands` readable by guardians | college-wide grading config, no PII; grades already visible on results | reviewed M13-W5, acceptable | none |
 
 ## 14. Current System State
 
-*Last updated after M13-W5.*
+*Last updated after M14-W0.*
 
 - **Current milestone**: **M13 COMPLETE** (W1–W5); M0–M13 all accepted
 - **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 7 found, database schema up to date
-- **Tests**: **386/386 passing** (27 suites)
+- **Tests**: **394/394 passing** (28 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
