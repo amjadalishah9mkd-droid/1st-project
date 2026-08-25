@@ -512,7 +512,82 @@ marks** (guardians/students never reach it — their published-only view
 is `/results`). Audit metadata for guardian events carries ids/flags
 only — no emails, names, tokens or URLs.
 
-## 22. Rollback procedure
+## 22. Online payments runbook (M14)
+
+### Provider & credentials (Safepay, V1)
+Environment-only configuration (per V1 decision — no config table):
+
+| Variable | Purpose |
+|---|---|
+| `SAFEPAY_API_KEY` | merchant public API key (`merchant_api_key`) |
+| `SAFEPAY_SECRET_KEY` | secret key for server-to-server calls (`x-sfpy-merchant-secret`) |
+| `SAFEPAY_WEBHOOK_SECRET` | endpoint shared secret for `X-SFPY-SIGNATURE` HMAC-SHA512 verification |
+| `SAFEPAY_ENVIRONMENT` | `sandbox` (default) or `production` |
+| `SAFEPAY_INTENT` | card channel (`CYBERSOURCE` default; confirm your account's channel at onboarding) |
+| `SAFEPAY_HOST` | API host override (defaults per environment) |
+
+Rules: API key + secret key are an **all-or-none pair** — a half-configured
+pair fails boot validation; fully unset simply disables online payments
+(`FEATURE_DISABLED` on initiation, 401 on webhooks). **Never** commit
+secrets, put them in audit metadata, or paste them into logs/tickets.
+Provider-side setup: create the webhook endpoint in the Safepay dashboard
+pointing at `https://<host>/api/v1/payments/webhooks/safepay`, subscribe
+to payment events, and copy its shared secret into
+`SAFEPAY_WEBHOOK_SECRET`.
+
+**Rotation:** generate the new key/secret in the Safepay dashboard, update
+the environment, redeploy/restart the API (env is read per request for the
+webhook secret but a restart guarantees consistency). Webhooks queued
+before a webhook-secret rotation may still be signed with the old key —
+expect a short window of 401s that Safepay retries; verify pending
+attempts via reconciliation afterwards.
+
+### How money moves (authority model)
+- **Browser redirects are NEVER payment authority.** The status page only
+  asks the server to verify; forged "success" URLs change nothing.
+- Authority = **signed webhooks** (HMAC over the raw body) and
+  **server-to-server verification** against the frozen attempt amount.
+- `Payment` rows are settled money only; `PaymentAttempt` is the in-flight
+  record. Only `SUCCEEDED` attempts represent settled gateway money.
+- **Staff must never edit PaymentAttempt/Payment rows directly in the
+  database.** Every state change flows through the settlement core
+  (row-locked, replay-proof); manual edits break the ledger invariants.
+- Never log or share tracker tokens, checkout URLs/TBTs, signatures or
+  raw webhook bodies.
+
+### Student flow
+Invoice detail → **Pay now** (full outstanding balance, PKR) → hosted
+Safepay checkout → return to the status page, which polls server-side
+verification for up to 2 minutes. Pending is normal for a few minutes;
+failed/expired attempts charge nothing and offer "Try again" (a brand-new
+attempt). Attempts auto-expire after 1 hour without confirmation.
+
+### Reconciliation (Fees → Reconciliation tab, `fees.manage`)
+| Situation | What to do |
+|---|---|
+| Gateway dashboard shows paid, CampusOS PENDING | Click **Verify with gateway** — the server fetches the tracker and settles if confirmed. |
+| CampusOS PAID but provider later reports failure/reversal | V1 has no refunds: resolve in the Safepay dashboard, then record the correction offline; the attempt/Payment stay as the audit trail. Flag for the V2 refund workflow. |
+| Webhooks repeatedly rejected (401s in provider logs) | Webhook secret mismatch — re-copy the endpoint secret; queued events may be signed with an old key after rotation. |
+| Attempt FAILED with `AMOUNT_MISMATCH` | The provider confirmed a different amount than the frozen attempt. Nothing was recorded. Investigate in the provider dashboard before advising the student to retry. |
+| Attempt flagged **Overpaid — manual investigation required** | A confirmed payment exceeded the remaining balance (usually a manual payment raced the checkout). The money IS recorded and the invoice capped at PAID; refund the excess via the provider dashboard and note it. |
+| Unmatched gateway events listed | A signed delivery referenced a tracker CampusOS doesn't know (wrong endpoint, other system, or manual dashboard activity). Cross-check the event id in the Safepay dashboard. |
+| Provider unreachable (`GATEWAY_ERROR`) | Initiations fail safely (attempt FAILED, nothing payable); students can retry once the provider recovers. Webhooks are retried by Safepay automatically. |
+| Duplicate webhook deliveries | Expected — the event ledger makes them no-ops. No action. |
+
+### Provider details status
+VERIFIED (docs/SDK): hosted-checkout session API, TBT auth token,
+checkout URL format, tracker verification endpoint, `TRACKER_ENDED`
+semantics, webhook event shapes, `X-SFPY-SIGNATURE` HMAC-SHA512 over the
+raw body, sandbox availability, checkout-token (TBT) 1-hour expiry.
+UNRESOLVED (confirm at merchant onboarding): account `intent` channel
+(CYBERSOURCE vs MPGS), webhook retry cadence and event-id stability
+guarantees, settlement timing and fees, transaction limits for large
+tuition amounts, refund API contract, education-sector onboarding
+requirements. **Real sandbox end-to-end verification is pending merchant
+credentials** — the integration is verified against official contracts
+and deterministic stubs only.
+
+## 23. Rollback procedure
 
 1. `git checkout <previous-release-tag>` and rebuild images.
 2. If the bad release included a migration: restore the pre-deploy database

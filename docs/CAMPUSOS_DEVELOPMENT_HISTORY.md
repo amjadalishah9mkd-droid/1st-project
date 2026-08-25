@@ -125,7 +125,8 @@ Principles applied consistently from M0 onward:
 | M14-W2 | Gateway adapter & payment initiation | `24e9609` |
 | M14-W3 | Webhook settlement & verification | `ca5585e` |
 | M14-W4 | Student payment UI | `362cf2d` |
-| M14-W5 | Admin reconciliation | *(this commit)* |
+| M14-W5 | Admin reconciliation | `ad5188b` |
+| M14-W6 | Payments hardening & M14 close-out | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1164,6 +1165,50 @@ controlled gateway-verify action. No refunds, no accountant role, no W6.
   settled" → SUCCEEDED badge + dashboard tiles updated; API-level
   negative matrix re-confirmed live; smoke purged, demo restored.
 
+### M14-W6 — Payments hardening, operations & M14 close-out
+**Goal:** adversarial re-inspection of the whole W1–W5 surface, true-
+concurrency regression coverage, the operator runbook, and close-out.
+
+- **Re-inspection (clean):** zero role-name authorization in the
+  payments surface; every attempt/event query tenant-scoped; webhook
+  route public-by-design with signature-first ordering; no session-auth
+  leakage onto the webhook; no unsigned settlement path; no provider
+  secrets/tracker tokens/raw bodies in logs, audits or responses;
+  `unique(provider, providerRef)`, `unique(provider, eventId)` and
+  `attempt.paymentId @unique` verified as the three DB-level settle-once
+  backstops; terminal-state CAS protections intact; nullable
+  `recordedById` backward-compatible everywhere it is read.
+- **New true-concurrency tests (the one material gap — earlier suites
+  were sequential):** (1) simultaneous manual recordPayment + gateway
+  settlement — order-independent invariants: settlement never rejected,
+  no double-count into status, invoice capped PAID, overpaid flagged
+  only when manual won the lock; (2) simultaneous settlement of two
+  distinct attempts against one balance — both Payment rows recorded
+  (money never dropped), exactly one overpaid flag; (3) simultaneous
+  settle + fail of one attempt — CAS yields exactly one terminal
+  outcome, never money-without-SUCCEEDED. **Tests: 442** (33 suites).
+- **OPERATIONS §22 — online payments runbook:** credentials/rotation
+  (all-or-none pair, webhook-secret rotation window), authority model
+  (browser never authority; no manual DB edits of attempts), student
+  flow, full reconciliation decision table (gateway-paid-but-pending,
+  reversal, rejected webhooks, AMOUNT_MISMATCH, overpaid, unmatched,
+  provider outage, duplicates), and the VERIFIED/UNRESOLVED provider
+  ledger.
+- **Real Safepay sandbox: PENDING MERCHANT CREDENTIALS** — no sandbox
+  account exists in this environment; the integration is verified
+  against the official documented contracts (docs + SDK source) and
+  deterministic stubs. Production readiness of the payment rail is
+  explicitly contingent on the first real merchant onboarding
+  (intent channel, webhook cadence, settlement/fees, refund API,
+  education MCC, transaction limits — all UNRESOLVED items are listed
+  in OPERATIONS §22).
+
+**M14 COMPLETE (code-side)** — W0 hardening, H1 architecture, W1 data
+model/settlement core, W2 gateway adapter/initiation, W3 webhooks/
+idempotency, W4 student UI, W5 reconciliation, W6 hardening/close-out.
+Remaining before first production payment: merchant onboarding + real
+sandbox walkthrough.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1287,6 +1332,7 @@ reached 141 by the end of M9):
 | M14-W2 | 413 | initiation authz matrix, tamper-proof amounts, gateway failure/duplicate-ref handling |
 | M14-W3 | 431 | webhook HMAC auth, settle-once idempotency matrix, verify-on-return ownership + truth routing |
 | M14-W5 | 439 | reconciliation authz/tenancy matrix, gateway-verify routing, overpaid visibility, export ONLINE |
+| M14-W6 | 442 | true-concurrency settlement races (manual vs gateway, dual attempts, settle vs fail) |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1397,18 +1443,20 @@ milestone (see roadmap).
 | Guardian link revoke/list endpoints unlimited | admin-only, state-guarded (409 on repeat), consistent with other admin mutations | reviewed M13-W5, no limit needed | revisit only on abuse evidence |
 | Login limiter unbounded memory | — | **Resolved in M14-W0** (lazy sweep, mirrors F2) | done |
 | Guardian section-timetable over-read (P2-GUARD-1) | — | **Resolved in M14-W0** (academics.read scope gate) | done |
-| Ordinary-file signing has no ownership record (P2-IDOR-1) | capability-URL design (random keys); evidence files fully authorized | untouched by design in M14-W0 | when files are next touched |
+| Ordinary-file signing has no ownership record (P2-IDOR-1) | capability-URL design (random keys); evidence files fully authorized | untouched by design through M14 | when files are next touched |
+| Real Safepay sandbox verification | no merchant credentials available | **pending merchant onboarding** (OPERATIONS §22 lists UNRESOLVED items) | first college onboarding |
+| Single global webhook secret (env-only) | V1 decision #7: single-tenant start | per-college gateway config table when a second college onboards | multi-college payments |
 | `GET /grade-bands` readable by guardians | college-wide grading config, no PII; grades already visible on results | reviewed M13-W5, acceptable | none |
 
 ## 14. Current System State
 
-*Last updated after M14-W5.*
+*Last updated after M14-W6.*
 
-- **Current milestone**: **M13 COMPLETE** (W1–W5); M0–M13 all accepted
+- **Current milestone**: **M14 COMPLETE (code-side)**; M0–M14 delivered — real Safepay sandbox verification pending merchant credentials
 - **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 8 found, database schema up to date
-- **Tests**: **439/439 passing** (32 suites)
+- **Tests**: **442/442 passing** (33 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
