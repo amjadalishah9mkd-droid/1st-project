@@ -427,7 +427,9 @@ export class FeesService {
         method: payment.method,
         reference: payment.reference,
         paidAt: payment.paidAt.toISOString().slice(0, 10),
-        recordedByName: `${payment.recordedBy.firstName} ${payment.recordedBy.lastName}`,
+        recordedByName: payment.recordedBy
+          ? `${payment.recordedBy.firstName} ${payment.recordedBy.lastName}`
+          : 'Online payment', // M14: gateway settlements have no staff recorder
       })),
     };
   }
@@ -478,31 +480,36 @@ export class FeesService {
     invoiceId: string,
     input: RecordPaymentInput,
   ): Promise<InvoiceDetail> {
-    const row = await this.prisma.invoice.findFirst({
-      where: { id: invoiceId, collegeId: user.collegeId },
-      include: invoiceInclude,
-    });
-    if (!row) {
-      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Invoice not found' });
-    }
-    if (row.status === 'CANCELLED') {
-      throw new BadRequestException({
-        code: 'INVOICE_CANCELLED',
-        message: 'Payments cannot be recorded on a cancelled invoice',
+    // M14-W1: the balance check and the write now share one transaction
+    // with a row lock on the invoice — two concurrent recordings (or a
+    // manual recording racing a gateway settlement) can no longer both
+    // read the same stale balance and jointly overpay.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Invoice" WHERE id = ${invoiceId} FOR UPDATE`;
+      const row = await tx.invoice.findFirst({
+        where: { id: invoiceId, collegeId: user.collegeId },
+        include: invoiceInclude,
       });
-    }
-    const balance = Number(row.amount) - paidAmount(row);
-    if (input.amount > balance) {
-      throw new BadRequestException({
-        code: 'OVERPAYMENT',
-        message: `Payment exceeds the outstanding balance (${balance})`,
-      });
-    }
+      if (!row) {
+        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Invoice not found' });
+      }
+      if (row.status === 'CANCELLED') {
+        throw new BadRequestException({
+          code: 'INVOICE_CANCELLED',
+          message: 'Payments cannot be recorded on a cancelled invoice',
+        });
+      }
+      const balance = Number(row.amount) - paidAmount(row);
+      if (input.amount > balance) {
+        throw new BadRequestException({
+          code: 'OVERPAYMENT',
+          message: `Payment exceeds the outstanding balance (${balance})`,
+        });
+      }
 
-    const newPaid = paidAmount(row) + input.amount;
-    const newStatus = newPaid >= Number(row.amount) ? 'PAID' : 'PARTIAL';
-    await this.prisma.$transaction([
-      this.prisma.payment.create({
+      const newPaid = paidAmount(row) + input.amount;
+      const newStatus = newPaid >= Number(row.amount) ? 'PAID' : 'PARTIAL';
+      await tx.payment.create({
         data: {
           invoiceId,
           amount: input.amount,
@@ -511,12 +518,12 @@ export class FeesService {
           paidAt: input.paidAt ? new Date(`${input.paidAt}T00:00:00Z`) : new Date(),
           recordedById: user.id,
         },
-      }),
-      this.prisma.invoice.update({
+      });
+      await tx.invoice.update({
         where: { id: invoiceId },
         data: { status: newStatus },
-      }),
-    ]);
+      });
+    });
     await this.audit.log({
       collegeId: user.collegeId,
       actorId: user.id,

@@ -16,6 +16,7 @@ import { FilesModule } from './files/files.module';
 import { AssignmentsModule } from './assignments/assignments.module';
 import { ExamsModule } from './exams/exams.module';
 import { FeesModule } from './fees/fees.module';
+import { PaymentsModule } from './payments/payments.module';
 import { CommunityModule } from './community/community.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
 import { DashboardsModule } from './dashboards/dashboards.module';
@@ -49,6 +50,7 @@ import { ExportsModule } from './exports/exports.module';
     AssignmentsModule,
     ExamsModule,
     FeesModule,
+    PaymentsModule,
     CommunityModule,
     DashboardsModule,
     VerificationModule,

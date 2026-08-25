@@ -118,6 +118,20 @@ enum PaymentMethod {
   BANK_TRANSFER
   CHEQUE
   OTHER
+  ONLINE
+}
+
+/// M14-W1: in-flight gateway payment lifecycle. Settled money remains the
+/// Payment model; a PaymentAttempt only *becomes* a Payment on verified
+/// confirmation. REFUNDED is reserved for V2 reconciliation flags.
+enum PaymentAttemptStatus {
+  CREATED
+  PENDING
+  SUCCEEDED
+  FAILED
+  EXPIRED
+  CANCELLED
+  REFUNDED
 }
 
 enum PostType {
@@ -257,6 +271,7 @@ model College {
   identityClaims   StudentIdentityClaim[]
   evidenceFiles    EvidenceFile[]
   guardianLinks    GuardianLink[]
+  paymentAttempts  PaymentAttempt[]
 }
 
 // ────────────────────── Identity & Access ──────────────────────
@@ -307,6 +322,7 @@ model User {
   examsPublished    Exam[]             @relation("ExamPublishedBy")
   marksEntered      Mark[]             @relation("MarkEnteredBy")
   paymentsRecorded  Payment[]          @relation("PaymentRecordedBy")
+  paymentAttemptsInitiated PaymentAttempt[] @relation("PaymentAttemptInitiator")
   posts             Post[]             @relation("PostAuthor")
   comments          Comment[]          @relation("CommentAuthor")
   likes             Like[]
@@ -932,6 +948,7 @@ model Invoice {
   structure FeeStructure   @relation(fields: [structureId], references: [id], onDelete: Restrict)
 
   payments Payment[]
+  attempts PaymentAttempt[]
 
   @@unique([collegeId, invoiceNo])
   @@index([studentId, status])
@@ -944,14 +961,63 @@ model Payment {
   method       PaymentMethod
   reference    String?
   paidAt       DateTime
-  recordedById String
+  recordedById String?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
   invoice    Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
-  recordedBy User    @relation("PaymentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  recordedBy User?   @relation("PaymentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  attempt    PaymentAttempt?
 
   @@index([invoiceId])
+}
+
+/// M14-W1: one row per student-initiated (or future staff-initiated) gateway
+/// checkout. collegeId is a tenancy belt independent of joins — webhook
+/// processing resolves attempts from stored state only, never from payload
+/// claims. amount is the server-computed payable frozen at initiation.
+model PaymentAttempt {
+  id            String               @id @default(cuid())
+  collegeId     String
+  invoiceId     String
+  initiatedById String
+  amount        Decimal              @db.Decimal(10, 2)
+  currency      String               @default("PKR")
+  provider      String
+  providerRef   String?
+  status        PaymentAttemptStatus @default(CREATED)
+  paymentId     String?              @unique
+  /// Set when a verified confirmation exceeded the remaining balance —
+  /// the money is still recorded; admins reconcile/refund manually.
+  overpaid      Boolean              @default(false)
+  failureCode   String?
+  confirmedAt   DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  college     College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  initiatedBy User    @relation("PaymentAttemptInitiator", fields: [initiatedById], references: [id], onDelete: Restrict)
+  payment     Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@unique([provider, providerRef])
+  @@index([invoiceId, status])
+  @@index([collegeId, status])
+}
+
+/// M14-W1: webhook idempotency ledger (used from W3). Insert-first claim on
+/// the provider's event id — a redelivered webhook hits the unique
+/// constraint and becomes a no-op. Payload bodies are never stored.
+model GatewayEvent {
+  id         String   @id @default(cuid())
+  provider   String
+  eventId    String
+  attemptId  String?
+  outcome    String
+  receivedAt DateTime @default(now())
+
+  @@unique([provider, eventId])
+  @@index([attemptId])
 }
 
 // ─────────────────────────── Community ─────────────────────────

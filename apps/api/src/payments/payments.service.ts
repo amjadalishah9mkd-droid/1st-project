@@ -1,0 +1,334 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, PaymentAttemptStatus } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { PolicyService } from '../access/policy.service';
+import { AuditService } from '../audit/audit.service';
+import type { AuthenticatedUser } from '../access/authenticated-user';
+
+/**
+ * M14-W1 — secure settlement core for online payments.
+ *
+ * Invariants (Blueprint + M14-H1 decisions):
+ *  - `Payment` remains settled money ONLY. The in-flight gateway lifecycle
+ *    lives on `PaymentAttempt`; a verified confirmation *materializes* a
+ *    normal Payment row and nothing else does.
+ *  - The payable amount is computed server-side from database state at
+ *    initiation (full outstanding balance — decision #3) and frozen on the
+ *    attempt. Nothing from a browser or webhook payload ever sets amounts.
+ *  - Every state transition that can settle money runs inside a
+ *    transaction that first takes a row lock on the invoice
+ *    (`SELECT … FOR UPDATE`), then re-reads balances, then performs a
+ *    compare-and-swap on the attempt status — replays and races collapse
+ *    into exactly one settlement.
+ *  - Tenancy: attempts carry their own collegeId belt; webhook-side code
+ *    (W3) resolves attempts from stored state only.
+ *
+ * The gateway adapter (Safepay) and HTTP surfaces arrive in W2/W3 — this
+ * service is deliberately transport-free so those layers stay thin.
+ */
+
+/** Attempts older than this without confirmation are considered dead. */
+export const ATTEMPT_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+const forbidden = () =>
+  new ForbiddenException({
+    code: 'FORBIDDEN',
+    message: 'You do not have permission to perform this action',
+  });
+
+export interface SettlementInput {
+  provider: string;
+  providerRef: string;
+  /** Amount as reported by the verified gateway confirmation. */
+  amount: string;
+  currency: string;
+}
+
+@Injectable()
+export class PaymentsService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly policy: PolicyService,
+    private readonly audit: AuditService,
+  ) {}
+
+  /**
+   * Create a payment attempt for the caller's own invoice (OWN scope).
+   * The frozen amount is ALWAYS the full outstanding balance (decision #3).
+   * W2 wraps this with the gateway-session creation.
+   */
+  async createAttempt(
+    user: AuthenticatedUser,
+    invoiceId: string,
+    provider: string,
+  ) {
+    const scope = await this.policy.scopeFor(user, 'payments.initiate');
+    if (!scope) throw forbidden();
+
+    return this.prisma.$transaction(async (tx) => {
+      // Row lock: initiation, settlement and manual recording all serialize
+      // on the invoice row, so balances can never be computed from stale
+      // reads concurrently.
+      await tx.$queryRaw`SELECT id FROM "Invoice" WHERE id = ${invoiceId} FOR UPDATE`;
+      const invoice = await tx.invoice.findFirst({
+        where: {
+          id: invoiceId,
+          collegeId: user.collegeId,
+          // OWN scope pins the invoice to the caller; ALL (staff) may
+          // initiate on any same-college invoice (future assisted flows).
+          ...(scope === 'OWN' ? { student: { userId: user.id } } : {}),
+        },
+        include: { payments: true },
+      });
+      if (!invoice) {
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: 'Invoice not found',
+        });
+      }
+      if (invoice.status === 'CANCELLED') {
+        throw new BadRequestException({
+          code: 'INVOICE_CANCELLED',
+          message: 'This invoice is cancelled',
+        });
+      }
+      const paid = invoice.payments.reduce(
+        (sum, p) => sum + Number(p.amount),
+        0,
+      );
+      const balance = Number(invoice.amount) - paid;
+      if (balance <= 0) {
+        throw new BadRequestException({
+          code: 'NOTHING_TO_PAY',
+          message: 'This invoice has no outstanding balance',
+        });
+      }
+      // Soft guard: one live attempt per invoice keeps the UX and the
+      // gateway ledger tidy. (The hard guard is the settlement lock.)
+      const live = await tx.paymentAttempt.findFirst({
+        where: {
+          invoiceId,
+          status: { in: ['CREATED', 'PENDING'] },
+          createdAt: { gt: new Date(Date.now() - ATTEMPT_TTL_MS) },
+        },
+        select: { id: true },
+      });
+      if (live) {
+        throw new ConflictException({
+          code: 'ATTEMPT_IN_PROGRESS',
+          message: 'A payment for this invoice is already in progress',
+        });
+      }
+      const attempt = await tx.paymentAttempt.create({
+        data: {
+          collegeId: user.collegeId,
+          invoiceId,
+          initiatedById: user.id,
+          amount: new Prisma.Decimal(balance.toFixed(2)),
+          currency: 'PKR',
+          provider,
+          status: 'CREATED',
+        },
+      });
+      return attempt;
+    });
+  }
+
+  /** W2 hook: stamp the gateway reference once a checkout session exists. */
+  async markPending(attemptId: string, providerRef: string) {
+    const updated = await this.prisma.paymentAttempt.updateMany({
+      where: { id: attemptId, status: 'CREATED' },
+      data: { providerRef, status: 'PENDING' },
+    });
+    if (updated.count === 0) {
+      throw new ConflictException({
+        code: 'INVALID_TRANSITION',
+        message: 'Attempt is not awaiting a gateway session',
+      });
+    }
+  }
+
+  /**
+   * Webhook idempotency claim (consumed by W3). Insert-first on the
+   * provider event id: returns true exactly once per event; a redelivery
+   * hits the unique constraint and returns false.
+   */
+  async claimEvent(
+    provider: string,
+    eventId: string,
+    attemptId: string | null,
+    outcome: string,
+  ): Promise<boolean> {
+    try {
+      await this.prisma.gatewayEvent.create({
+        data: { provider, eventId, attemptId, outcome },
+      });
+      return true;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Settle a verified gateway confirmation. Callers (W3 webhook / W2
+   * verify-on-return) MUST have already authenticated the confirmation
+   * (signature / server-to-server verify) — this method trusts its inputs
+   * to be gateway-verified, and still re-validates amount/currency against
+   * the frozen attempt and serializes on the invoice row.
+   *
+   * Returns the attempt after transition. Replays and double-confirms are
+   * no-ops (CAS on PENDING). An over-balance confirmation is still recorded
+   * — the money moved — with the invoice capped at PAID and the attempt
+   * flagged `overpaid` for manual reconciliation (never drop settled money).
+   */
+  async settleAttempt(attemptId: string, confirmation: SettlementInput) {
+    // Validation happens OUTSIDE the settlement transaction: a mismatch
+    // must persist its FAILED marker, which a thrown exception inside the
+    // transaction would roll back.
+    const attempt = await this.prisma.paymentAttempt.findUnique({
+      where: { id: attemptId },
+    });
+    if (!attempt) {
+      throw new NotFoundException({
+        code: 'NOT_FOUND',
+        message: 'Payment attempt not found',
+      });
+    }
+    // Verified-amount authority check: the gateway must confirm exactly
+    // the frozen server-side amount, in PKR.
+    if (
+      confirmation.currency !== attempt.currency ||
+      Number(confirmation.amount).toFixed(2) !==
+        Number(attempt.amount).toFixed(2)
+    ) {
+      await this.prisma.paymentAttempt.updateMany({
+        where: { id: attemptId, status: { in: ['CREATED', 'PENDING'] } },
+        data: { status: 'FAILED', failureCode: 'AMOUNT_MISMATCH' },
+      });
+      throw new BadRequestException({
+        code: 'AMOUNT_MISMATCH',
+        message: 'Confirmed amount does not match the payment attempt',
+      });
+    }
+    if (
+      attempt.provider !== confirmation.provider ||
+      (attempt.providerRef !== null &&
+        attempt.providerRef !== confirmation.providerRef)
+    ) {
+      throw new BadRequestException({
+        code: 'REFERENCE_MISMATCH',
+        message: 'Confirmation does not match the payment attempt',
+      });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // Serialize on the invoice row before touching balances.
+      await tx.$queryRaw`SELECT id FROM "Invoice" WHERE id = ${attempt.invoiceId} FOR UPDATE`;
+
+      // CAS: only one confirmation ever wins this transition.
+      const claimed = await tx.paymentAttempt.updateMany({
+        where: { id: attemptId, status: { in: ['CREATED', 'PENDING'] } },
+        data: {
+          status: 'SUCCEEDED',
+          providerRef: confirmation.providerRef,
+          confirmedAt: new Date(),
+        },
+      });
+      if (claimed.count === 0) {
+        // Already settled/failed — idempotent no-op for replays.
+        return tx.paymentAttempt.findUniqueOrThrow({
+          where: { id: attemptId },
+        });
+      }
+
+      const invoice = await tx.invoice.findUniqueOrThrow({
+        where: { id: attempt.invoiceId },
+        include: { payments: true },
+      });
+      const paid = invoice.payments.reduce(
+        (sum, p) => sum + Number(p.amount),
+        0,
+      );
+      const balance = Number(invoice.amount) - paid;
+      const overpaid = Number(attempt.amount) > balance;
+
+      const payment = await tx.payment.create({
+        data: {
+          invoiceId: attempt.invoiceId,
+          amount: attempt.amount,
+          method: 'ONLINE',
+          reference: confirmation.providerRef,
+          paidAt: new Date(),
+          recordedById: null, // gateway settlement — no staff recorder
+        },
+      });
+      const newPaid = paid + Number(attempt.amount);
+      await tx.invoice.update({
+        where: { id: invoice.id },
+        data: {
+          status: newPaid >= Number(invoice.amount) ? 'PAID' : 'PARTIAL',
+        },
+      });
+      const settled = await tx.paymentAttempt.update({
+        where: { id: attemptId },
+        data: { paymentId: payment.id, overpaid },
+      });
+
+      await this.audit.log({
+        collegeId: attempt.collegeId,
+        actorId: null,
+        action: 'payments.settled',
+        targetType: 'Invoice',
+        targetId: attempt.invoiceId,
+        metadata: {
+          attemptId,
+          amount: attempt.amount.toString(),
+          provider: attempt.provider,
+          overpaid,
+        },
+      });
+      return settled;
+    });
+  }
+
+  /** Record a verified failure (W3). CAS — replays are no-ops. */
+  async failAttempt(attemptId: string, failureCode: string) {
+    await this.prisma.paymentAttempt.updateMany({
+      where: { id: attemptId, status: { in: ['CREATED', 'PENDING'] } },
+      data: { status: 'FAILED', failureCode },
+    });
+    return this.prisma.paymentAttempt.findUniqueOrThrow({
+      where: { id: attemptId },
+    });
+  }
+
+  /**
+   * Lazy TTL sweep (same pattern as invoice OVERDUE transitions): attempts
+   * stuck in CREATED/PENDING past the TTL become EXPIRED. A late verified
+   * confirmation for an expired attempt is handled by settleAttempt's CAS —
+   * EXPIRED is not settleable; reconciliation (W5) resolves such cases.
+   */
+  async expireStaleAttempts(collegeId: string): Promise<number> {
+    const swept = await this.prisma.paymentAttempt.updateMany({
+      where: {
+        collegeId,
+        status: { in: ['CREATED', 'PENDING'] },
+        createdAt: { lt: new Date(Date.now() - ATTEMPT_TTL_MS) },
+      },
+      data: { status: 'EXPIRED' },
+    });
+    return swept.count;
+  }
+}

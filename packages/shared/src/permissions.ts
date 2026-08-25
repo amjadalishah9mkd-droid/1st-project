@@ -26,6 +26,7 @@ export const PERMISSIONS = {
   RESULTS_READ: 'results.read',
   FEES_MANAGE: 'fees.manage',
   FEES_READ: 'fees.read',
+  PAYMENTS_INITIATE: 'payments.initiate',
   COMMUNITY_PARTICIPATE: 'community.participate',
   COMMUNITY_GROUPS_CREATE: 'community.groups.create',
   COMMUNITY_SOCIETIES_MANAGE: 'community.societies.manage',
@@ -67,6 +68,7 @@ export const PERMISSION_DESCRIPTIONS: Record<PermissionKey, string> = {
   'results.read': 'View exam results',
   'fees.manage': 'Manage fee structures, invoices and payments',
   'fees.read': 'View fee invoices and payment history',
+  'payments.initiate': 'Initiate an online payment for an own invoice',
   'community.participate': 'Post, comment, like and RSVP in the community',
   'community.groups.create': 'Create community groups',
   'community.societies.manage': 'Charter, edit and archive societies',
@@ -156,6 +158,9 @@ export const ROLE_PERMISSION_MATRIX: RolePermissionGrant[] = [
   { role: 'STUDENT', permission: 'assignments.submit', scope: 'OWN' },
   { role: 'STUDENT', permission: 'results.read', scope: 'OWN' },
   { role: 'STUDENT', permission: 'fees.read', scope: 'OWN' },
+  // M14-W1 (decision #3/#4): students may pay their OWN invoices online;
+  // guardians deliberately receive no payments.initiate grant in V1.
+  { role: 'STUDENT', permission: 'payments.initiate', scope: 'OWN' },
   { role: 'STUDENT', permission: 'community.participate', scope: 'OWN' },
   { role: 'STUDENT', permission: 'community.groups.create', scope: 'ALL' },
   { role: 'STUDENT', permission: 'community.report', scope: 'ALL' },

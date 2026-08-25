@@ -120,7 +120,8 @@ Principles applied consistently from M0 onward:
 | M13-W3 | Child-scoped data APIs | `7d1e541` |
 | M13-W4 | Guardian portal UI | `789e123` |
 | M13-W5 | Guardian hardening & M13 close-out | `7b03fed` |
-| M14-W0 | P2 security hardening (pre-payments gate) | *(this commit)* |
+| M14-W0 | P2 security hardening (pre-payments gate) | `ded32ee` |
+| M14-W1 | Payments data model & settlement core | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -938,6 +939,47 @@ design, is deliberately untouched pending file-ownership records):
   attacker keys, live-block survival + still-enforced limit after a
   sweep, 5-minute lazy interval determinism, recordSuccess cleanup.
 
+### M14-W1 — Payments data model, permissions & settlement core
+**Goal:** the database/domain foundation for online fee payments (H1
+decisions #1–#7 locked; Safepay adapter is W2, webhooks W3, UI W4/W5).
+Core invariant preserved: **Payment = settled money only.**
+
+- **Migration #8 (additive):** `PaymentAttempt` (collegeId tenancy belt,
+  frozen server-computed `amount`+`PKR`, `provider`/`providerRef` with
+  `@@unique([provider, providerRef])`, status CREATED→PENDING→SUCCEEDED/
+  FAILED/EXPIRED/CANCELLED (+REFUNDED reserved), `paymentId @unique`
+  one-to-one with the settled Payment, `overpaid` flag);
+  `GatewayEvent` webhook-idempotency ledger (`@@unique([provider,
+  eventId])`, insert-first claim, no payload bodies stored);
+  `PaymentMethod` + `ONLINE`; `Payment.recordedById` now nullable
+  (gateway settlements have no staff recorder — existing rows untouched).
+- **Permission:** `payments.initiate` STUDENT/OWN only (decisions #3/#4:
+  full-outstanding-balance amounts; guardians deliberately ungranted).
+- **PaymentsService (transport-free):** `createAttempt` (OWN-scoped
+  invoice resolution `{id, collegeId, student.userId}`, balance frozen
+  under a `SELECT … FOR UPDATE` row lock, one live attempt per invoice),
+  `markPending`, `claimEvent` (P2002-tolerant insert claim),
+  `settleAttempt` (validates amount/currency/provider against the frozen
+  attempt — mismatch persists FAILED outside the tx; then row lock → CAS
+  PENDING→SUCCEEDED → Payment(ONLINE, recordedById null) → invoice
+  PARTIAL/PAID; over-balance confirmations recorded + `overpaid` flagged,
+  invoice capped at PAID — settled money is never dropped),
+  `failAttempt` (CAS), `expireStaleAttempts` (1h lazy TTL; EXPIRED is not
+  settleable). Audit `payments.settled` carries ids/amount/flags only.
+- **Existing race fixed:** `fees.recordPayment` balance check and writes
+  now share one transaction behind the same invoice row lock — two
+  concurrent recordings (or manual vs. gateway) can no longer jointly
+  overpay. Behavior otherwise unchanged; `recordedByName` renders
+  "Online payment" for staff-less settlements.
+- **Tests: 405** (11 new): grant presence, frozen-balance computation,
+  IDOR matrix (other student 404 / linked guardian 403 / rival college
+  404 / garbage 404), NOTHING_TO_PAY / INVOICE_CANCELLED /
+  ATTEMPT_IN_PROGRESS, settle-once with replay no-op + single Payment +
+  audit hygiene, amount-tampering FAILED persistence + no resurrection,
+  overpaid-flag capping, failAttempt CAS + expiry sweep + EXPIRED
+  unsettleable, claimEvent exactly-once, concurrent-recordPayment race
+  (one succeeds, sum never exceeds), manual partial→paid regression.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1057,6 +1099,7 @@ reached 141 by the end of M9):
 | M13-W3 | 379 | CHILD-scope IDOR matrix across results/attendance/fees/timetable/assignments, publication boundaries, revocation sweep |
 | M13-W5 | 386 | assignment-detail CHILD gap, session-list CHILD closure, F2 limiter pruning |
 | M14-W0 | 394 | timetable section-view scope gate, login-limiter pruning |
+| M14-W1 | 405 | attempt lifecycle CAS, settle-once/replay, amount tampering, overpaid capping, recordPayment race |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1172,13 +1215,13 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M14-W0.*
+*Last updated after M14-W1.*
 
 - **Current milestone**: **M13 COMPLETE** (W1–W5); M0–M13 all accepted
 - **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
-- **Migrations**: 7 found, database schema up to date
-- **Tests**: **394/394 passing** (28 suites)
+- **Migrations**: 8 found, database schema up to date
+- **Tests**: **405/405 passing** (29 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
