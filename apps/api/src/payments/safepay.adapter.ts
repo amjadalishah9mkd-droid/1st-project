@@ -154,9 +154,13 @@ export class SafepayAdapter implements PaymentGatewayAdapter {
       currency: input.currency,
       amount: toLowestDenomination(input.amount),
       metadata: {
-        // Our reconciliation handles: attempt id + human invoice number.
+        // LIVE-VERIFIED (2026-08-25, real sandbox): Safepay enforces an
+        // undocumented metadata key whitelist — 'attempt_id' is rejected
+        // with 500 "unsupported meta key"; 'order_id' and 'source' are
+        // accepted. CampusOS correlation never relied on metadata anyway
+        // (the returned tracker/providerRef is the join key).
         order_id: input.orderRef,
-        attempt_id: input.attemptId,
+        source: 'campusos',
       },
     });
     const tracker = session.data?.tracker?.token;
