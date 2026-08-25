@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import type { InvoiceIssuedEvent, InvoiceOverdueEvent } from '@campusos/shared';
+import type {
+  InvoiceIssuedEvent,
+  InvoiceOverdueEvent,
+  PaymentFailedEvent,
+  PaymentSucceededEvent,
+} from '@campusos/shared';
 import { PrismaService } from '../../prisma/prisma.service';
 import { renderTemplate } from '../templates';
 import { NotificationMailerService } from '../notification-mailer.service';
@@ -23,6 +28,61 @@ export class FeesListener {
   @OnEvent('invoice.overdue')
   async onOverdue(event: InvoiceOverdueEvent): Promise<void> {
     await this.create(event.studentUserId, event);
+  }
+
+  // M14-W3 — online payment outcomes. Emitted AFTER the settlement
+  // transaction commits; a notification/mail failure can never touch
+  // payment state (existing bus semantics).
+  @OnEvent('payment.succeeded')
+  async onPaymentSucceeded(event: PaymentSucceededEvent): Promise<void> {
+    await this.createPayment(event, 'payment_succeeded');
+  }
+
+  @OnEvent('payment.failed')
+  async onPaymentFailed(event: PaymentFailedEvent): Promise<void> {
+    await this.createPayment(event, 'payment_failed');
+  }
+
+  private async createPayment(
+    event: PaymentSucceededEvent | PaymentFailedEvent,
+    kind: 'payment_succeeded' | 'payment_failed',
+  ): Promise<void> {
+    try {
+      const template = renderTemplate(event);
+      if (!template) return;
+      await this.prisma.notification.create({
+        data: {
+          userId: event.studentUserId,
+          type: event.type,
+          title: template.title,
+          body: template.body,
+          linkPath: template.linkPath,
+        },
+      });
+      // F4: collegeId anchored to the invoice aggregate.
+      const invoice = await this.prisma.invoice.findUnique({
+        where: { id: event.invoiceId },
+        select: { collegeId: true },
+      });
+      if (!invoice) return;
+      await this.mailer.sendToUsers(
+        invoice.collegeId,
+        [event.studentUserId],
+        ({ firstName }) => ({
+          kind,
+          firstName,
+          amount: event.amount,
+          invoiceNo: event.invoiceNo,
+          url: this.mailer.absoluteUrl(
+            template.linkPath ?? '/fees',
+          ),
+        }),
+      );
+    } catch (error) {
+      this.logger.error(
+        `payment notification failed: ${(error as Error).constructor.name}`,
+      );
+    }
   }
 
   private async create(

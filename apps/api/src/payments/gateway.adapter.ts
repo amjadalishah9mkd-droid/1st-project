@@ -40,6 +40,19 @@ export interface GatewayVerification {
   currency: string;
 }
 
+/** Normalized, provider-neutral view of a signed webhook event. */
+export interface GatewayWebhookEvent {
+  /** Provider's unique event id (idempotency key for GatewayEvent). */
+  eventId: string;
+  /** Provider transaction reference (matches PaymentAttempt.providerRef). */
+  providerRef: string;
+  /** Normalized outcome; OTHER = valid event CampusOS does not act on. */
+  kind: 'SUCCEEDED' | 'FAILED' | 'OTHER';
+  /** Provider-confirmed amount as a decimal string (SUCCEEDED only). */
+  amount: string | null;
+  currency: string | null;
+}
+
 export interface PaymentGatewayAdapter {
   /** Stable provider identifier stored on PaymentAttempt.provider. */
   readonly provider: string;
@@ -51,4 +64,16 @@ export interface PaymentGatewayAdapter {
    * complete. Must never trust anything a browser supplied.
    */
   verifyPayment(providerRef: string): Promise<GatewayVerification>;
+  /**
+   * M14-W3: authenticate a webhook delivery. MUST be timing-safe and MUST
+   * operate on the raw body bytes exactly as received. Returns false for
+   * missing/invalid signatures or unconfigured secrets — never throws
+   * details about why.
+   */
+  verifyWebhookSignature(rawBody: Buffer, signature: string | undefined): boolean;
+  /**
+   * Parse an ALREADY-AUTHENTICATED webhook body into the neutral shape.
+   * Returns null when structurally invalid.
+   */
+  parseWebhookEvent(body: unknown): GatewayWebhookEvent | null;
 }

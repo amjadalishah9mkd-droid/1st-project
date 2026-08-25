@@ -49,6 +49,22 @@ export type MailTemplate =
       dueDate: string;
       url: string;
     }
+  // M14-W3 — online payment outcomes (invoiceNo + amount only; no card
+  // data, provider tokens or payloads ever reach mail).
+  | {
+      kind: 'payment_succeeded';
+      firstName: string;
+      amount: string;
+      invoiceNo: string;
+      url: string;
+    }
+  | {
+      kind: 'payment_failed';
+      firstName: string;
+      amount: string;
+      invoiceNo: string;
+      url: string;
+    }
   | { kind: 'announcement'; firstName: string; title: string; url: string }
   // M13-W2 — guardian onboarding (H3: child shown as "FirstName L.").
   | {
@@ -154,6 +170,24 @@ export function renderMail(template: MailTemplate): RenderedMail {
         ...layout([
           `Hi ${template.firstName},`,
           `An invoice of ${template.amount} was due on ${template.dueDate} and is now overdue.`,
+          template.url,
+        ]),
+      };
+    case 'payment_succeeded':
+      return {
+        subject: 'Payment received',
+        ...layout([
+          `Hi ${template.firstName},`,
+          `Your online payment of ${template.amount} for invoice ${template.invoiceNo} was received. Thank you.`,
+          template.url,
+        ]),
+      };
+    case 'payment_failed':
+      return {
+        subject: 'Payment failed',
+        ...layout([
+          `Hi ${template.firstName},`,
+          `Your online payment of ${template.amount} for invoice ${template.invoiceNo} could not be completed. No money was recorded — you can try again from your fees page.`,
           template.url,
         ]),
       };

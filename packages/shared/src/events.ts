@@ -60,6 +60,26 @@ export interface InvoiceOverdueEvent {
   dueDate: string;
 }
 
+/** M14-W3 — verified online payment settled (webhook or verify-on-return). */
+export interface PaymentSucceededEvent {
+  type: 'payment.succeeded';
+  studentUserId: string;
+  invoiceId: string;
+  attemptId: string;
+  amount: string;
+  invoiceNo: string;
+}
+
+/** M14-W3 — verified online payment failure. */
+export interface PaymentFailedEvent {
+  type: 'payment.failed';
+  studentUserId: string;
+  invoiceId: string;
+  attemptId: string;
+  amount: string;
+  invoiceNo: string;
+}
+
 export interface CommunityCommentEvent {
   type: 'community.comment';
   actorUserId: string;
@@ -144,6 +164,8 @@ export type DomainEvent =
   | ResultsPublishedEvent
   | InvoiceIssuedEvent
   | InvoiceOverdueEvent
+  | PaymentSucceededEvent
+  | PaymentFailedEvent
   | CommunityCommentEvent
   | CommunityLikeEvent
   | GroupRequestEvent

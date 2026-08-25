@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { PaymentsController } from './payments.controller';
+import { PaymentsWebhookController } from './payments-webhook.controller';
 import { SafepayAdapter } from './safepay.adapter';
 import { PAYMENT_GATEWAY } from './gateway.adapter';
 
@@ -11,7 +12,7 @@ import { PAYMENT_GATEWAY } from './gateway.adapter';
  * webhook controller arrives in W3.
  */
 @Module({
-  controllers: [PaymentsController],
+  controllers: [PaymentsController, PaymentsWebhookController],
   providers: [
     PaymentsService,
     { provide: PAYMENT_GATEWAY, useClass: SafepayAdapter },

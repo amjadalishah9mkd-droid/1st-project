@@ -21,6 +21,7 @@ export async function createTestApp(
 
   const app = moduleRef.createNestApplication<NestExpressApplication>({
     logger: false,
+    rawBody: true, // M14-W3: webhook HMAC verification over raw bytes
   });
   app.setGlobalPrefix('api/v1');
   app.use(

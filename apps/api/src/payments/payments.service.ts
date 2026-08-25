@@ -247,10 +247,13 @@ export class PaymentsService {
         },
       });
       if (claimed.count === 0) {
-        // Already settled/failed — idempotent no-op for replays.
-        return tx.paymentAttempt.findUniqueOrThrow({
+        // Already settled/failed — idempotent no-op for replays. The
+        // `justSettled` flag lets callers (webhook/verify) notify exactly
+        // once without a second state machine.
+        const current = await tx.paymentAttempt.findUniqueOrThrow({
           where: { id: attemptId },
         });
+        return { ...current, justSettled: false };
       }
 
       const invoice = await tx.invoice.findUniqueOrThrow({
@@ -285,6 +288,7 @@ export class PaymentsService {
         where: { id: attemptId },
         data: { paymentId: payment.id, overpaid },
       });
+      const result = { ...settled, justSettled: true };
 
       await this.audit.log({
         collegeId: attempt.collegeId,
@@ -299,19 +303,23 @@ export class PaymentsService {
           overpaid,
         },
       });
-      return settled;
+      return result;
     });
   }
 
-  /** Record a verified failure (W3). CAS — replays are no-ops. */
+  /**
+   * Record a verified failure. CAS — replays are no-ops; `justFailed`
+   * distinguishes the transition for exactly-once notifications.
+   */
   async failAttempt(attemptId: string, failureCode: string) {
-    await this.prisma.paymentAttempt.updateMany({
+    const updated = await this.prisma.paymentAttempt.updateMany({
       where: { id: attemptId, status: { in: ['CREATED', 'PENDING'] } },
       data: { status: 'FAILED', failureCode },
     });
-    return this.prisma.paymentAttempt.findUniqueOrThrow({
+    const attempt = await this.prisma.paymentAttempt.findUniqueOrThrow({
       where: { id: attemptId },
     });
+    return { ...attempt, justFailed: updated.count > 0 };
   }
 
   /**

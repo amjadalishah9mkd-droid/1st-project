@@ -1,7 +1,9 @@
 import {
   BadGatewayException,
   Controller,
+  ForbiddenException,
   Inject,
+  NotFoundException,
   Param,
   Post,
 } from '@nestjs/common';
@@ -12,6 +14,8 @@ import type { AuthenticatedUser } from '../access/authenticated-user';
 import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentsService } from './payments.service';
+import { PolicyService } from '../access/policy.service';
+import { EventsService } from '../events/events.module';
 import {
   PAYMENT_GATEWAY,
   type PaymentGatewayAdapter,
@@ -37,6 +41,8 @@ export class PaymentsController {
     private readonly payments: PaymentsService,
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly policy: PolicyService,
+    private readonly events: EventsService,
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGatewayAdapter,
   ) {}
 
@@ -109,5 +115,120 @@ export class PaymentsController {
       status: 'PENDING',
       checkoutUrl: session.checkoutUrl,
     };
+  }
+
+  /**
+   * M14-W3 — verify-on-return. The browser redirect is NEVER the source
+   * of truth: this endpoint asks the PROVIDER (server-to-server) what
+   * happened and routes the answer through the same W1 settlement/failure
+   * core the webhook uses. A forged "success" redirect settles nothing;
+   * a provider-confirmed payment settles even if the browser claimed
+   * failure. Amount authority stays with the frozen attempt.
+   */
+  @Post('payments/attempts/:id/verify')
+  @RequirePermission(PERMISSIONS.PAYMENTS_INITIATE)
+  async verify(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') attemptId: string,
+  ) {
+    const scope = await this.policy.scopeFor(user, 'payments.initiate');
+    if (!scope) {
+      throw new ForbiddenException({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission to perform this action',
+      });
+    }
+    // Ownership + tenancy: OWN callers see only their own attempts;
+    // anything else reads as nonexistent.
+    const attempt = await this.prisma.paymentAttempt.findFirst({
+      where: {
+        id: attemptId,
+        collegeId: user.collegeId,
+        ...(scope === 'OWN' ? { initiatedById: user.id } : {}),
+      },
+    });
+    if (!attempt) {
+      throw new NotFoundException({
+        code: 'NOT_FOUND',
+        message: 'Payment attempt not found',
+      });
+    }
+
+    // Terminal or not-yet-at-gateway attempts: nothing to ask the provider.
+    if (
+      attempt.status !== 'PENDING' ||
+      attempt.providerRef === null
+    ) {
+      return this.safeStatus(attempt.id);
+    }
+
+    const verification = await this.gateway.verifyPayment(attempt.providerRef);
+    if (verification.state === 'PAID') {
+      try {
+        const settled = await this.payments.settleAttempt(attempt.id, {
+          provider: this.gateway.provider,
+          providerRef: attempt.providerRef,
+          amount: verification.amount,
+          currency: verification.currency,
+        });
+        if (settled.justSettled) {
+          await this.emitOutcome(attempt.id, 'payment.succeeded');
+        }
+      } catch {
+        // Amount/currency mismatch — W1 persisted FAILED; fall through to
+        // report the truthful state. Never settle on mismatched money.
+        const after = await this.prisma.paymentAttempt.findUnique({
+          where: { id: attempt.id },
+        });
+        if (after?.failureCode === 'AMOUNT_MISMATCH') {
+          await this.emitOutcome(attempt.id, 'payment.failed');
+        }
+      }
+    } else if (verification.state === 'FAILED') {
+      const failed = await this.payments.failAttempt(
+        attempt.id,
+        'PROVIDER_REPORTED_FAILURE',
+      );
+      if (failed.justFailed) {
+        await this.emitOutcome(attempt.id, 'payment.failed');
+      }
+    }
+    // PENDING: the provider hasn't confirmed — leave the attempt alone.
+    return this.safeStatus(attempt.id);
+  }
+
+  /** Safe, minimal attempt view for the (future W4) status page. */
+  private async safeStatus(attemptId: string) {
+    const attempt = await this.prisma.paymentAttempt.findUniqueOrThrow({
+      where: { id: attemptId },
+    });
+    return {
+      attemptId: attempt.id,
+      invoiceId: attempt.invoiceId,
+      status: attempt.status,
+      amount: attempt.amount.toString(),
+      currency: attempt.currency,
+    };
+  }
+
+  private async emitOutcome(
+    attemptId: string,
+    type: 'payment.succeeded' | 'payment.failed',
+  ): Promise<void> {
+    const attempt = await this.prisma.paymentAttempt.findUnique({
+      where: { id: attemptId },
+      include: {
+        invoice: { include: { student: { select: { userId: true } } } },
+      },
+    });
+    if (!attempt) return;
+    this.events.emit({
+      type,
+      studentUserId: attempt.invoice.student.userId,
+      invoiceId: attempt.invoiceId,
+      attemptId: attempt.id,
+      amount: attempt.amount.toString(),
+      invoiceNo: attempt.invoice.invoiceNo,
+    });
   }
 }

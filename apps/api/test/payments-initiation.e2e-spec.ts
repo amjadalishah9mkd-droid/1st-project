@@ -62,7 +62,13 @@ describe('M14-W2 — payment initiation endpoint', () => {
       };
     },
     async verifyPayment() {
-      return { state: 'PENDING', amount: '0.00', currency: 'PKR' };
+      return { state: 'PENDING' as const, amount: '0.00', currency: 'PKR' };
+    },
+    verifyWebhookSignature() {
+      return false; // W3 covers webhook auth
+    },
+    parseWebhookEvent() {
+      return null;
     },
   };
 

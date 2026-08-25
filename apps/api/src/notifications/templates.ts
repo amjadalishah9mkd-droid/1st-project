@@ -57,6 +57,18 @@ export function renderTemplate(event: DomainEvent): NotificationTemplate | null 
         body: `An invoice of ${event.amount} is due by ${event.dueDate}.`,
         linkPath: '/fees',
       };
+    case 'payment.succeeded':
+      return {
+        title: 'Payment received',
+        body: `Your online payment of ${event.amount} for invoice ${event.invoiceNo} was received.`,
+        linkPath: `/fees/invoices/${event.invoiceId}`,
+      };
+    case 'payment.failed':
+      return {
+        title: 'Payment failed',
+        body: `Your online payment of ${event.amount} for invoice ${event.invoiceNo} could not be completed.`,
+        linkPath: `/fees/invoices/${event.invoiceId}`,
+      };
     case 'invoice.overdue':
       return {
         title: 'Invoice overdue',

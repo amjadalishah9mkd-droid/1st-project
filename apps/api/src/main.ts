@@ -15,6 +15,9 @@ async function bootstrap(): Promise<void> {
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: ['log', 'warn', 'error'],
+    // M14-W3: preserve the raw request body — Safepay signs the exact
+    // bytes it sends, so webhook HMAC verification must never re-serialize.
+    rawBody: true,
   });
 
   // Blueprint §7: all routes served under /api/v1

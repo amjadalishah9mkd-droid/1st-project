@@ -122,7 +122,8 @@ Principles applied consistently from M0 onward:
 | M13-W5 | Guardian hardening & M13 close-out | `7b03fed` |
 | M14-W0 | P2 security hardening (pre-payments gate) | `ded32ee` |
 | M14-W1 | Payments data model & settlement core | `d7ca39a` |
-| M14-W2 | Gateway adapter & payment initiation | *(this commit)* |
+| M14-W2 | Gateway adapter & payment initiation | `24e9609` |
+| M14-W3 | Webhook settlement & verification | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1025,6 +1026,57 @@ Core invariant preserved: **Payment = settled money only.**
 - Live smoke: student passes authz then hits FEATURE_DISABLED (no env
   in the sandbox stack), admin 403, anon 401 — the boundary works.
 
+### M14-W3 — Webhook settlement, idempotency & verify-on-return
+**Goal:** the asynchronous money path. No UI (W4), no reconciliation
+surface (W5), no real-sandbox run (W6).
+
+- **Signature provenance (VERIFIED, Safepay webhook docs):**
+  `X-SFPY-SIGNATURE` = HMAC-SHA512 hex of the RAW request body with the
+  endpoint's shared secret (`SAFEPAY_WEBHOOK_SECRET`). Verification lives
+  in the adapter (`verifyWebhookSignature`, timing-safe, all failure
+  modes indistinguishable); Nest `rawBody: true` preserves the exact
+  bytes — no parse→re-stringify HMAC. Event shape verified too:
+  `token` (evt id), `type` (`payment.succeeded`/`payment.failed`/…),
+  `data.{tracker, state, amount(lowest denom), currency}`.
+- **`POST /payments/webhooks/safepay`** (public; signature IS the auth):
+  raw bytes → HMAC → strict parse (adapter `parseWebhookEvent`) →
+  attempt resolved from OUR `{provider, providerRef}` (payload claims
+  never drive tenancy) → **GatewayEvent insert-claim FIRST** (duplicate
+  delivery → 200 no-op, no re-processing, no re-notification) → W1
+  `settleAttempt`/`failAttempt`. 401 only for auth, 400 only for
+  authentic-but-malformed; every business outcome (duplicate, unknown
+  tracker → `UNMATCHED_*` ledger row, amount/currency mismatch →
+  persisted FAILED + `payments.webhook_rejected` audit) is a 200 —
+  no provider retry storms, no state leakage.
+- **Exactly-once notifications:** `settleAttempt`/`failAttempt` now
+  return non-persistent `justSettled`/`justFailed` transition flags
+  (backward-compatible), so `payment.succeeded`/`payment.failed` events
+  fire only on the actual transition — parallel same-event, parallel
+  distinct-events, replays and terminal-state webhooks all yield one
+  Payment / one notification. Refund/authorization/void event types are
+  ledgered as OTHER for W5.
+- **`POST /payments/attempts/:id/verify`** (`payments.initiate`, OWN):
+  browser redirects are never truth — the endpoint asks the provider via
+  `verifyPayment` and routes PAID/FAILED through the SAME settlement/
+  failure core; PENDING leaves the attempt alone. Forged "success" body
+  fields are ignored; provider-verified success settles even if the
+  browser claimed failure; provider amount mismatch → persisted FAILED.
+  Ownership: other student/rival college/garbage → 404, guardian → 403,
+  anon → 401.
+- **Notifications/mail:** `payment_succeeded`/`payment_failed` mail
+  kinds + in-app templates (invoiceNo + amount only; no card data,
+  tokens or payloads); emitted post-commit via the existing bus; a
+  throwing SMTP transport provably never rolls back settlement.
+- **Tests: 431** (18 new): auth trio indistinguishable 401s + tampered
+  raw-body rejection + malformed-400; settle-once with replay/parallel-
+  same/parallel-distinct; amount & currency mismatch; FAILED/EXPIRED
+  non-resurrection; idempotent failures; unmatched ledger; SMTP-failure
+  isolation; verify-on-return ownership matrix + forged-success +
+  PAID/FAILED/mismatch routing; HMAC unit vectors.
+- **Real Safepay sandbox: NOT exercised** (no credentials in this
+  environment) — deterministic DI-fake coverage only; live sandbox
+  verification remains W6 scope.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1146,6 +1198,7 @@ reached 141 by the end of M9):
 | M14-W0 | 394 | timetable section-view scope gate, login-limiter pruning |
 | M14-W1 | 405 | attempt lifecycle CAS, settle-once/replay, amount tampering, overpaid capping, recordPayment race |
 | M14-W2 | 413 | initiation authz matrix, tamper-proof amounts, gateway failure/duplicate-ref handling |
+| M14-W3 | 431 | webhook HMAC auth, settle-once idempotency matrix, verify-on-return ownership + truth routing |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1261,13 +1314,13 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M14-W2.*
+*Last updated after M14-W3.*
 
 - **Current milestone**: **M13 COMPLETE** (W1–W5); M0–M13 all accepted
 - **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 8 found, database schema up to date
-- **Tests**: **413/413 passing** (30 suites)
+- **Tests**: **431/431 passing** (31 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)

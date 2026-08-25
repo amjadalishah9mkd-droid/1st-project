@@ -3,10 +3,12 @@ import {
   Injectable,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import type {
   CheckoutSession,
   CheckoutSessionInput,
   GatewayVerification,
+  GatewayWebhookEvent,
   PaymentGatewayAdapter,
 } from './gateway.adapter';
 
@@ -29,6 +31,11 @@ import type {
  *  - verify: GET {host}/reporter/api/v1/payments/{tracker}
  *      → data.tracker.state ('TRACKER_ENDED' = paid) +
  *        purchase_totals.quote_amount {currency, amount (lowest denom)}
+ *  - webhooks (VERIFIED, developers/webhooks/*): header X-SFPY-SIGNATURE
+ *      = HMAC-SHA512 hex of the raw JSON body with the endpoint's shared
+ *      secret; event shape { token: 'evt_…', type: 'payment.succeeded' |
+ *      'payment.failed' | …, data: { tracker: 'track_…', state, amount
+ *      (lowest denom), currency } }
  *
  * UNRESOLVED (documented, isolated here): the `intent` channel value —
  * the guide shows CYBERSOURCE/MPGS as card channels; which one a given
@@ -228,6 +235,62 @@ export class SafepayAdapter implements PaymentGatewayAdapter {
           ? fromLowestDenomination(quote.amount)
           : '0.00',
       currency: quote?.currency ?? 'PKR',
+    };
+  }
+
+  /**
+   * M14-W3 (VERIFIED contract): X-SFPY-SIGNATURE is the hex HMAC-SHA512
+   * of the raw request body using the endpoint's shared secret. Comparison
+   * is timing-safe; every failure mode (missing secret, missing header,
+   * malformed hex, wrong digest) is an indistinguishable `false`.
+   */
+  verifyWebhookSignature(rawBody: Buffer, signature: string | undefined): boolean {
+    const secret = process.env.SAFEPAY_WEBHOOK_SECRET;
+    if (!secret || !signature) return false;
+    const expected = createHmac('sha512', secret).update(rawBody).digest();
+    let provided: Buffer;
+    try {
+      provided = Buffer.from(signature.trim(), 'hex');
+    } catch {
+      return false;
+    }
+    if (provided.length !== expected.length) return false;
+    return timingSafeEqual(provided, expected);
+  }
+
+  /** Parse an authenticated Safepay event body (VERIFIED payload shape). */
+  parseWebhookEvent(body: unknown): GatewayWebhookEvent | null {
+    if (typeof body !== 'object' || body === null) return null;
+    const event = body as {
+      token?: unknown;
+      type?: unknown;
+      data?: { tracker?: unknown; amount?: unknown; currency?: unknown };
+    };
+    if (
+      typeof event.token !== 'string' ||
+      typeof event.type !== 'string' ||
+      typeof event.data?.tracker !== 'string' ||
+      event.token.length === 0 ||
+      event.data.tracker.length === 0
+    ) {
+      return null;
+    }
+    const kind =
+      event.type === 'payment.succeeded'
+        ? 'SUCCEEDED'
+        : event.type === 'payment.failed'
+          ? 'FAILED'
+          : 'OTHER';
+    return {
+      eventId: event.token,
+      providerRef: event.data.tracker,
+      kind,
+      amount:
+        kind === 'SUCCEEDED' && typeof event.data.amount === 'number'
+          ? fromLowestDenomination(event.data.amount)
+          : null,
+      currency:
+        typeof event.data.currency === 'string' ? event.data.currency : null,
     };
   }
 }
