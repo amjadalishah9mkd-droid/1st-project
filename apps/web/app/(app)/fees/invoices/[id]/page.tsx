@@ -1,10 +1,11 @@
 'use client';
 
 import { FormEvent, useCallback, useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import {
   recordPaymentSchema,
   type InvoiceDetail,
+  type PaymentAttemptItem,
 } from '@campusos/shared';
 import { apiFetch, ApiError } from '@/lib/api/client';
 import { formValues, useZodForm } from '@/lib/hooks/use-zod-form';
@@ -18,13 +19,17 @@ import { ConfirmDialog, Dialog } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { invoiceTone } from '../../fee-utils';
-import { formatAmount } from '@/lib/format';
+import { formatAmount, formatDateTime } from '@/lib/format';
 
 export default function InvoiceDetailPage() {
   const params = useParams<{ id: string }>();
   const { hasPermission } = useSession();
   const canManage = hasPermission('fees.manage');
+  // M14-W4: visibility HINT only — the API is the authorization boundary.
+  const canPay = hasPermission('payments.initiate');
   const { toast } = useToast();
+  const router = useRouter();
+  const [paying, setPaying] = useState(false);
   const [invoice, setInvoice] = useState<InvoiceDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,6 +54,48 @@ export default function InvoiceDetailPage() {
     return <ErrorState message={error ?? 'Not found'} onRetry={load} />;
 
   const open = invoice.status !== 'PAID' && invoice.status !== 'CANCELLED';
+  const payable = open && Number(invoice.balance) > 0;
+
+  // M14-W4: the invoice id is the ONLY thing the browser sends — amounts,
+  // currency and ownership are resolved server-side.
+  async function payNow() {
+    if (paying) return; // duplicate-click protection
+    setPaying(true);
+    try {
+      const response = await apiFetch<{ attemptId: string; checkoutUrl: string }>(
+        `/fees/invoices/${invoice!.id}/pay`,
+        { method: 'POST' },
+      );
+      window.location.href = response.data.checkoutUrl;
+    } catch (err) {
+      setPaying(false);
+      if (err instanceof ApiError) {
+        if (err.code === 'FEATURE_DISABLED') {
+          toast('Online payments are not enabled for your college yet.', 'error');
+        } else if (err.code === 'ATTEMPT_IN_PROGRESS') {
+          const pending = invoice!.attempts.find(
+            (attempt) => attempt.status === 'PENDING' || attempt.status === 'CREATED',
+          );
+          if (pending) {
+            router.push(`/fees/payments/${pending.id}`);
+          } else {
+            toast('A payment for this invoice is already in progress.', 'error');
+            load();
+          }
+        } else if (err.code === 'GATEWAY_ERROR') {
+          toast(
+            'The payment session could not be started. Your invoice remains unpaid — please try again.',
+            'error',
+          );
+        } else {
+          toast(err.message, 'error');
+          load();
+        }
+      } else {
+        toast('Payment could not be started', 'error');
+      }
+    }
+  }
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -65,6 +112,10 @@ export default function InvoiceDetailPage() {
               ) : null}
               <Button onClick={() => setPaymentOpen(true)}>Record payment</Button>
             </>
+          ) : canPay && payable ? (
+            <Button onClick={payNow} disabled={paying} aria-label="Pay this invoice online">
+              {paying ? 'Starting payment…' : `Pay now · ${formatAmount(invoice.balance)}`}
+            </Button>
           ) : undefined
         }
       />
@@ -134,6 +185,45 @@ export default function InvoiceDetailPage() {
           )}
         </section>
       </div>
+
+      {invoice.attempts.length > 0 ? (
+        <section className="mt-4 rounded-card border border-line bg-surface-raised shadow-card">
+          <h2 className="border-b border-line px-5 py-3 text-sm font-semibold">
+            Online payment attempts ({invoice.attempts.length})
+          </h2>
+          <ul className="divide-y divide-line text-sm">
+            {invoice.attempts.map((attempt) => (
+              <li
+                key={attempt.id}
+                className="flex flex-wrap items-center justify-between gap-2 px-5 py-2.5"
+              >
+                <div>
+                  <p className="font-medium">
+                    {formatAmount(attempt.amount)}{' '}
+                    <span className="text-xs font-normal text-ink-muted">
+                      · {attempt.provider} · {formatDateTime(attempt.createdAt)}
+                    </span>
+                  </p>
+                  <p className="text-xs text-ink-muted">
+                    {attemptDescription(attempt)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Badge tone={attemptTone(attempt.status)}>{attempt.status}</Badge>
+                  {attempt.status === 'PENDING' || attempt.status === 'CREATED' ? (
+                    <a
+                      href={`/fees/payments/${attempt.id}`}
+                      className="text-xs font-medium text-brand-700 hover:underline"
+                    >
+                      Check status
+                    </a>
+                  ) : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       {canManage ? (
         <>
@@ -243,4 +333,38 @@ function PaymentDialog({
       </form>
     </Dialog>
   );
+}
+
+// ── M14-W4 attempt display helpers (presentation only) ───────
+
+function attemptTone(
+  status: PaymentAttemptItem['status'],
+): 'neutral' | 'success' | 'warning' | 'danger' | 'brand' {
+  switch (status) {
+    case 'SUCCEEDED':
+      return 'success';
+    case 'FAILED':
+      return 'danger';
+    case 'PENDING':
+    case 'CREATED':
+      return 'brand';
+    default:
+      return 'neutral';
+  }
+}
+
+function attemptDescription(attempt: PaymentAttemptItem): string {
+  switch (attempt.status) {
+    case 'SUCCEEDED':
+      return `Confirmed ${attempt.confirmedAt ? formatDateTime(attempt.confirmedAt) : ''}`;
+    case 'FAILED':
+      return attempt.failureCode === 'AMOUNT_MISMATCH'
+        ? 'The confirmed amount did not match — contact the college office.'
+        : 'The payment could not be completed. No money was recorded.';
+    case 'EXPIRED':
+    case 'CANCELLED':
+      return 'This payment attempt is no longer active.';
+    default:
+      return 'Awaiting confirmation from the payment provider.';
+  }
 }

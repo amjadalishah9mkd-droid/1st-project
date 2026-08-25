@@ -123,7 +123,8 @@ Principles applied consistently from M0 onward:
 | M14-W0 | P2 security hardening (pre-payments gate) | `ded32ee` |
 | M14-W1 | Payments data model & settlement core | `d7ca39a` |
 | M14-W2 | Gateway adapter & payment initiation | `24e9609` |
-| M14-W3 | Webhook settlement & verification | *(this commit)* |
+| M14-W3 | Webhook settlement & verification | `ca5585e` |
+| M14-W4 | Student payment UI | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1077,6 +1078,46 @@ surface (W5), no real-sandbox run (W6).
   environment) — deterministic DI-fake coverage only; live sandbox
   verification remains W6 scope.
 
+### M14-W4 — Student payment UI
+**Goal:** the smallest production-quality payment experience over the
+existing APIs. Presentation layer only — no backend authority moved.
+
+- **Invoice detail (`/fees/invoices/[id]`):** "Pay now · <balance>"
+  appears only with the `payments.initiate` hint on a payable invoice
+  with balance > 0 (hidden for PAID/CANCELLED/zero-balance and all
+  staff/guardians — hint only; the API stays authoritative). Click →
+  `POST /fees/invoices/:id/pay` with NO body → redirect to the returned
+  `checkoutUrl`. FEATURE_DISABLED / GATEWAY_ERROR / ATTEMPT_IN_PROGRESS
+  each get friendly handling (in-progress routes to the live attempt's
+  status page). Duplicate-click protected.
+- **Attempt history section** on invoice detail (safe fields only:
+  status/amount/provider/times/friendly failure text) — settled
+  `Payment` history remains the only money record; attempts are
+  explicitly rendered as attempts.
+- **`/fees/payments/[attemptId]`** status page: calls
+  `POST /payments/attempts/:id/verify` (no body; gateway redirect query
+  params deliberately ignored) and renders ONLY the server's answer.
+  PENDING polls at 4s for max 2 minutes, stops instantly on terminal
+  states, then offers "Check again" (never claims failure). SUCCEEDED/
+  FAILED/EXPIRED/CANCELLED views with View invoice / Back to fees /
+  Try again (new attempt via the normal endpoint — never resurrection).
+- **Backend support (minimal):** `InvoiceDetail.attempts` added to the
+  fees invoice-detail response (safe fields; rides the existing OWN/
+  CHILD/ALL scoping) + shared `PaymentAttemptItem` type.
+- **Alloy walkthrough (local Safepay stub via SAFEPAY_HOST; checkout
+  redirect reached the REAL Safepay sandbox page, which correctly
+  rejected the fake tracker):** student → /fees → invoice → Pay now →
+  hosted checkout redirect → return → PENDING with live polling → stub
+  flipped to TRACKER_ENDED → auto-settled → "Payment successful …
+  invoice is now PAID" → invoice PAID with ONLINE payment row +
+  SUCCEEDED attempt + notification; failure path (TRACKER_FAILED) with
+  **forged `?success=true&status=SUCCEEDED` query showing FAILED**;
+  EXPIRED terminal + Try again→new attempt; admin/teacher 403 on
+  pay/verify, admin has no `payments.initiate` hint; smoke data purged,
+  demo invoice restored, stub + env removed.
+- Tests remain **431** (no frontend harness; the W2/W3 e2e suites pin
+  every consumed contract); typecheck 0; builds green; migrations 8.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1314,7 +1355,7 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M14-W3.*
+*Last updated after M14-W4.*
 
 - **Current milestone**: **M13 COMPLETE** (W1–W5); M0–M13 all accepted
 - **Latest commit**: see the M12-W4 milestone commit on branch

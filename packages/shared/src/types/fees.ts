@@ -26,8 +26,29 @@ export interface InvoiceItem {
   status: 'PENDING' | 'PARTIAL' | 'PAID' | 'OVERDUE' | 'CANCELLED';
 }
 
+/** M14-W4 — safe, read-only view of an online payment attempt. */
+export interface PaymentAttemptItem {
+  id: string;
+  status:
+    | 'CREATED'
+    | 'PENDING'
+    | 'SUCCEEDED'
+    | 'FAILED'
+    | 'EXPIRED'
+    | 'CANCELLED'
+    | 'REFUNDED';
+  amount: string;
+  currency: string;
+  provider: string;
+  createdAt: string;
+  confirmedAt: string | null;
+  failureCode: string | null;
+}
+
 export interface InvoiceDetail extends InvoiceItem {
   components: Array<{ label: string; amount: string }>;
+  /** Online payment attempts, newest first (in-flight + historical). */
+  attempts: PaymentAttemptItem[];
   payments: Array<{
     id: string;
     amount: string;

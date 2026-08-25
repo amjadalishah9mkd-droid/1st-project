@@ -399,6 +399,8 @@ export class FeesService {
           include: { recordedBy: { select: { firstName: true, lastName: true } } },
           orderBy: { paidAt: 'asc' },
         },
+        // M14-W4: attempt history for the payment UI — safe fields only.
+        attempts: { orderBy: { createdAt: 'desc' } },
       },
     });
     if (!row) {
@@ -430,6 +432,16 @@ export class FeesService {
         recordedByName: payment.recordedBy
           ? `${payment.recordedBy.firstName} ${payment.recordedBy.lastName}`
           : 'Online payment', // M14: gateway settlements have no staff recorder
+      })),
+      attempts: row.attempts.map((attempt) => ({
+        id: attempt.id,
+        status: attempt.status,
+        amount: attempt.amount.toString(),
+        currency: attempt.currency,
+        provider: attempt.provider,
+        createdAt: attempt.createdAt.toISOString(),
+        confirmedAt: attempt.confirmedAt?.toISOString() ?? null,
+        failureCode: attempt.failureCode,
       })),
     };
   }
