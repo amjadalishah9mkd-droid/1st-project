@@ -2,14 +2,27 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, PaymentAttemptStatus } from '@prisma/client';
+import type {
+  PageMeta,
+  PaginationQuery,
+  ReconciliationAttemptItem,
+  UnmatchedGatewayEventItem,
+} from '@campusos/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
+import { EventsService } from '../events/events.module';
+import { pageArgs, pageMeta } from '../common/pagination/pagination';
 import type { AuthenticatedUser } from '../access/authenticated-user';
+import {
+  PAYMENT_GATEWAY,
+  type PaymentGatewayAdapter,
+} from './gateway.adapter';
 
 /**
  * M14-W1 — secure settlement core for online payments.
@@ -56,7 +69,199 @@ export class PaymentsService {
     private readonly prisma: PrismaService,
     private readonly policy: PolicyService,
     private readonly audit: AuditService,
+    private readonly events: EventsService,
+    @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGatewayAdapter,
   ) {}
+
+  /**
+   * M14-W5 — emit the student-facing outcome event for an attempt.
+   * Called AFTER the settlement/failure transaction commits; notification
+   * failures can never touch payment state.
+   */
+  async notifyOutcome(
+    attemptId: string,
+    type: 'payment.succeeded' | 'payment.failed',
+  ): Promise<void> {
+    const attempt = await this.prisma.paymentAttempt.findUnique({
+      where: { id: attemptId },
+      include: {
+        invoice: { include: { student: { select: { userId: true } } } },
+      },
+    });
+    if (!attempt) return;
+    this.events.emit({
+      type,
+      studentUserId: attempt.invoice.student.userId,
+      invoiceId: attempt.invoiceId,
+      attemptId: attempt.id,
+      amount: attempt.amount.toString(),
+      invoiceNo: attempt.invoice.invoiceNo,
+    });
+  }
+
+  /**
+   * M14-W5 — reconciliation list (fees.manage, resolved ALL scope only).
+   * Tenancy is the authenticated admin's collegeId — never client input.
+   */
+  async listReconciliation(
+    user: AuthenticatedUser,
+    query: PaginationQuery & { status?: string; provider?: string; invoiceNo?: string },
+  ): Promise<{ data: ReconciliationAttemptItem[]; meta: PageMeta }> {
+    await this.requireManageAll(user);
+    const where = {
+      collegeId: user.collegeId,
+      ...(query.status
+        ? { status: query.status as 'PENDING' }
+        : {}),
+      ...(query.provider ? { provider: query.provider } : {}),
+      ...(query.invoiceNo
+        ? { invoice: { invoiceNo: { contains: query.invoiceNo, mode: 'insensitive' as const } } }
+        : {}),
+    };
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.paymentAttempt.findMany({
+        where,
+        include: {
+          invoice: {
+            select: {
+              invoiceNo: true,
+              student: {
+                select: {
+                  rollNo: true,
+                  user: { select: { firstName: true, lastName: true } },
+                },
+              },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        ...pageArgs(query),
+      }),
+      this.prisma.paymentAttempt.count({ where }),
+    ]);
+    return {
+      data: rows.map((row) => ({
+        id: row.id,
+        invoiceId: row.invoiceId,
+        invoiceNo: row.invoice.invoiceNo,
+        studentName: `${row.invoice.student.user.firstName} ${row.invoice.student.user.lastName}`,
+        rollNo: row.invoice.student.rollNo,
+        amount: row.amount.toString(),
+        currency: row.currency,
+        provider: row.provider,
+        providerRef: row.providerRef,
+        status: row.status,
+        overpaid: row.overpaid,
+        failureCode: row.failureCode,
+        createdAt: row.createdAt.toISOString(),
+        confirmedAt: row.confirmedAt?.toISOString() ?? null,
+      })),
+      meta: pageMeta(query, total),
+    };
+  }
+
+  /**
+   * M14-W5 — unmatched gateway deliveries (UNMATCHED_* outcomes). These
+   * are tenant-unattributable BY DESIGN (the tracker matched no attempt),
+   * carry no PII and no payload bodies — only provider/eventId/outcome.
+   */
+  async listUnmatchedEvents(
+    user: AuthenticatedUser,
+  ): Promise<UnmatchedGatewayEventItem[]> {
+    await this.requireManageAll(user);
+    const rows = await this.prisma.gatewayEvent.findMany({
+      where: { outcome: { startsWith: 'UNMATCHED_' } },
+      orderBy: { receivedAt: 'desc' },
+      take: 50,
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      provider: row.provider,
+      eventId: row.eventId,
+      outcome: row.outcome,
+      receivedAt: row.receivedAt.toISOString(),
+    }));
+  }
+
+  /**
+   * M14-W5 — admin "verify with gateway". The browser only requests
+   * verification; the server asks the adapter and routes the answer
+   * through the SAME settlement/failure core as webhooks. Terminal
+   * attempts are returned as-is (never resurrected).
+   */
+  async reconcileVerify(user: AuthenticatedUser, attemptId: string) {
+    await this.requireManageAll(user);
+    const attempt = await this.prisma.paymentAttempt.findFirst({
+      where: { id: attemptId, collegeId: user.collegeId },
+    });
+    if (!attempt) {
+      throw new NotFoundException({
+        code: 'NOT_FOUND',
+        message: 'Payment attempt not found',
+      });
+    }
+    let outcome = 'NO_ACTION';
+    if (attempt.status === 'PENDING' && attempt.providerRef !== null) {
+      const verification = await this.gateway.verifyPayment(attempt.providerRef);
+      if (verification.state === 'PAID') {
+        try {
+          const settled = await this.settleAttempt(attempt.id, {
+            provider: this.gateway.provider,
+            providerRef: attempt.providerRef,
+            amount: verification.amount,
+            currency: verification.currency,
+          });
+          outcome = settled.justSettled ? 'SETTLED' : 'ALREADY_SETTLED';
+          if (settled.justSettled) {
+            await this.notifyOutcome(attempt.id, 'payment.succeeded');
+          }
+        } catch {
+          outcome = 'REJECTED'; // AMOUNT_MISMATCH persisted FAILED by the core
+          const after = await this.prisma.paymentAttempt.findUnique({
+            where: { id: attempt.id },
+          });
+          if (after?.failureCode === 'AMOUNT_MISMATCH') {
+            await this.notifyOutcome(attempt.id, 'payment.failed');
+          }
+        }
+      } else if (verification.state === 'FAILED') {
+        const failed = await this.failAttempt(
+          attempt.id,
+          'PROVIDER_REPORTED_FAILURE',
+        );
+        outcome = 'FAILED';
+        if (failed.justFailed) {
+          await this.notifyOutcome(attempt.id, 'payment.failed');
+        }
+      } else {
+        outcome = 'STILL_PENDING';
+      }
+    }
+    await this.audit.log({
+      collegeId: user.collegeId,
+      actorId: user.id,
+      action: 'payments.reconciliation_verified',
+      targetType: 'PaymentAttempt',
+      targetId: attemptId,
+      metadata: { provider: attempt.provider, outcome },
+    });
+    const current = await this.prisma.paymentAttempt.findUniqueOrThrow({
+      where: { id: attemptId },
+    });
+    return {
+      attemptId: current.id,
+      invoiceId: current.invoiceId,
+      status: current.status,
+      overpaid: current.overpaid,
+      outcome,
+    };
+  }
+
+  /** fees.manage must resolve to ALL — reconciliation is a staff surface. */
+  private async requireManageAll(user: AuthenticatedUser): Promise<void> {
+    const scope = await this.policy.scopeFor(user, 'fees.manage');
+    if (scope !== 'ALL') throw forbidden();
+  }
 
   /**
    * Create a payment attempt for the caller's own invoice (OWN scope).

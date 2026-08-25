@@ -124,7 +124,8 @@ Principles applied consistently from M0 onward:
 | M14-W1 | Payments data model & settlement core | `d7ca39a` |
 | M14-W2 | Gateway adapter & payment initiation | `24e9609` |
 | M14-W3 | Webhook settlement & verification | `ca5585e` |
-| M14-W4 | Student payment UI | *(this commit)* |
+| M14-W4 | Student payment UI | `362cf2d` |
+| M14-W5 | Admin reconciliation | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1118,6 +1119,51 @@ existing APIs. Presentation layer only — no backend authority moved.
 - Tests remain **431** (no frontend harness; the W2/W3 e2e suites pin
   every consumed contract); typecheck 0; builds green; migrations 8.
 
+### M14-W5 — Admin reconciliation
+**Goal:** an operations surface over online payments — visibility plus a
+controlled gateway-verify action. No refunds, no accountant role, no W6.
+
+- **APIs (all `fees.manage`, service-verified resolved-ALL scope,
+  tenant-locked to the admin's collegeId):**
+  `GET /payments/reconciliation` (paginated; Zod-validated status/
+  provider/invoiceNo filters — junk filter values 400, never reach
+  Prisma), `GET /payments/reconciliation/unmatched` (UNMATCHED_*
+  GatewayEvent ledger rows: provider/eventId/outcome/receivedAt only —
+  tenant-unattributable by design, no payload bodies exist to leak),
+  `POST /payments/reconciliation/:id/verify`. The student verify
+  endpoint (`payments.initiate`/OWN) is untouched — reconciliation is a
+  separate capability path in PaymentsService.
+- **Verify action:** the browser only *requests* verification; the
+  server asks the adapter and routes PAID/FAILED through the SAME W1
+  settlement/failure core (row lock + CAS). Outcomes: SETTLED /
+  ALREADY_SETTLED / STILL_PENDING / FAILED / REJECTED (amount mismatch,
+  persisted by the core) / NO_ACTION (terminal — never resurrected).
+  Student notifications fire exactly once via the shared
+  `notifyOutcome` helper; every verify is audited
+  (`payments.reconciliation_verified`, ids/provider/outcome only).
+- **UI:** third "Reconciliation" tab on the admin /fees page
+  (`fees.manage` hint): DataTable of attempts (invoiceNo→detail link,
+  student+roll, amount+currency, provider+ref, created, status badge,
+  **"Overpaid — manual investigation required"** flag, failureCode),
+  status filter, per-row "Verify with gateway" (PENDING only, disabled
+  while running, toast feedback, live summary refresh), and an
+  unmatched-events panel.
+- **Export:** verified fees.csv already aggregates payments
+  method-agnostically — ONLINE settlements flow into paid totals with
+  zero changes (pinned by a new test incl. tenant scoping + student
+  403). F3/results.csv untouched.
+- **Tests: 439** (8 new): authz matrix (admin 200, teacher/student/
+  guardian 403, anon 401), rival-college invisibility + verify 404 +
+  garbage 404, PAID→settled (payment/invoice/notification/audit +
+  repeat NO_ACTION with one Payment), PENDING/FAILED routing +
+  no-resurrection, amount-mismatch REJECTED, overpaid flag + PAID cap +
+  no negative rows, unmatched ledger minimal-fields + junk-filter 400,
+  export ONLINE totals.
+- **No migration** (still 8). Alloy: admin tab walkthrough with the
+  local gateway stub — pending row → Verify → "Payment confirmed and
+  settled" → SUCCEEDED badge + dashboard tiles updated; API-level
+  negative matrix re-confirmed live; smoke purged, demo restored.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1240,6 +1286,7 @@ reached 141 by the end of M9):
 | M14-W1 | 405 | attempt lifecycle CAS, settle-once/replay, amount tampering, overpaid capping, recordPayment race |
 | M14-W2 | 413 | initiation authz matrix, tamper-proof amounts, gateway failure/duplicate-ref handling |
 | M14-W3 | 431 | webhook HMAC auth, settle-once idempotency matrix, verify-on-return ownership + truth routing |
+| M14-W5 | 439 | reconciliation authz/tenancy matrix, gateway-verify routing, overpaid visibility, export ONLINE |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1355,13 +1402,13 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M14-W4.*
+*Last updated after M14-W5.*
 
 - **Current milestone**: **M13 COMPLETE** (W1–W5); M0–M13 all accepted
 - **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 8 found, database schema up to date
-- **Tests**: **431/431 passing** (31 suites)
+- **Tests**: **439/439 passing** (32 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)

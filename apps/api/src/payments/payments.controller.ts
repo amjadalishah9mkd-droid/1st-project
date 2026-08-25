@@ -2,11 +2,16 @@ import {
   BadGatewayException,
   Controller,
   ForbiddenException,
+  Get,
   Inject,
   NotFoundException,
   Param,
   Post,
+  Query,
 } from '@nestjs/common';
+import { z } from 'zod';
+import { paginationQuerySchema } from '@campusos/shared';
+import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { PERMISSIONS } from '@campusos/shared';
 import { RequirePermission } from '../access/require-permission.decorator';
 import { CurrentUser } from '../access/current-user.decorator';
@@ -35,6 +40,22 @@ import {
  * un-tamperable. The browser redirect never settles anything — settlement
  * is exclusively W3's verified-confirmation path.
  */
+const reconciliationQuerySchema = paginationQuerySchema.extend({
+  status: z
+    .enum([
+      'CREATED',
+      'PENDING',
+      'SUCCEEDED',
+      'FAILED',
+      'EXPIRED',
+      'CANCELLED',
+      'REFUNDED',
+    ])
+    .optional(),
+  provider: z.string().trim().max(40).optional(),
+  invoiceNo: z.string().trim().max(60).optional(),
+});
+
 @Controller()
 export class PaymentsController {
   constructor(
@@ -195,6 +216,33 @@ export class PaymentsController {
     }
     // PENDING: the provider hasn't confirmed — leave the attempt alone.
     return this.safeStatus(attempt.id);
+  }
+
+  // ── M14-W5: admin reconciliation (fees.manage, ALL scope) ───
+
+  @Get('payments/reconciliation')
+  @RequirePermission(PERMISSIONS.FEES_MANAGE)
+  listReconciliation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query(new ZodValidationPipe(reconciliationQuerySchema))
+    query: z.infer<typeof reconciliationQuerySchema>,
+  ) {
+    return this.payments.listReconciliation(user, query);
+  }
+
+  @Get('payments/reconciliation/unmatched')
+  @RequirePermission(PERMISSIONS.FEES_MANAGE)
+  listUnmatched(@CurrentUser() user: AuthenticatedUser) {
+    return this.payments.listUnmatchedEvents(user);
+  }
+
+  @Post('payments/reconciliation/:id/verify')
+  @RequirePermission(PERMISSIONS.FEES_MANAGE)
+  reconcileVerify(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') attemptId: string,
+  ) {
+    return this.payments.reconcileVerify(user, attemptId);
   }
 
   /** Safe, minimal attempt view for the (future W4) status page. */

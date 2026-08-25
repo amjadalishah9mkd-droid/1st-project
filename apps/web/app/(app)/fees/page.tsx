@@ -9,7 +9,9 @@ import {
   type FeeStructureItem,
   type FeeSummary,
   type InvoiceItem,
+  type ReconciliationAttemptItem,
   type TermItem,
+  type UnmatchedGatewayEventItem,
 } from '@campusos/shared';
 import { apiFetch } from '@/lib/api/client';
 import { useList, useOptions } from '@/lib/hooks/use-list';
@@ -74,7 +76,7 @@ function StudentFeesView() {
 
 // ── Admin view ───────────────────────────────────────────────
 
-type Tab = 'invoices' | 'structures';
+type Tab = 'invoices' | 'structures' | 'reconciliation';
 
 function AdminFeesView() {
   const [tab, setTab] = useState<Tab>('invoices');
@@ -137,6 +139,7 @@ function AdminFeesView() {
           [
             ['invoices', `Invoices`],
             ['structures', `Structures`],
+            ['reconciliation', `Reconciliation`],
           ] as Array<[Tab, string]>
         ).map(([key, label]) => (
           <button
@@ -193,7 +196,7 @@ function AdminFeesView() {
             },
           ]}
         />
-      ) : (
+      ) : tab === 'structures' ? (
         <DataTable
           rowKey={(row) => row.id}
           rows={structures.rows}
@@ -231,6 +234,13 @@ function AdminFeesView() {
               ),
             },
           ]}
+        />
+      ) : (
+        <ReconciliationView
+          onSettled={() => {
+            invoices.refetch();
+            loadSummary();
+          }}
         />
       )}
 
@@ -621,5 +631,207 @@ function EditStructureDialog({
         </div>
       </form>
     </Dialog>
+  );
+}
+
+// ── M14-W5: admin reconciliation (fees.manage — UI hint only; every
+// API below is independently authorized server-side) ─────────
+
+const ATTEMPT_STATUSES = [
+  'PENDING',
+  'SUCCEEDED',
+  'FAILED',
+  'EXPIRED',
+  'CANCELLED',
+  'CREATED',
+] as const;
+
+function attemptTone(
+  status: ReconciliationAttemptItem['status'],
+): 'neutral' | 'success' | 'warning' | 'danger' | 'brand' {
+  switch (status) {
+    case 'SUCCEEDED':
+      return 'success';
+    case 'FAILED':
+      return 'danger';
+    case 'PENDING':
+    case 'CREATED':
+      return 'brand';
+    default:
+      return 'neutral';
+  }
+}
+
+function ReconciliationView({ onSettled }: { onSettled: () => void }) {
+  const [status, setStatus] = useState('');
+  const attempts = useList<ReconciliationAttemptItem>('/payments/reconciliation', {
+    status: status || undefined,
+  });
+  const [unmatched, setUnmatched] = useState<UnmatchedGatewayEventItem[]>([]);
+  const [verifying, setVerifying] = useState<string | null>(null);
+  const { toast } = useToast();
+  const router = useRouter();
+
+  useEffect(() => {
+    apiFetch<UnmatchedGatewayEventItem[]>('/payments/reconciliation/unmatched')
+      .then((response) => setUnmatched(response.data))
+      .catch(() => undefined);
+  }, []);
+
+  // The browser only REQUESTS verification — the server asks the gateway
+  // and the settlement core decides. No status/amount is ever sent.
+  async function verify(attemptId: string) {
+    if (verifying) return;
+    setVerifying(attemptId);
+    try {
+      const response = await apiFetch<{ status: string; outcome: string }>(
+        `/payments/reconciliation/${attemptId}/verify`,
+        { method: 'POST' },
+      );
+      const { status: newStatus, outcome } = response.data;
+      toast(
+        outcome === 'SETTLED'
+          ? 'Payment confirmed and settled.'
+          : outcome === 'STILL_PENDING'
+            ? 'The provider has not confirmed this payment yet.'
+            : outcome === 'FAILED'
+              ? 'The provider reports this payment failed.'
+              : `Attempt is ${newStatus}.`,
+        outcome === 'SETTLED' ? undefined : 'error',
+      );
+      attempts.refetch();
+      if (outcome === 'SETTLED') onSettled();
+    } catch {
+      toast('Verification failed — please try again.', 'error');
+    } finally {
+      setVerifying(null);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="max-w-xs">
+        <Select
+          label="Status"
+          value={status}
+          onChange={(event) => {
+            setStatus(event.target.value);
+            attempts.setPage(1);
+          }}
+          placeholder="All statuses"
+          options={ATTEMPT_STATUSES.map((value) => ({ value, label: value }))}
+        />
+      </div>
+
+      <DataTable
+        rowKey={(row) => row.id}
+        rows={attempts.rows}
+        meta={attempts.meta}
+        loading={attempts.loading}
+        error={attempts.error}
+        onPageChange={attempts.setPage}
+        onRetry={attempts.refetch}
+        emptyTitle="No online payment attempts"
+        emptyMessage="Attempts appear here once students start paying online."
+        columns={[
+          {
+            key: 'invoice',
+            header: 'Invoice',
+            render: (row) => (
+              <button
+                className="font-mono text-xs text-brand-700 hover:underline"
+                onClick={() => router.push(`/fees/invoices/${row.invoiceId}`)}
+              >
+                {row.invoiceNo}
+              </button>
+            ),
+          },
+          {
+            key: 'student',
+            header: 'Student',
+            render: (row) => (
+              <span>
+                {row.studentName}{' '}
+                <span className="text-xs text-ink-muted">({row.rollNo})</span>
+              </span>
+            ),
+          },
+          { key: 'amount', header: 'Amount', render: (row) => `${formatAmount(row.amount)} ${row.currency}` },
+          {
+            key: 'provider',
+            header: 'Provider',
+            render: (row) => (
+              <span>
+                {row.provider}
+                {row.providerRef ? (
+                  <span className="block font-mono text-[10px] text-ink-muted">
+                    {row.providerRef}
+                  </span>
+                ) : null}
+              </span>
+            ),
+          },
+          {
+            key: 'created',
+            header: 'Created',
+            render: (row) => new Date(row.createdAt).toLocaleString(),
+          },
+          {
+            key: 'status',
+            header: 'Status',
+            render: (row) => (
+              <div className="flex flex-col items-start gap-1">
+                <Badge tone={attemptTone(row.status)}>{row.status}</Badge>
+                {row.overpaid ? (
+                  <Badge tone="warning">Overpaid — manual investigation required</Badge>
+                ) : null}
+                {row.failureCode ? (
+                  <span className="text-[10px] text-ink-muted">{row.failureCode}</span>
+                ) : null}
+              </div>
+            ),
+          },
+          {
+            key: 'actions',
+            header: '',
+            className: 'w-36 text-right',
+            render: (row) =>
+              row.status === 'PENDING' ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={verifying !== null}
+                  onClick={() => verify(row.id)}
+                >
+                  {verifying === row.id ? 'Verifying…' : 'Verify with gateway'}
+                </Button>
+              ) : null,
+          },
+        ]}
+      />
+
+      {unmatched.length > 0 ? (
+        <section className="rounded-card border border-warning-500/40 bg-surface-raised shadow-card">
+          <h2 className="border-b border-line px-5 py-3 text-sm font-semibold">
+            Unmatched gateway events ({unmatched.length})
+          </h2>
+          <p className="px-5 pt-2 text-xs text-ink-muted">
+            Signed deliveries whose transaction reference matched no payment
+            attempt. Cross-check these against the provider dashboard.
+          </p>
+          <ul className="divide-y divide-line text-sm">
+            {unmatched.map((event) => (
+              <li key={event.id} className="flex flex-wrap justify-between gap-2 px-5 py-2.5">
+                <span className="font-mono text-xs">{event.eventId}</span>
+                <span className="text-xs text-ink-muted">
+                  {event.provider} · {event.outcome} ·{' '}
+                  {new Date(event.receivedAt).toLocaleString()}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+    </div>
   );
 }
