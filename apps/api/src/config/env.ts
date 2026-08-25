@@ -35,6 +35,17 @@ const baseSchema = z.object({
     .string()
     .url('APP_BASE_URL must be a URL, e.g. https://campus.example.edu')
     .optional(),
+  // M14-W2 — Safepay online payments (optional feature; unset → the
+  // initiation endpoint returns FEATURE_DISABLED). API key and secret are
+  // an all-or-none pair. Env-only configuration by V1 decision #7.
+  SAFEPAY_API_KEY: z.string().optional(),
+  SAFEPAY_SECRET_KEY: z.string().optional(),
+  SAFEPAY_ENVIRONMENT: z.enum(['sandbox', 'production']).optional(),
+  SAFEPAY_HOST: z.string().url('SAFEPAY_HOST must be a URL').optional(),
+  SAFEPAY_INTENT: z.string().optional(),
+  // Reserved for W3 webhook signature verification; validated here so a
+  // misconfigured deployment fails fast once webhooks land.
+  SAFEPAY_WEBHOOK_SECRET: z.string().optional(),
 });
 
 export type AppEnv = z.infer<typeof baseSchema>;
@@ -110,6 +121,23 @@ export function validateEnv(
       .join(', ');
     throw new Error(
       `Invalid environment configuration — mail is partially configured; missing: ${missing}`,
+    );
+  }
+
+  // Safepay (M14-W2): all-or-none pair, same philosophy — a
+  // half-configured gateway is a misconfiguration, never a fallback.
+  const safepayVars: Array<[string, string | undefined]> = [
+    ['SAFEPAY_API_KEY', config.SAFEPAY_API_KEY],
+    ['SAFEPAY_SECRET_KEY', config.SAFEPAY_SECRET_KEY],
+  ];
+  const safepaySet = safepayVars.filter(([, v]) => v).length;
+  if (safepaySet > 0 && safepaySet < safepayVars.length) {
+    const missing = safepayVars
+      .filter(([, v]) => !v)
+      .map(([name]) => name)
+      .join(', ');
+    throw new Error(
+      `Invalid environment configuration — Safepay is partially configured; missing: ${missing}`,
     );
   }
 

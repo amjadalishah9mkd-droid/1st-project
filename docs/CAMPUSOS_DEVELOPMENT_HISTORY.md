@@ -121,7 +121,8 @@ Principles applied consistently from M0 onward:
 | M13-W4 | Guardian portal UI | `789e123` |
 | M13-W5 | Guardian hardening & M13 close-out | `7b03fed` |
 | M14-W0 | P2 security hardening (pre-payments gate) | `ded32ee` |
-| M14-W1 | Payments data model & settlement core | *(this commit)* |
+| M14-W1 | Payments data model & settlement core | `d7ca39a` |
+| M14-W2 | Gateway adapter & payment initiation | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -980,6 +981,50 @@ Core invariant preserved: **Payment = settled money only.**
   unsettleable, claimEvent exactly-once, concurrent-recordPayment race
   (one succeeds, sum never exceeds), manual partial→paid regression.
 
+### M14-W2 — Gateway adapter & student payment initiation
+**Goal:** the provider boundary and the one browser-facing W2 change —
+`POST /fees/invoices/:id/pay`. No webhooks (W3), no UI (W4).
+
+- **Adapter boundary:** `PAYMENT_GATEWAY` DI token +
+  `PaymentGatewayAdapter` interface (`createCheckoutSession`,
+  `verifyPayment` — the latter ready for W3's verify-on-return). The
+  payments domain never references Safepay directly; tests inject a
+  capturing fake exactly like `MAIL_TRANSPORT`.
+- **Safepay adapter** (native fetch, zero new dependencies). Contract
+  **verified** from the Express Checkout guide + the official
+  `@sfpy/node-core` v0.3.5 source: secret-auth header
+  `x-sfpy-merchant-secret`; `POST /order/payments/v3/`
+  (merchant_api_key, intent, mode=payment, currency, amount in lowest
+  denomination — paisa, metadata carrying attemptId/invoiceNo) →
+  `data.tracker.token`; `POST /client/passport/v1/token` → TBT;
+  hosted-checkout URL = `{env}/embedded/?environment&tracker&tbt&
+  source=hosted&redirect_url&cancel_url` (SDK Checkout.js hostUrls);
+  verify = `GET /reporter/api/v1/payments/{tracker}` with
+  `TRACKER_ENDED` = paid. **Unresolved, isolated in the adapter:** the
+  merchant-specific `intent` channel (CYBERSOURCE/MPGS) —
+  `SAFEPAY_INTENT` env with the guide's example as default. Secrets
+  never appear in responses, errors, logs or audit metadata.
+- **Env (all-or-none pair, feature-flag semantics like Google/mail):**
+  `SAFEPAY_API_KEY` + `SAFEPAY_SECRET_KEY`, optional
+  `SAFEPAY_ENVIRONMENT`/`SAFEPAY_HOST`/`SAFEPAY_INTENT`, and
+  `SAFEPAY_WEBHOOK_SECRET` reserved for W3. Unconfigured → the endpoint
+  returns 503 `FEATURE_DISABLED` after authorization.
+- **Endpoint:** guard (`payments.initiate`) → W1 `createAttempt` (OWN
+  resolution, frozen full-balance amount, row lock, one live attempt) →
+  adapter session → `markPending` → `{attemptId, status, checkoutUrl}`.
+  **No request body is read at all** — the invoice id is the only
+  client-controlled input. Session-creation failure →
+  `failAttempt('SESSION_CREATE_FAILED')` + 502; a duplicate provider
+  reference dies on the DB unique and fails the second attempt. Audit
+  `payments.attempt_initiated` (ids/amount/provider only).
+- **Tests: 413** (8 new, ~30 assertions): server-amount/tamper-proof
+  body, partial-payment balance reduction, other-student 404 /
+  guardian-teacher-admin 403 / anon 401 / garbage 404, cancelled/paid/
+  in-progress guards, gateway-failure + retry, duplicate-providerRef
+  backstop, adapter FEATURE_DISABLED without env, paisa conversion.
+- Live smoke: student passes authz then hits FEATURE_DISABLED (no env
+  in the sandbox stack), admin 403, anon 401 — the boundary works.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1100,6 +1145,7 @@ reached 141 by the end of M9):
 | M13-W5 | 386 | assignment-detail CHILD gap, session-list CHILD closure, F2 limiter pruning |
 | M14-W0 | 394 | timetable section-view scope gate, login-limiter pruning |
 | M14-W1 | 405 | attempt lifecycle CAS, settle-once/replay, amount tampering, overpaid capping, recordPayment race |
+| M14-W2 | 413 | initiation authz matrix, tamper-proof amounts, gateway failure/duplicate-ref handling |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1215,13 +1261,13 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M14-W1.*
+*Last updated after M14-W2.*
 
 - **Current milestone**: **M13 COMPLETE** (W1–W5); M0–M13 all accepted
 - **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 8 found, database schema up to date
-- **Tests**: **405/405 passing** (29 suites)
+- **Tests**: **413/413 passing** (30 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
