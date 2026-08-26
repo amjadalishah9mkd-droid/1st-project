@@ -124,6 +124,17 @@ enum PaymentMethod {
 /// M14-W1: in-flight gateway payment lifecycle. Settled money remains the
 /// Payment model; a PaymentAttempt only *becomes* a Payment on verified
 /// confirmation. REFUNDED is reserved for V2 reconciliation flags.
+/// M15-W1: rollover draft/idempotency anchor (execution engine lands in
+/// M15-W2). Exactly one rollover may target a given term
+/// (@@unique([collegeId, toTermId])); the W2 execution path performs a
+/// concurrency-safe DRAFT -> EXECUTED CAS on `status`. `plan` stores the
+/// admin-edited mapping as ids/flags only — never PII — and is revalidated
+/// against live data at execution time (never trusted stale).
+enum TermRolloverStatus {
+  DRAFT
+  EXECUTED
+}
+
 enum PaymentAttemptStatus {
   CREATED
   PENDING
@@ -272,6 +283,7 @@ model College {
   evidenceFiles    EvidenceFile[]
   guardianLinks    GuardianLink[]
   paymentAttempts  PaymentAttempt[]
+  termRollovers    TermRollover[]
 }
 
 // ────────────────────── Identity & Access ──────────────────────
@@ -323,6 +335,7 @@ model User {
   marksEntered      Mark[]             @relation("MarkEnteredBy")
   paymentsRecorded  Payment[]          @relation("PaymentRecordedBy")
   paymentAttemptsInitiated PaymentAttempt[] @relation("PaymentAttemptInitiator")
+  termRolloversExecuted    TermRollover[]
   posts             Post[]             @relation("PostAuthor")
   comments          Comment[]          @relation("CommentAuthor")
   likes             Like[]
@@ -537,6 +550,13 @@ model AcademicYear {
   @@unique([collegeId, label])
 }
 
+/// NOTE (M15-W1): a partial unique index enforces at most ONE current term
+/// per college at the database level:
+///   CREATE UNIQUE INDEX "Term_one_current_per_college"
+///     ON "Term" ("collegeId") WHERE "isCurrent";
+/// Prisma cannot express partial indexes, so it lives as raw SQL in the
+/// 20260825* m15_calendar_invariants migration. setCurrentTerm's
+/// clear-then-set transaction remains the application-level path.
 model Term {
   id             String   @id @default(cuid())
   collegeId      String
@@ -550,6 +570,8 @@ model Term {
 
   college      College      @relation(fields: [collegeId], references: [id], onDelete: Restrict)
   academicYear AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  rolloversFrom TermRollover[] @relation("RolloverFromTerm")
+  rolloversTo   TermRollover[] @relation("RolloverToTerm")
 
   sections      Section[]
   exams         Exam[]
@@ -1008,6 +1030,32 @@ model PaymentAttempt {
 /// M14-W1: webhook idempotency ledger (used from W3). Insert-first claim on
 /// the provider's event id — a redelivered webhook hits the unique
 /// constraint and becomes a no-op. Payload bodies are never stored.
+model TermRollover {
+  id           String             @id @default(cuid())
+  collegeId    String
+  fromTermId   String
+  toTermId     String
+  status       TermRolloverStatus @default(DRAFT)
+  /// Mapping plan: section mappings, per-student overrides, graduate
+  /// flags — ids and enums only, revalidated at execution.
+  plan         Json               @default("{}")
+  /// Execution counters (sections/enrollments created, students
+  /// graduated, …) written by W2 on EXECUTED.
+  counters     Json?
+  executedById String?
+  executedAt   DateTime?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  college    College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  fromTerm   Term    @relation("RolloverFromTerm", fields: [fromTermId], references: [id], onDelete: Restrict)
+  toTerm     Term    @relation("RolloverToTerm", fields: [toTermId], references: [id], onDelete: Restrict)
+  executedBy User?   @relation(fields: [executedById], references: [id], onDelete: SetNull)
+
+  @@unique([collegeId, toTermId])
+  @@index([collegeId, status])
+}
+
 model GatewayEvent {
   id         String   @id @default(cuid())
   provider   String

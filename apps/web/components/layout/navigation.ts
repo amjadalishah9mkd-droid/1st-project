@@ -23,6 +23,7 @@ const IMPLEMENTED_ROUTES: Array<{ href: string; label: string }> = [
   { href: '/students', label: 'Students' },
   { href: '/teachers', label: 'Teachers' },
   { href: '/departments', label: 'Departments' },
+  { href: '/calendar', label: 'Calendar' }, // M15-W1
   { href: '/courses', label: 'Courses' },
   { href: '/sections', label: 'Sections' },
   { href: '/timetable', label: 'Timetable' },

@@ -127,7 +127,8 @@ Principles applied consistently from M0 onward:
 | M14-W4 | Student payment UI | `362cf2d` |
 | M14-W5 | Admin reconciliation | `ad5188b` |
 | M14-W6 | Payments hardening & M14 close-out | `e228fd9` |
-| M14-SBX | Real Safepay sandbox verification & adapter fixes | *(this commit)* |
+| M14-SBX | Real Safepay sandbox verification & adapter fixes | `ce6fce0` |
+| M15-W1 | Academic calendar UI & lifecycle invariants | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1255,6 +1256,35 @@ refund API. SAFEPAY_INTENT: both CYBERSOURCE and MPGS accepted at
 session-create on this merchant; CYBERSOURCE processed the live card
 payment successfully.
 
+### M15-W1 — Academic calendar administration & lifecycle invariants
+**Goal:** make the EXISTING calendar backend usable and harden its
+invariants; rollover execution is strictly W2.
+
+- **Admin Calendar UI (`/calendar`,** `academics.manage` **route hint):**
+  academic-years table (create/edit dialogs via the shared Zod schemas),
+  terms table (create/edit, "Current" badge, **Set current** with
+  ConfirmDialog through the existing `PATCH /terms/:id/set-current`),
+  current-term banner, "Calendar" nav item. Pure consumer of the
+  existing API contracts — zero backend behavior changes, no
+  client-supplied collegeId anywhere.
+- **Migration #9 (additive):** (1) raw-SQL partial unique index
+  `Term_one_current_per_college ON "Term"(collegeId) WHERE "isCurrent"`
+  — the single-current-term invariant is now DATABASE-enforced
+  (pre-checked: zero colleges had conflicting data); Prisma can't
+  express partial indexes, documented on the model. (2) **TermRollover**
+  preparation table for W2: `{collegeId/fromTermId/toTermId Restrict
+  FKs, status DRAFT|EXECUTED, plan Json (ids/flags only), counters,
+  executedBy SetNull, @@unique([collegeId, toTermId])}` — the W2
+  execution path will CAS DRAFT→EXECUTED; **no rollover service,
+  endpoints or execution exist in W1** (asserted by test: the future
+  rollover route 404s).
+- **Tests: 450** (7 new): admin-mutates/teacher-student-403/anon-401,
+  year+term CRUD via HTTP with validation + duplicate-label guards,
+  set-current atomic switch + restore, rival-college IDOR matrix
+  (list-exclusion, update/set-current 404, term-into-rival-year 400),
+  **DB invariant proof** (service-bypassing raw second current term →
+  P2002; per-college independence), TermRollover unique + DRAFT shape.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1380,6 +1410,7 @@ reached 141 by the end of M9):
 | M14-W5 | 439 | reconciliation authz/tenancy matrix, gateway-verify routing, overpaid visibility, export ONLINE |
 | M14-W6 | 442 | true-concurrency settlement races (manual vs gateway, dual attempts, settle vs fail) |
 | M14-SBX | 443 | reporter dual-shape verifyPayment unit vectors |
+| M15-W1 | 450 | calendar CRUD/tenancy matrix, DB single-current invariant, TermRollover uniques |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1497,13 +1528,13 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M14-W6.*
+*Last updated after M15-W1.*
 
 - **Current milestone**: **M14 COMPLETE**; real-sandbox payment/verification LIVE-VERIFIED (success, decline, amount authority, recovery); genuine webhook delivery still pending provider-dashboard endpoint registration
 - **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
-- **Migrations**: 8 found, database schema up to date
-- **Tests**: **443/443 passing** (33 suites)
+- **Migrations**: 9 found, database schema up to date
+- **Tests**: **450/450 passing** (34 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
