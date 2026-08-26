@@ -70,6 +70,13 @@ describe('M14-W2 — payment initiation endpoint', () => {
     parseWebhookEvent() {
       return null;
     },
+    // M16-W2 interface additions — unused by this spec.
+    async createRefund() {
+      throw new Error('refunds not used in this spec');
+    },
+    async verifyRefund() {
+      return { state: 'PAID' as const, refunds: [] };
+    },
   };
 
   const auth = (token: string) => ({ Authorization: `Bearer ${token}` });

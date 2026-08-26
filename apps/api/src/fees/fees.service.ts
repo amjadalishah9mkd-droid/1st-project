@@ -39,12 +39,21 @@ const invoiceInclude = {
   },
   structure: { select: { name: true } },
   payments: true,
+  // M16-W2: invoice money is NET of settled refunds everywhere.
+  refunds: { select: { amount: true } },
 } satisfies Prisma.InvoiceInclude;
 
 type InvoiceRecord = Prisma.InvoiceGetPayload<{ include: typeof invoiceInclude }>;
 
+/**
+ * M16-W2 (D-5): "paid" is NET of settled refunds —
+ * netPaid = Σ Payment.amount − Σ Refund.amount. Payment/Refund rows and
+ * Invoice.amount are immutable; only derived status/balances use this.
+ */
 function paidAmount(row: InvoiceRecord): number {
-  return row.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+  const paid = row.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+  const refunded = row.refunds.reduce((sum, refund) => sum + Number(refund.amount), 0);
+  return paid - refunded;
 }
 
 function toInvoiceItem(row: InvoiceRecord): InvoiceItem {
@@ -553,7 +562,10 @@ export class FeesService {
     await this.applyOverdueTransitions(user.collegeId);
     const invoices = await this.prisma.invoice.findMany({
       where: { collegeId: user.collegeId, status: { not: 'CANCELLED' } },
-      include: { payments: { select: { amount: true } } },
+      include: {
+        payments: { select: { amount: true } },
+        refunds: { select: { amount: true } },
+      },
     });
     let invoiced = 0;
     let collected = 0;
@@ -561,7 +573,10 @@ export class FeesService {
     let overdueCount = 0;
     for (const invoice of invoices) {
       invoiced += Number(invoice.amount);
-      collected += invoice.payments.reduce((sum, p) => sum + Number(p.amount), 0);
+      // M16-W2: collected is NET of settled refunds.
+      collected +=
+        invoice.payments.reduce((sum, p) => sum + Number(p.amount), 0) -
+        invoice.refunds.reduce((sum, r) => sum + Number(r.amount), 0);
       if (invoice.status === 'PAID') paidCount += 1;
       if (invoice.status === 'OVERDUE') overdueCount += 1;
     }

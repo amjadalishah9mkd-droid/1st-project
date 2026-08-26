@@ -60,6 +60,13 @@ describe('M14-W3 — webhook settlement & verification', () => {
     verifyWebhookSignature: (raw, sig) =>
       realParser.verifyWebhookSignature(raw, sig),
     parseWebhookEvent: (body) => realParser.parseWebhookEvent(body),
+    // M16-W2 interface additions — unused by this spec.
+    async createRefund() {
+      throw new Error('refunds not used in this spec');
+    },
+    async verifyRefund() {
+      return { state: 'PAID' as const, refunds: [] };
+    },
   };
 
   const sentMail: string[] = [];

@@ -76,4 +76,40 @@ export interface PaymentGatewayAdapter {
    * Returns null when structurally invalid.
    */
   parseWebhookEvent(body: unknown): GatewayWebhookEvent | null;
+  /**
+   * M16-W2: execute a refund for a server-authoritative amount against the
+   * original payment's provider reference. Synchronous per the W0 probe.
+   * MUST throw an opaque GATEWAY_ERROR-style error on any non-2xx/network
+   * failure — the caller decides PROCESSING-vs-FAILED semantics.
+   */
+  createRefund(input: RefundCallInput): Promise<RefundResult>;
+  /**
+   * M16-W2: server-to-server refund truth for a payment (the W0-verified
+   * reporter surface — there is no separate refund-status endpoint).
+   */
+  verifyRefund(providerRef: string): Promise<RefundResult>;
+}
+
+// ── M16-W2 — refund operations (W0-verified Safepay contract) ─────────
+
+export interface RefundCallInput {
+  /** Provider transaction reference of the ORIGINAL payment (tracker). */
+  providerRef: string;
+  /** Server-frozen refund amount as a decimal string, e.g. "300.00". */
+  amount: string;
+  /** ISO currency code (PKR in V1). */
+  currency: string;
+}
+
+/**
+ * Normalized outcome of a refund call or a refund verification.
+ * `refunds` lists the provider's per-refund records for the payment so the
+ * service can match the frozen attempt amount and capture the provider
+ * refund identifier — clients never supply either.
+ */
+export interface RefundResult {
+  /** Normalized post-refund state of the ORIGINAL payment. */
+  state: 'REFUNDED' | 'PARTIALLY_REFUNDED' | 'PAID' | 'UNKNOWN';
+  /** All provider refund records for this payment (ref + decimal amount). */
+  refunds: Array<{ ref: string; amount: string }>;
 }

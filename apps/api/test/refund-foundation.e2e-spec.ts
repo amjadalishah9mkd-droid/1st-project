@@ -144,12 +144,16 @@ describe('M16-W1 — refund foundation', () => {
       expect(Number(migrations[0].count)).toBe(10);
     });
 
-    it('refund endpoints do NOT exist yet (W2)', async () => {
+    it('refund creation endpoint exists (W2) and honors the foundation contract', async () => {
+      // W1 originally asserted this endpoint's ABSENCE; M16-W2 delivered it.
       const res = await http
         .post(`/api/v1/fees/payments/${paymentId}/refunds`)
         .set(auth(accountantToken))
-        .send({ amount: 100, currency: 'PKR', reason: 'test', method: 'RECORDED' });
-      expect(res.status).toBe(404);
+        .send({ amount: 100, currency: 'PKR', reason: 'foundation probe', method: 'RECORDED' });
+      expect(res.status).toBe(201);
+      expect(res.body.data.status).toBe('REQUESTED');
+      // leave no in-flight attempt behind for the invariant tests below
+      await prisma.refundAttempt.deleteMany({ where: { paymentId } });
     });
   });
 

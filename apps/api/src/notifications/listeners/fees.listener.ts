@@ -5,6 +5,8 @@ import type {
   InvoiceOverdueEvent,
   PaymentFailedEvent,
   PaymentSucceededEvent,
+  RefundFailedEvent,
+  RefundSucceededEvent,
 } from '@campusos/shared';
 import { PrismaService } from '../../prisma/prisma.service';
 import { renderTemplate } from '../templates';
@@ -33,6 +35,55 @@ export class FeesListener {
   // M14-W3 — online payment outcomes. Emitted AFTER the settlement
   // transaction commits; a notification/mail failure can never touch
   // payment state (existing bus semantics).
+  // M16-W2 — refund outcomes. Emitted exactly once per terminal
+  // transition (CAS-flag guarded in RefundsService); the success goes to
+  // the student, the failure to the finance staffer who requested it.
+  @OnEvent('refund.succeeded')
+  async onRefundSucceeded(event: RefundSucceededEvent): Promise<void> {
+    await this.createRefund(event.studentUserId, event, 'refund_succeeded');
+  }
+
+  @OnEvent('refund.failed')
+  async onRefundFailed(event: RefundFailedEvent): Promise<void> {
+    await this.createRefund(event.requesterUserId, event, 'refund_failed');
+  }
+
+  private async createRefund(
+    userId: string,
+    event: RefundSucceededEvent | RefundFailedEvent,
+    kind: 'refund_succeeded' | 'refund_failed',
+  ): Promise<void> {
+    try {
+      const template = renderTemplate(event);
+      if (!template) return;
+      await this.prisma.notification.create({
+        data: {
+          userId,
+          type: event.type,
+          title: template.title,
+          body: template.body,
+          linkPath: template.linkPath,
+        },
+      });
+      const invoice = await this.prisma.invoice.findUnique({
+        where: { id: event.invoiceId },
+        select: { collegeId: true },
+      });
+      if (!invoice) return;
+      await this.mailer.sendToUsers(invoice.collegeId, [userId], ({ firstName }) => ({
+        kind,
+        firstName,
+        amount: event.amount,
+        invoiceNo: event.invoiceNo,
+        url: this.mailer.absoluteUrl(template.linkPath ?? '/fees'),
+      }));
+    } catch (error) {
+      this.logger.error(
+        `refund notification failed: ${(error as Error).constructor.name}`,
+      );
+    }
+  }
+
   @OnEvent('payment.succeeded')
   async onPaymentSucceeded(event: PaymentSucceededEvent): Promise<void> {
     await this.createPayment(event, 'payment_succeeded');

@@ -69,6 +69,18 @@ export function renderTemplate(event: DomainEvent): NotificationTemplate | null 
         body: `Your online payment of ${event.amount} for invoice ${event.invoiceNo} could not be completed.`,
         linkPath: `/fees/invoices/${event.invoiceId}`,
       };
+    case 'refund.succeeded':
+      return {
+        title: 'Refund completed',
+        body: `A refund of ${event.amount} for invoice ${event.invoiceNo} has been returned to you.`,
+        linkPath: `/fees/invoices/${event.invoiceId}`,
+      };
+    case 'refund.failed':
+      return {
+        title: 'Refund failed',
+        body: `The refund of ${event.amount} for invoice ${event.invoiceNo} failed (${event.failureCode}). Review it in reconciliation.`,
+        linkPath: '/fees',
+      };
     case 'invoice.overdue':
       return {
         title: 'Invoice overdue',

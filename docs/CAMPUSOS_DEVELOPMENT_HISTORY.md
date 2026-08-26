@@ -133,7 +133,8 @@ Principles applied consistently from M0 onward:
 | M15-W3 | Rollover wizard UI + semester-boundary walkthrough | `db8111c` |
 | M15-W4 | M15 close-out: rollover runbook, security audit, verification | `229d522` |
 | M16-W0 | Refunds design doc + live Safepay refund probe | `d2d6e52` |
-| M16-W1 | Refund schema + accountant role foundation | *(this commit)* |
+| M16-W1 | Refund schema + accountant role foundation | `4aa9a9e` |
+| M16-W2 | Refund engine: service, endpoints, net accounting, adversarial suite | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1467,6 +1468,61 @@ Persistence/authorization only — no service, endpoints, accounting or UI.
   asserted ABSENT (W2). One M12 assertion legitimately updated:
   audit.read is now ADMIN+ACCOUNTANT (D-6).
 
+### M16-W2 — Refund engine
+RefundsService + HTTP surface + net-of-refunds accounting; no UI.
+
+- **Endpoints** (thin controllers; mutations `finance.refund`, reads
+  fees.read / fees.manage-ALL): `POST /fees/payments/:id/refunds`
+  (create REQUESTED; invoice derived from the payment; in-flight DB
+  unique → 409 REFUND_IN_PROGRESS), `GET …/refunds` (PaymentRefundSummary
+  incl. server-computed refundable; staff ALL / student OWN),
+  `GET /fees/refunds` (reconciliation listing, status/method/invoiceNo
+  filters), `POST /fees/refunds/:id/execute` (server-validated typed
+  amount confirmation), `…/cancel` (REQUESTED-only CAS), `…/verify`
+  (PROCESSING reporter-truth reconciliation, replay-safe).
+- **Engine**: every money mutation locks the Invoice row (settlement/
+  manual-recording lock) and recomputes
+  `refundable = payment.amount − Σ Refund.amount` at creation AND
+  execution; CAS on every transition; RECORDED = one-transaction
+  REQUESTED→SUCCEEDED materializing the immutable Refund; PROVIDER =
+  REQUESTED→PROCESSING → adapter call → reporter-verified finalization.
+  **Ambiguity rule**: a failed/unreachable provider call NEVER fails the
+  attempt directly — reporter truth decides (unclaimed matching record →
+  SUCCEEDED; reachable-but-absent → FAILED PROVIDER_REJECTED; mismatched
+  new record → AMOUNT_MISMATCH; unreachable → stays PROCESSING).
+  Provider refund refs come only from the adapter; already-claimed refs
+  are never rematched.
+- **Safepay adapter** (W0-verified contract only): `createRefund` →
+  `POST /order/payments/v3/{tracker}/refund` (paisa, merchant-secret
+  header); `verifyRefund` → payment reporter
+  `charge.cybersource_refunds[]` (dual-shape tolerant). No webhook
+  refund handling (delivery still unregistered).
+- **D-5 net accounting** across the whole blast radius: fees.service
+  `paidAmount`/summary, payments.service initiation + settlement
+  reducers, and RefundsService's derived invoice status
+  (net 0 → PENDING; CANCELLED preserved — D-7 refunds leave it
+  CANCELLED; OVERDUE re-derived by the existing lazy sweep).
+- **Audit**: `payments.refund_requested/succeeded/failed/cancelled`,
+  metadata = attemptId/refundId/amount/method/failureCode only (no
+  reason text, no PII), exactly one row per real transition.
+  **Notifications**: `refund.succeeded` → student (+mail),
+  `refund.failed` → requesting finance staffer (+mail), exactly-once
+  via CAS flags.
+- **Tests: 498** (22 new adversarial): full authz matrix (guardian
+  incl.), rival-college 404s on every surface with zero cross-tenant
+  rows, zero/negative/USD/over-refund rejections, D-5 scenarios
+  (800/300→PARTIAL, +500→PENDING; 800-invoice/500-paid/300-refund→
+  PARTIAL net 200), D-7 cancelled-invoice refund, execution-time
+  headroom re-check, wrong typed confirmation, terminal-transition
+  refusals, retry-after-FAILED, true concurrency (create races → 201+409
+  via the partial unique; execute races → one Refund + one audit row),
+  RECORDED no-provider proof, PROVIDER success/rejection/ambiguous-
+  timeout-stays-PROCESSING/verify-recovery/replay-idempotency/
+  amount-mismatch/claimed-ref-never-reused, paisa unit vectors, audit
+  metadata hygiene, tenant-scoped listings + OWN student summary. Two
+  legitimate updates: W1's "endpoints do not exist yet" flipped to
+  existence, payment-spec fake gateways gained inert refund stubs.
+
 
 ## 7. Architecture Evolution
 
@@ -1598,6 +1654,7 @@ reached 141 by the end of M9):
 | M15-W3 | 461 | no new API surface — UI verified via live Alloy walkthrough (no web test harness) |
 | M15-W4 | 461 | docs-only close-out; audit relied on existing W1/W2 proofs (no duplicated tests) |
 | M16-W1 | 476 | real-DB refund invariants (CHECK/partial-unique/FK), accountant grant matrix, seed idempotency |
+| M16-W2 | 498 | refund engine adversarial matrix: money safety, CAS races, provider ambiguity, audit hygiene |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1715,7 +1772,7 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M16-W1.*
+*Last updated after M16-W2.*
 
 - **Current milestone**: **M15 COMPLETE (W1–W4)** — academic calendar
   lifecycle, rollover engine, rollover wizard, verified semester
@@ -1724,7 +1781,7 @@ milestone (see roadmap).
 - **Latest commit**: the M15-W4 close-out commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 10 found, database schema up to date
-- **Tests**: **476/476 passing** (36 suites)
+- **Tests**: **498/498 passing** (37 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)

@@ -65,6 +65,21 @@ export type MailTemplate =
       invoiceNo: string;
       url: string;
     }
+  // M16-W2 — refund outcomes (amount + invoiceNo only; no provider data).
+  | {
+      kind: 'refund_succeeded';
+      firstName: string;
+      amount: string;
+      invoiceNo: string;
+      url: string;
+    }
+  | {
+      kind: 'refund_failed';
+      firstName: string;
+      amount: string;
+      invoiceNo: string;
+      url: string;
+    }
   | { kind: 'announcement'; firstName: string; title: string; url: string }
   // M13-W2 — guardian onboarding (H3: child shown as "FirstName L.").
   | {
@@ -188,6 +203,24 @@ export function renderMail(template: MailTemplate): RenderedMail {
         ...layout([
           `Hi ${template.firstName},`,
           `Your online payment of ${template.amount} for invoice ${template.invoiceNo} could not be completed. No money was recorded — you can try again from your fees page.`,
+          template.url,
+        ]),
+      };
+    case 'refund_succeeded':
+      return {
+        subject: 'Refund completed',
+        ...layout([
+          `Hi ${template.firstName},`,
+          `A refund of ${template.amount} for invoice ${template.invoiceNo} has been returned to you.`,
+          template.url,
+        ]),
+      };
+    case 'refund_failed':
+      return {
+        subject: 'Refund failed',
+        ...layout([
+          `Hi ${template.firstName},`,
+          `The refund of ${template.amount} for invoice ${template.invoiceNo} could not be completed. Review it from the fees reconciliation page.`,
           template.url,
         ]),
       };

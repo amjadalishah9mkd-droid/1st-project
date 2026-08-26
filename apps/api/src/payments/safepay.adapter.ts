@@ -10,6 +10,8 @@ import type {
   GatewayVerification,
   GatewayWebhookEvent,
   PaymentGatewayAdapter,
+  RefundCallInput,
+  RefundResult,
 } from './gateway.adapter';
 
 /**
@@ -299,5 +301,93 @@ export class SafepayAdapter implements PaymentGatewayAdapter {
       currency:
         typeof event.data.currency === 'string' ? event.data.currency : null,
     };
+  }
+
+  // ── M16-W2 — refunds (contract LIVE-VERIFIED in the W0 probe) ────────
+
+  /** Normalize a tracker state into the RefundResult state vocabulary. */
+  private static refundState(state: string | undefined): RefundResult['state'] {
+    if (state === 'TRACKER_REFUNDED') return 'REFUNDED';
+    if (state === 'TRACKER_PARTIAL_REFUND') return 'PARTIALLY_REFUNDED';
+    if (state === 'TRACKER_ENDED') return 'PAID';
+    return 'UNKNOWN';
+  }
+
+  /**
+   * W0-VERIFIED: POST /order/payments/v3/{tracker}/refund with
+   * { currency, amount(lowest denomination) }, authenticated with the same
+   * merchant-secret header; synchronous response carries the post-refund
+   * tracker state. Provider-side guards (over-refund, already-refunded)
+   * surface as non-2xx → opaque GATEWAY_ERROR from request().
+   */
+  async createRefund(input: RefundCallInput): Promise<RefundResult> {
+    const config = this.requireConfig();
+    const response = await this.request<{
+      data?: { tracker?: { state?: string } };
+    }>(
+      config,
+      'POST',
+      `/order/payments/v3/${encodeURIComponent(input.providerRef)}/refund`,
+      {
+        currency: input.currency,
+        amount: toLowestDenomination(input.amount),
+      },
+    );
+    const state = SafepayAdapter.refundState(response.data?.tracker?.state);
+    if (state === 'UNKNOWN') {
+      throw new BadGatewayException({
+        code: 'GATEWAY_ERROR',
+        message: 'The payment provider returned an unrecognized refund state',
+      });
+    }
+    // The refund POST does not enumerate refund records; the reporter is
+    // the canonical identifier source (verifyRefund).
+    return { state, refunds: [] };
+  }
+
+  /**
+   * W0-VERIFIED: the payment reporter reflects refund truth — tracker
+   * state plus charge.cybersource_refunds[] { token: 'refund_…',
+   * totals.amount (lowest denomination) }. There is no separate Safepay
+   * refund-status endpoint.
+   */
+  async verifyRefund(providerRef: string): Promise<RefundResult> {
+    const config = this.requireConfig();
+    interface ReporterShape {
+      state?: string;
+      charge?: {
+        cybersource_refunds?: Array<{
+          token?: string;
+          totals?: { amount?: number };
+          amount?: number;
+        }>;
+      };
+      tracker?: ReporterShape;
+    }
+    const report = await this.request<{ data?: ReporterShape }>(
+      config,
+      'GET',
+      `/reporter/api/v1/payments/${encodeURIComponent(providerRef)}`,
+    );
+    // Dual-shape tolerance, exactly like verifyPayment (LIVE-VERIFIED).
+    const tracker = report.data?.tracker ?? report.data;
+    if (!tracker?.state) {
+      throw new BadGatewayException({
+        code: 'GATEWAY_ERROR',
+        message: 'The payment provider returned an unrecognized status',
+      });
+    }
+    const refunds = (tracker.charge?.cybersource_refunds ?? [])
+      .map((row) => ({
+        ref: typeof row.token === 'string' ? row.token : '',
+        amount:
+          typeof row.totals?.amount === 'number'
+            ? fromLowestDenomination(row.totals.amount)
+            : typeof row.amount === 'number'
+              ? fromLowestDenomination(row.amount)
+              : '0.00',
+      }))
+      .filter((row) => row.ref.length > 0);
+    return { state: SafepayAdapter.refundState(tracker.state), refunds };
   }
 }

@@ -80,6 +80,27 @@ export interface PaymentFailedEvent {
   invoiceNo: string;
 }
 
+/** M16-W2 — a refund of settled money was completed (RECORDED or provider-verified). */
+export interface RefundSucceededEvent {
+  type: 'refund.succeeded';
+  studentUserId: string;
+  invoiceId: string;
+  attemptId: string;
+  amount: string;
+  invoiceNo: string;
+}
+
+/** M16-W2 — a provider refund attempt terminally failed (staff-facing). */
+export interface RefundFailedEvent {
+  type: 'refund.failed';
+  requesterUserId: string;
+  invoiceId: string;
+  attemptId: string;
+  amount: string;
+  invoiceNo: string;
+  failureCode: string;
+}
+
 export interface CommunityCommentEvent {
   type: 'community.comment';
   actorUserId: string;
@@ -166,6 +187,8 @@ export type DomainEvent =
   | InvoiceOverdueEvent
   | PaymentSucceededEvent
   | PaymentFailedEvent
+  | RefundSucceededEvent
+  | RefundFailedEvent
   | CommunityCommentEvent
   | CommunityLikeEvent
   | GroupRequestEvent
