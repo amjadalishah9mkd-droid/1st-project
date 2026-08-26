@@ -575,17 +575,33 @@ attempt). Attempts auto-expire after 1 hour without confirmation.
 | Duplicate webhook deliveries | Expected — the event ledger makes them no-ops. No action. |
 
 ### Provider details status
-VERIFIED (docs/SDK): hosted-checkout session API, TBT auth token,
-checkout URL format, tracker verification endpoint, `TRACKER_ENDED`
-semantics, webhook event shapes, `X-SFPY-SIGNATURE` HMAC-SHA512 over the
-raw body, sandbox availability, checkout-token (TBT) 1-hour expiry.
-UNRESOLVED (confirm at merchant onboarding): account `intent` channel
-(CYBERSOURCE vs MPGS), webhook retry cadence and event-id stability
-guarantees, settlement timing and fees, transaction limits for large
-tuition amounts, refund API contract, education-sector onboarding
-requirements. **Real sandbox end-to-end verification is pending merchant
-credentials** — the integration is verified against official contracts
-and deterministic stubs only.
+VERIFIED LIVE against the real sandbox (M14-SBX): payment initiation
+(session + TBT), hosted checkout, a genuine successful card payment
+(PKR/paisa amounts exact end-to-end), server-side verification and
+settlement through the settlement core, decline/retry behavior
+(declined payer-auth leaves the tracker retryable at TRACKER_STARTED;
+CampusOS correctly stays PENDING with nothing recorded), the metadata
+key whitelist, and the reporter response shape. `intent`: both
+CYBERSOURCE and MPGS are accepted at session-create on the verified
+merchant; CYBERSOURCE processed the live card payment.
+
+VERIFIED (docs/SDK): webhook event shapes, `X-SFPY-SIGNATURE`
+HMAC-SHA512 over the raw body, checkout-token (TBT) 1-hour expiry.
+
+**DEFERRED — genuine webhook delivery was NOT live-verified** (real
+`payment.succeeded`/`payment.failed` delivery, redelivery/replay,
+event-id stability and retry cadence): the Safepay dashboard webhook
+endpoint could not be registered in the verification environment. This
+is an operational/provider-access limitation, not a known CampusOS code
+defect — the webhook path is fully covered by deterministic
+signature/replay tests, and the webhook-missing recovery path (Verify
+with gateway) was proven against the real provider. Complete this at
+merchant onboarding by registering the endpoint (see above) and
+observing one delivery plus one dashboard redelivery.
+
+UNRESOLVED (confirm at merchant onboarding): settlement timing and
+fees/`include_fees`, transaction limits for large tuition amounts,
+refund API contract, education-sector onboarding requirements.
 
 ## 23. Rollback procedure
 
