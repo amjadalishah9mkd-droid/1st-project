@@ -129,7 +129,8 @@ Principles applied consistently from M0 onward:
 | M14-W6 | Payments hardening & M14 close-out | `e228fd9` |
 | M14-SBX | Real Safepay sandbox verification & adapter fixes | `ce6fce0` |
 | M15-W1 | Academic calendar UI & lifecycle invariants | `b40dbc0` |
-| M15-W2 | Term rollover engine | *(this commit)* |
+| M15-W2 | Term rollover engine | `07285d3` |
+| M15-W3 | Rollover wizard UI + semester-boundary walkthrough | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1337,6 +1338,46 @@ fee/payment (D7) writes anywhere.
   preview hardened to tolerate empty plan JSON).
 - **No migration** (still 9) — the W1 TermRollover structure sufficed.
 
+### M15-W3 — Rollover wizard UI & live semester-boundary walkthrough
+**Goal:** the admin-facing face of the W2 engine, plus an end-to-end
+Alloy walkthrough of an entire semester boundary on the demo college.
+
+- **`/calendar` gains "Start rollover"** (enabled with ≥2 terms):
+  StartRolloverDialog picks source (defaults to the current term, shows
+  section counts) and destination, POSTs the draft (backend
+  authoritative — idempotently resumes, surfaces SAME_TERM /
+  TARGET_TERM_NOT_EMPTY etc. as toasts) and routes to the wizard.
+- **`/calendar/rollover/[termId]` wizard**: summary counter tiles (new
+  sections / carried / held / excluded / graduating / suspended ⚠ /
+  teacher links / skipped) recomputed live from the edited plan;
+  per-section cards with mapping (same course / different course… /
+  do-not-carry), destination name, graduate-students checkbox, teacher
+  carry with per-teacher checkboxes; per-student CARRY / HOLD(→carried
+  section) / EXCLUDE selects with locked WITHDRAWN/GRADUATED rows.
+  "Save plan" PATCHes and disables until the plan is dirty again;
+  "Execute rollover…" opens a typed-confirmation dialog (button
+  disabled until the destination label is typed exactly, busy-guarded
+  against double submit; 409/error surfaced as toasts). Success view
+  shows EXECUTED counters and the explicit "does NOT touch fees,
+  invoices, payments or timetables" next-steps guidance. The fee/
+  timetable non-goal sentence is repeated on the calendar dialog, the
+  wizard header and the execute dialog.
+- **Alloy walkthrough (Fall 2026 → Spring 2027, demo college)**:
+  snapshot → draft via dialog → wizard rendered all 6 sections /
+  25 students / 7 teacher links → live edit (1 student EXCLUDE, tiles
+  updated 25→24 carried) → save → typed confirmation → EXECUTED
+  (6 sections, 24 enrollments, 7 teaching assignments, 25 source
+  enrollments COMPLETED). DB verified: marks 16, attendance 125,
+  invoices 13, payments 9, timetable slots 12, sessions 36 all
+  UNCHANGED; 0 Spring timetable slots; audit pair present. Then set
+  Spring current via `PATCH /terms/:id/set-current`, created a Spring
+  fee structure and `POST /fees/invoices/generate` → 15 invoices with
+  the untouched fee tooling, verified Fall data remained readable, and
+  fully restored the demo dataset (rollover artifacts deleted, Fall
+  re-current, all counts back to snapshot, all three demo logins 200).
+- **No API/schema/migration changes** (still 9 migrations); tests stay
+  461/461; web prod build emits the new route; zero role conditionals.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1464,6 +1505,7 @@ reached 141 by the end of M9):
 | M14-SBX | 443 | reporter dual-shape verifyPayment unit vectors |
 | M15-W1 | 450 | calendar CRUD/tenancy matrix, DB single-current invariant, TermRollover uniques |
 | M15-W2 | 461 | rollover D1–D8 execution matrix, failure-injection atomicity, concurrent-execute CAS |
+| M15-W3 | 461 | no new API surface — UI verified via live Alloy walkthrough (no web test harness) |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1581,7 +1623,7 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M15-W2.*
+*Last updated after M15-W3.*
 
 - **Current milestone**: **M14 COMPLETE**; real-sandbox payment/verification LIVE-VERIFIED (success, decline, amount authority, recovery); genuine webhook delivery still pending provider-dashboard endpoint registration
 - **Latest commit**: see the M12-W4 milestone commit on branch

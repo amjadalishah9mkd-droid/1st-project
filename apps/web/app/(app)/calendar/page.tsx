@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   createAcademicYearSchema,
   createTermSchema,
@@ -10,6 +11,7 @@ import {
   type TermItem,
 } from '@campusos/shared';
 import { apiFetch, ApiError } from '@/lib/api/client';
+import type { RolloverPreview } from '@campusos/shared';
 import { useList } from '@/lib/hooks/use-list';
 import { formValues, useZodForm } from '@/lib/hooks/use-zod-form';
 import { useToast } from '@/components/providers/toast-provider';
@@ -40,6 +42,7 @@ export default function CalendarPage() {
   const [editingTerm, setEditingTerm] = useState<TermItem | null>(null);
   const [makeCurrent, setMakeCurrent] = useState<TermItem | null>(null);
   const [settingCurrent, setSettingCurrent] = useState(false);
+  const [rolloverOpen, setRolloverOpen] = useState(false);
 
   const currentTerm = terms.rows.find((term) => term.isCurrent) ?? null;
 
@@ -57,8 +60,11 @@ export default function CalendarPage() {
             <Button variant="secondary" onClick={() => setYearOpen(true)}>
               New academic year
             </Button>
-            <Button onClick={() => setTermOpen(true)} disabled={years.rows.length === 0}>
+            <Button variant="secondary" onClick={() => setTermOpen(true)} disabled={years.rows.length === 0}>
               New term
+            </Button>
+            <Button onClick={() => setRolloverOpen(true)} disabled={terms.rows.length < 2}>
+              Start rollover
             </Button>
           </>
         }
@@ -193,6 +199,12 @@ export default function CalendarPage() {
           }}
         />
       ) : null}
+      <StartRolloverDialog
+        open={rolloverOpen}
+        terms={terms.rows}
+        currentTerm={currentTerm}
+        onClose={() => setRolloverOpen(false)}
+      />
       <ConfirmDialog
         open={makeCurrent !== null}
         title="Set current term"
@@ -437,6 +449,89 @@ function EditTermDialog({
           </Button>
         </div>
       </form>
+    </Dialog>
+  );
+}
+
+// ── M15-W3: rollover entry point ─────────────────────────────
+
+function StartRolloverDialog({
+  open,
+  terms,
+  currentTerm,
+  onClose,
+}: {
+  open: boolean;
+  terms: TermItem[];
+  currentTerm: TermItem | null;
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const [fromTermId, setFromTermId] = useState('');
+  const [toTermId, setToTermId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const source = fromTermId || currentTerm?.id || '';
+
+  async function start() {
+    if (busy || !source || !toTermId || source === toTermId) return;
+    setBusy(true);
+    try {
+      // Backend is authoritative: creates the draft or idempotently
+      // resumes an existing one; all validation errors surface here.
+      await apiFetch<RolloverPreview>(`/terms/${toTermId}/rollover`, {
+        method: 'POST',
+        body: JSON.stringify({ fromTermId: source }),
+      });
+      router.push(`/calendar/rollover/${toTermId}`);
+    } catch (err) {
+      toast(
+        err instanceof ApiError ? err.message : 'Could not start the rollover',
+        'error',
+      );
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      title="Start term rollover"
+      description="Creates (or resumes) a rollover draft. Nothing changes until you execute it from the preview — and rollover never touches fees, invoices, payments or timetables."
+      onClose={() => (busy ? undefined : onClose())}
+    >
+      <div className="flex flex-col gap-4">
+        <Select
+          label="Source term (the term that is ending)"
+          value={source}
+          onChange={(event) => setFromTermId(event.target.value)}
+          placeholder="Select source term"
+          options={terms.map((term) => ({
+            value: term.id,
+            label: `${term.label}${term.isCurrent ? ' (current)' : ''} · ${term.sectionCount} sections`,
+          }))}
+        />
+        <Select
+          label="Destination term (must be empty)"
+          value={toTermId}
+          onChange={(event) => setToTermId(event.target.value)}
+          placeholder="Select destination term"
+          options={terms
+            .filter((term) => term.id !== source)
+            .map((term) => ({
+              value: term.id,
+              label: `${term.label} · ${term.sectionCount} sections`,
+            }))}
+        />
+        <div className="flex justify-end gap-3">
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button onClick={start} disabled={busy || !source || !toTermId || source === toTermId}>
+            {busy ? 'Preparing…' : 'Open rollover preview'}
+          </Button>
+        </div>
+      </div>
     </Dialog>
   );
 }
