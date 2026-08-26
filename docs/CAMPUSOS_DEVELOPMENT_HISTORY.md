@@ -128,7 +128,8 @@ Principles applied consistently from M0 onward:
 | M14-W5 | Admin reconciliation | `ad5188b` |
 | M14-W6 | Payments hardening & M14 close-out | `e228fd9` |
 | M14-SBX | Real Safepay sandbox verification & adapter fixes | `ce6fce0` |
-| M15-W1 | Academic calendar UI & lifecycle invariants | *(this commit)* |
+| M15-W1 | Academic calendar UI & lifecycle invariants | `b40dbc0` |
+| M15-W2 | Term rollover engine | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1285,6 +1286,57 @@ invariants; rollover execution is strictly W2.
   **DB invariant proof** (service-bypassing raw second current term →
   P2002; per-college independence), TermRollover unique + DRAFT shape.
 
+### M15-W2 — Term rollover engine (locked decisions D1–D8)
+**Goal:** the backend semester-boundary machine:
+DRAFT → suggested plan → editable preview → typed confirmation → atomic
+execution. UI wizard is W3; **zero** timetable (D5), term-freeze (D6) or
+fee/payment (D7) writes anywhere.
+
+- **Endpoints** (all `academics.manage`, tenant-scoped, thin
+  controllers): `POST /terms/:id/rollover {fromTermId}` (creates the
+  draft with the suggested plan, idempotently resumes an existing
+  draft; SAME_TERM / INVALID_SOURCE_TERM / TARGET_TERM_NOT_EMPTY /
+  ALREADY_EXECUTED semantics), `GET …/rollover` (draft + resolved
+  preview + summary counters — the W3 wizard contract),
+  `PATCH …/rollover` (plan edits, DRAFT-only CAS), `POST
+  …/rollover/execute {confirmLabel}` (typed confirmation must equal the
+  destination term label).
+- **Plan model (D1/D2/D3/D4/D8)** in shared Zod: per source section
+  CLONE / MAP(targetCourseId) / SKIP + targetName + graduateStudents +
+  carryTeachers/teacherIds override; per student CARRY / HOLD(→another
+  carried mapping's destination) / EXCLUDE. Suggested defaults:
+  same-course clones, teachers carried, WITHDRAWN/GRADUATED force-
+  EXCLUDED (locked — re-checked LIVE at execution as a safety net),
+  SUSPENDED carried but flagged. No marks/results are ever read — zero
+  pass/fail inference.
+- **Execution** — one interactive transaction: row-lock the
+  TermRollover + CAS DRAFT→EXECUTED (concurrent executes collapse to
+  exactly one), per-entry live revalidation of sections/courses/
+  teachers inside the tx (stale/foreign id aborts the WHOLE rollover),
+  destination sections created fresh (source term untouched; retry-safe
+  reuse by term+course+name), teaching assignments + enrollments via
+  createMany(skipDuplicates) on their unique pairs, ALL source-section
+  ACTIVE enrollments → COMPLETED (history immutable and readable),
+  graduates → GRADUATED (ENROLLED-guarded), counters persisted. Audits:
+  `terms.rollover_drafted` / `terms.rollover_executed` (ids/counters
+  only).
+- **Tests: 461** (11 new, ~45 assertions): full authz matrix incl. a
+  real rival-college admin (404s on read/patch/execute, foreign
+  source/target rejection), suggested-plan defaults, invalid-plan
+  matrix (MAP w/o course, HOLD w/o target, HOLD→SKIP, foreign section),
+  typed-confirmation refusal, the full execution matrix (CLONE + MAP
+  different-course + SKIP + graduation + hold-back into repeat section
+  + suspended-carried + withdrawn/excluded absent + teacher carry AND
+  override + old-ACTIVE→COMPLETED + source sections intact + zero
+  timetable/invoice/payment rows + audit hygiene), re-execute/re-edit
+  409 with zero duplication, **mid-transaction failure injection**
+  (sabotaged MAP course → 400, zero partial state, DRAFT preserved,
+  repaired retry succeeds), **concurrent execute race** ([201, 409],
+  sections created exactly once). One W1 assertion updated (the
+  rollover endpoint now exists and idempotently resumes raw drafts —
+  preview hardened to tolerate empty plan JSON).
+- **No migration** (still 9) — the W1 TermRollover structure sufficed.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1411,6 +1463,7 @@ reached 141 by the end of M9):
 | M14-W6 | 442 | true-concurrency settlement races (manual vs gateway, dual attempts, settle vs fail) |
 | M14-SBX | 443 | reporter dual-shape verifyPayment unit vectors |
 | M15-W1 | 450 | calendar CRUD/tenancy matrix, DB single-current invariant, TermRollover uniques |
+| M15-W2 | 461 | rollover D1–D8 execution matrix, failure-injection atomicity, concurrent-execute CAS |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1528,13 +1581,13 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M15-W1.*
+*Last updated after M15-W2.*
 
 - **Current milestone**: **M14 COMPLETE**; real-sandbox payment/verification LIVE-VERIFIED (success, decline, amount authority, recovery); genuine webhook delivery still pending provider-dashboard endpoint registration
 - **Latest commit**: see the M12-W4 milestone commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 9 found, database schema up to date
-- **Tests**: **450/450 passing** (34 suites)
+- **Tests**: **461/461 passing** (35 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)

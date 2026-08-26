@@ -14,7 +14,10 @@ import {
   createCourseSchema,
   createDepartmentSchema,
   createSectionSchema,
+  createRolloverSchema,
   createTermSchema,
+  executeRolloverSchema,
+  rolloverPlanSchema,
   paginationQuerySchema,
   updateAcademicYearSchema,
   updateCourseSchema,
@@ -27,7 +30,10 @@ import {
   type CreateCourseInput,
   type CreateDepartmentInput,
   type CreateSectionInput,
+  type CreateRolloverInput,
   type CreateTermInput,
+  type ExecuteRolloverInput,
+  type RolloverPlanInput,
   type UpdateAcademicYearInput,
   type UpdateCourseInput,
   type UpdateDepartmentInput,
@@ -38,6 +44,7 @@ import { z } from 'zod';
 import { DepartmentsService } from './departments.service';
 import { CoursesService } from './courses.service';
 import { CalendarService } from './calendar.service';
+import { RolloverService } from './rollover.service';
 import { SectionsService } from './sections.service';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { RequirePermission } from '../access/require-permission.decorator';
@@ -174,7 +181,48 @@ export class AcademicYearsController {
 
 @Controller('terms')
 export class TermsController {
-  constructor(private readonly calendar: CalendarService) {}
+  constructor(
+    private readonly calendar: CalendarService,
+    private readonly rollover: RolloverService,
+  ) {}
+
+  // ── M15-W2: term rollover (academics.manage; college-scoped) ──
+
+  @Post(':id/rollover')
+  @RequirePermission(PERMISSIONS.ACADEMICS_MANAGE)
+  createRollover(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') toTermId: string,
+    @Body(new ZodValidationPipe(createRolloverSchema)) body: CreateRolloverInput,
+  ) {
+    return this.rollover.createDraft(user, toTermId, body.fromTermId);
+  }
+
+  @Get(':id/rollover')
+  @RequirePermission(PERMISSIONS.ACADEMICS_MANAGE)
+  getRollover(@CurrentUser() user: AuthenticatedUser, @Param('id') toTermId: string) {
+    return this.rollover.preview(user, toTermId);
+  }
+
+  @Patch(':id/rollover')
+  @RequirePermission(PERMISSIONS.ACADEMICS_MANAGE)
+  updateRollover(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') toTermId: string,
+    @Body(new ZodValidationPipe(rolloverPlanSchema)) body: RolloverPlanInput,
+  ) {
+    return this.rollover.updatePlan(user, toTermId, body);
+  }
+
+  @Post(':id/rollover/execute')
+  @RequirePermission(PERMISSIONS.ACADEMICS_MANAGE)
+  executeRollover(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') toTermId: string,
+    @Body(new ZodValidationPipe(executeRolloverSchema)) body: ExecuteRolloverInput,
+  ) {
+    return this.rollover.execute(user, toTermId, body.confirmLabel);
+  }
 
   @Get()
   @RequirePermission(PERMISSIONS.ACADEMICS_READ)

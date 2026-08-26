@@ -177,3 +177,55 @@ export interface StudentImportSummary {
     inviteExpiresAt: string;
   }>;
 }
+
+// ── M15-W2: rollover preview contracts (consumed by the W3 wizard) ──
+
+export interface RolloverStudentPreview {
+  studentId: string;
+  name: string;
+  rollNo: string;
+  /** Profile status at preview time. */
+  status: 'ENROLLED' | 'GRADUATED' | 'WITHDRAWN' | 'SUSPENDED';
+  decision: 'CARRY' | 'HOLD' | 'EXCLUDE';
+  holdSourceSectionId: string | null;
+  /** D8: SUSPENDED students carried by default but flagged. */
+  flagged: boolean;
+  /** WITHDRAWN/GRADUATED: excluded automatically, not overridable. */
+  locked: boolean;
+}
+
+export interface RolloverSectionPreview {
+  sourceSectionId: string;
+  sourceName: string;
+  courseId: string;
+  courseCode: string;
+  courseTitle: string;
+  action: 'CLONE' | 'MAP' | 'SKIP';
+  targetCourseId: string | null;
+  targetCourseCode: string | null;
+  targetName: string;
+  graduateStudents: boolean;
+  carryTeachers: boolean;
+  teachers: Array<{ teacherId: string; name: string; carried: boolean }>;
+  students: RolloverStudentPreview[];
+}
+
+export interface RolloverPreview {
+  id: string;
+  status: 'DRAFT' | 'EXECUTED';
+  fromTermId: string;
+  fromTermLabel: string;
+  toTermId: string;
+  toTermLabel: string;
+  sections: RolloverSectionPreview[];
+  summary: {
+    sectionsToCreate: number;
+    enrollmentsToCreate: number;
+    holds: number;
+    excluded: number;
+    graduates: number;
+    suspendedFlags: number;
+  };
+  counters: Record<string, number> | null;
+  executedAt: string | null;
+}

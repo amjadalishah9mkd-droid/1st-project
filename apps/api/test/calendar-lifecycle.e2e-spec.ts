@@ -330,15 +330,15 @@ describe('M15-W1 — academic calendar foundation', () => {
       });
       expect(rivalDraft.collegeId).toBe(rivalCollegeId);
 
-      // W2 not started: no rollover HTTP surface exists.
-      expect(
-        (
-          await http
-            .post(`/api/v1/terms/${to.id}/rollover`)
-            .set(auth(adminToken))
-            .send({ fromTermId: from.id })
-        ).status,
-      ).toBe(404);
+      // Since W2, the rollover endpoint exists and idempotently resumes
+      // this raw draft (empty plan tolerated) instead of duplicating it.
+      const resume = await http
+        .post(`/api/v1/terms/${to.id}/rollover`)
+        .set(auth(adminToken))
+        .send({ fromTermId: from.id });
+      expect(resume.status).toBe(201);
+      expect(resume.body.data.id).toBe(draft.id);
+      expect(await prisma.termRollover.count({ where: { toTermId: to.id } })).toBe(1);
 
       await prisma.termRollover.deleteMany({});
       await prisma.term.delete({ where: { id: to.id } });

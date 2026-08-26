@@ -3,6 +3,7 @@ import { UsersModule } from '../users/users.module';
 import { DepartmentsService } from './departments.service';
 import { CoursesService } from './courses.service';
 import { CalendarService } from './calendar.service';
+import { RolloverService } from './rollover.service';
 import { SectionsService } from './sections.service';
 import {
   AcademicYearsController,
@@ -25,8 +26,10 @@ import {
     DepartmentsService,
     CoursesService,
     CalendarService,
+    RolloverService,
     SectionsService,
   ],
-  exports: [DepartmentsService, CoursesService, CalendarService, SectionsService],
+  exports: [DepartmentsService, CoursesService, CalendarService,
+    RolloverService, SectionsService],
 })
 export class AcademicsModule {}

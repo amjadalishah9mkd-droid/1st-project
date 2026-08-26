@@ -120,3 +120,44 @@ export const assignTeacherSchema = z.object({
   isPrimary: z.boolean().optional().default(false),
 });
 export type AssignTeacherInput = z.infer<typeof assignTeacherSchema>;
+
+// ── M15-W2: term rollover plan (D1–D8 locked decisions) ─────────────
+
+export const rolloverStudentDecisionSchema = z.object({
+  studentId: z.string().min(1),
+  decision: z.enum(['CARRY', 'HOLD', 'EXCLUDE']),
+  /** For HOLD: the SOURCE section id of another plan entry whose
+   * destination section will receive this student (repeat section). */
+  holdSourceSectionId: z.string().optional(),
+});
+
+export const rolloverSectionPlanSchema = z.object({
+  sourceSectionId: z.string().min(1),
+  /** CLONE = same course; MAP = different course; SKIP = do not carry. */
+  action: z.enum(['CLONE', 'MAP', 'SKIP']),
+  targetCourseId: z.string().optional(), // required when action=MAP
+  targetName: z.string().trim().min(1).max(40).optional(),
+  /** D3: students of this section graduate instead of being enrolled. */
+  graduateStudents: z.boolean().default(false),
+  /** D4: carry teaching assignments to the destination section. */
+  carryTeachers: z.boolean().default(true),
+  /** Override teacher set (teacher profile ids); defaults to source. */
+  teacherIds: z.array(z.string()).max(20).optional(),
+  students: z.array(rolloverStudentDecisionSchema).max(2000).default([]),
+});
+
+export const rolloverPlanSchema = z.object({
+  sections: z.array(rolloverSectionPlanSchema).max(200),
+});
+export type RolloverPlanInput = z.infer<typeof rolloverPlanSchema>;
+
+export const createRolloverSchema = z.object({
+  fromTermId: z.string().min(1, 'Source term is required'),
+});
+export type CreateRolloverInput = z.infer<typeof createRolloverSchema>;
+
+export const executeRolloverSchema = z.object({
+  /** Typed confirmation: must equal the destination term label exactly. */
+  confirmLabel: z.string().min(1),
+});
+export type ExecuteRolloverInput = z.infer<typeof executeRolloverSchema>;
