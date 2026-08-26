@@ -138,6 +138,40 @@ not depend on webhooks (§26).
 
 **W3 provider execution: GO** — the contract is verified end to end.
 
+### 5a. M16-W3 live end-to-end verification (2026-08-26)
+
+The SHIPPED W2 implementation (not a probe script) was exercised against
+the real Safepay sandbox through the normal app path: fresh PKR 800.00
+checkout payment settled (`TRACKER_ENDED`), then, via
+`POST /fees/payments/:id/refunds` + `…/execute` as the demo accountant:
+
+- **VERIFIED**: PROVIDER refund of PKR 300.00 → attempt SUCCEEDED with a
+  real `refund_…` reference; exactly one Refund row (300.00); invoice
+  PARTIAL; summary refundable 500.00; exactly one
+  `payments.refund_succeeded` audit row and one `refund.succeeded`
+  notification. The provider reporter independently showed
+  `TRACKER_PARTIAL_REFUND`, balance 50000 paisa, one 30000-paisa refund
+  whose ref equals the stored `providerRefundRef`.
+- **VERIFIED**: `…/verify` on the terminal attempt is idempotent (two
+  replays: no duplicate Refund/audit/notification, attempt stays
+  SUCCEEDED).
+- **VERIFIED**: second refund of PKR 500.00 → Σ refunds = 800.00,
+  refundable 0.00, provider `TRACKER_REFUNDED` with balance 0 and two
+  refund records; Payment amount unchanged (800.00); PaymentAttempt
+  frozen fields unchanged; Invoice.amount unchanged; net-paid formula
+  held (other net paid 700/1500 → invoice correctly PARTIAL; the
+  net-0→PENDING branch is proven by the W2 e2e suite).
+- **VERIFIED**: post-exhaustion refund of PKR 0.01 → 400
+  `EXCEEDS_REFUNDABLE` at creation, zero rows/side effects, no provider
+  call (creation never touches the adapter).
+- **No implementation defects found; zero hardening changes required.**
+  Probe data was removed and the demo database restored to its exact
+  pre-probe state (the sandbox tracker remains refunded, as in W0).
+  Still UNVERIFIED: refund webhooks (delivery unregistered), production
+  fees/limits, provider-side concurrent duplicates, true network-timeout
+  mid-flight semantics (the recovery path was exercised only via the W2
+  fake-gateway tests).
+
 ## 6. Recorded/manual refund architecture
 
 CORE PRINCIPLE (DECISION): recorded refunds work with zero provider

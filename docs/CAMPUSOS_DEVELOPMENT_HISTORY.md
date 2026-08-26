@@ -134,7 +134,8 @@ Principles applied consistently from M0 onward:
 | M15-W4 | M15 close-out: rollover runbook, security audit, verification | `229d522` |
 | M16-W0 | Refunds design doc + live Safepay refund probe | `d2d6e52` |
 | M16-W1 | Refund schema + accountant role foundation | `4aa9a9e` |
-| M16-W2 | Refund engine: service, endpoints, net accounting, adversarial suite | *(this commit)* |
+| M16-W2 | Refund engine: service, endpoints, net accounting, adversarial suite | `c7a44a9` |
+| M16-W3 | Live Safepay sandbox verification of the refund engine | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1523,6 +1524,19 @@ RefundsService + HTTP surface + net-of-refunds accounting; no UI.
   legitimate updates: W1's "endpoints do not exist yet" flipped to
   existence, payment-spec fake gateways gained inert refund stubs.
 
+### M16-W3 — Live sandbox verification (documentation-only commit)
+The shipped W2 engine was LIVE-VERIFIED end to end against the real
+Safepay sandbox through the normal app path (design doc §5a): PKR 800
+checkout payment settled → accountant-initiated PROVIDER refund 300 →
+SUCCEEDED with a real `refund_…` ref matching the provider reporter
+(`TRACKER_PARTIAL_REFUND`, balance 500) → verify replays idempotent →
+remainder 500 → `TRACKER_REFUNDED`, balance 0, Σ=800, refundable 0 →
+post-exhaustion 0.01 rejected `EXCEEDS_REFUNDABLE` with zero side
+effects. Payment/PaymentAttempt/Invoice.amount immutability, single
+audit row and single notification per transition all held. **No defects;
+zero code changes.** Probe data removed; demo DB restored exactly
+(sandbox tracker remains refunded, W0 precedent).
+
 
 ## 7. Architecture Evolution
 
@@ -1772,7 +1786,7 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M16-W2.*
+*Last updated after M16-W3.*
 
 - **Current milestone**: **M15 COMPLETE (W1–W4)** — academic calendar
   lifecycle, rollover engine, rollover wizard, verified semester
