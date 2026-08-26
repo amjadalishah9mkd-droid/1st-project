@@ -9,7 +9,8 @@ import * as argon2 from 'argon2';
  * 4 extra teachers, 12 extra students, enrollments and teaching assignments.
  *
  * Demo credentials (development only): CampusOS!demo1
- *   admin@campusos.dev / teacher@campusos.dev / student@campusos.dev
+ *   admin@campusos.dev / teacher@campusos.dev / student@campusos.dev /
+ *   accountant@campusos.dev
  */
 const DEMO_PASSWORD = 'CampusOS!demo1';
 
@@ -41,7 +42,7 @@ export async function runDemoSeed(
   // ── Core demo users ──────────────────────────────────────────
   async function upsertUser(spec: {
     email: string;
-    role: 'ADMIN' | 'TEACHER' | 'STUDENT';
+    role: 'ADMIN' | 'TEACHER' | 'STUDENT' | 'ACCOUNTANT';
     firstName: string;
     lastName: string;
   }) {
@@ -66,6 +67,15 @@ export async function runDemoSeed(
     role: 'ADMIN',
     firstName: 'Ayesha',
     lastName: 'Rahman',
+  });
+
+  // M16-W1: demo accountant (finance-only role; grants resolve through the
+  // normal ROLE_PERMISSION_MATRIX seed — no role conditionals anywhere).
+  await upsertUser({
+    email: 'accountant@campusos.dev',
+    role: 'ACCOUNTANT',
+    firstName: 'Bilal',
+    lastName: 'Hussain',
   });
 
   // ── Teachers (demo teacher + 4 more) ─────────────────────────

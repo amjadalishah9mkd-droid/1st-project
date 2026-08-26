@@ -1,5 +1,7 @@
 /** M6 API payload types — fees. */
 
+import type { RefundAttemptStatus, RefundMethod } from '../enums';
+
 export interface FeeStructureItem {
   id: string;
   termId: string;
@@ -105,4 +107,47 @@ export interface FeeSummary {
   invoiceCount: number;
   paidCount: number;
   overdueCount: number;
+}
+
+// ── M16-W1: refund read contracts (design §§19–21; endpoints in W2) ────
+
+
+/** One refund attempt as listed on invoice detail / reconciliation. */
+export interface RefundAttemptItem {
+  id: string;
+  paymentId: string;
+  invoiceId: string;
+  invoiceNo: string;
+  amount: string;
+  currency: string;
+  reason: string;
+  method: RefundMethod;
+  provider: string | null;
+  providerRefundRef: string | null;
+  status: RefundAttemptStatus;
+  failureCode: string | null;
+  requestedById: string;
+  confirmedAt: string | null;
+  createdAt: string;
+}
+
+/** Immutable settled refund row (money actually returned). */
+export interface RefundItem {
+  id: string;
+  paymentId: string;
+  invoiceId: string;
+  amount: string;
+  method: RefundMethod;
+  reference: string | null;
+  refundedAt: string;
+}
+
+/** Per-payment refund summary: history + server-computed headroom. */
+export interface PaymentRefundSummary {
+  paymentId: string;
+  paymentAmount: string;
+  refunded: string;
+  refundable: string;
+  refunds: RefundItem[];
+  attempts: RefundAttemptItem[];
 }

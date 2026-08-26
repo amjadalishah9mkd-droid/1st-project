@@ -27,6 +27,7 @@ export const PERMISSIONS = {
   FEES_MANAGE: 'fees.manage',
   FEES_READ: 'fees.read',
   PAYMENTS_INITIATE: 'payments.initiate',
+  FINANCE_REFUND: 'finance.refund',
   COMMUNITY_PARTICIPATE: 'community.participate',
   COMMUNITY_GROUPS_CREATE: 'community.groups.create',
   COMMUNITY_SOCIETIES_MANAGE: 'community.societies.manage',
@@ -68,6 +69,8 @@ export const PERMISSION_DESCRIPTIONS: Record<PermissionKey, string> = {
   'results.read': 'View exam results',
   'fees.manage': 'Manage fee structures, invoices and payments',
   'fees.read': 'View fee invoices and payment history',
+  'finance.refund':
+    'Initiate, execute and cancel refunds of settled payments',
   'payments.initiate': 'Initiate an online payment for an own invoice',
   'community.participate': 'Post, comment, like and RSVP in the community',
   'community.groups.create': 'Create community groups',
@@ -128,6 +131,7 @@ export const ROLE_PERMISSION_MATRIX: RolePermissionGrant[] = [
   { role: 'ADMIN', permission: 'announcements.create', scope: 'ALL' },
   { role: 'ADMIN', permission: 'settings.manage', scope: 'ALL' },
   { role: 'ADMIN', permission: 'verification.manage', scope: 'ALL' },
+  { role: 'ADMIN', permission: 'finance.refund', scope: 'ALL' },
   { role: 'ADMIN', permission: 'audit.read', scope: 'ALL' },
   { role: 'ADMIN', permission: 'dashboard.admin', scope: 'ALL' },
 
@@ -166,6 +170,13 @@ export const ROLE_PERMISSION_MATRIX: RolePermissionGrant[] = [
   { role: 'STUDENT', permission: 'community.report', scope: 'ALL' },
   { role: 'STUDENT', permission: 'dashboard.student', scope: 'OWN' },
   { role: 'STUDENT', permission: 'verification.submit', scope: 'OWN' },
+
+  // ── ACCOUNTANT (M16, D-1/D-6): finance-only staff role ───────────────
+  { role: 'ACCOUNTANT', permission: 'fees.read', scope: 'ALL' },
+  { role: 'ACCOUNTANT', permission: 'fees.manage', scope: 'ALL' },
+  { role: 'ACCOUNTANT', permission: 'users.read', scope: 'ALL' },
+  { role: 'ACCOUNTANT', permission: 'audit.read', scope: 'ALL' },
+  { role: 'ACCOUNTANT', permission: 'finance.refund', scope: 'ALL' },
 
   // ── GUARDIAN (M13, decisions G1–G7): read-only, CHILD-scoped ─────────
   { role: 'GUARDIAN', permission: 'guardian.children', scope: 'OWN' },

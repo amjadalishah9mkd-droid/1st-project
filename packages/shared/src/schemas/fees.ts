@@ -47,3 +47,44 @@ export const invoicesQuerySchema = z.object({
     .enum(['PENDING', 'PARTIAL', 'PAID', 'OVERDUE', 'CANCELLED'])
     .optional(),
 });
+
+// ── M16-W1: refund contracts (design §19) ─────────────────────────────
+// Contracts only — endpoints arrive in M16-W2. The client NEVER supplies
+// collegeId, an authoritative invoiceId, provider refund identifiers, or
+// any settled amount: the payment is addressed by URL param and everything
+// else is resolved server-side. Refundable-balance checks are server/DB
+// state and deliberately NOT expressed here (W2).
+
+/** Body of POST /fees/payments/:paymentId/refunds. */
+export const createRefundSchema = z.object({
+  amount: z.coerce
+    .number()
+    .positive('Amount must be positive')
+    .max(1_000_000),
+  currency: z.literal('PKR'),
+  reason: z.string().trim().min(3, 'Reason is required').max(300),
+  method: z.enum(['PROVIDER', 'RECORDED']),
+});
+export type CreateRefundInput = z.infer<typeof createRefundSchema>;
+
+/** Body of POST /fees/refunds/:id/execute — typed amount confirmation. */
+export const executeRefundSchema = z.object({
+  confirmAmount: z.string().trim().min(1, 'Type the refund amount to confirm'),
+});
+export type ExecuteRefundInput = z.infer<typeof executeRefundSchema>;
+
+/** Body of POST /fees/refunds/:id/cancel. */
+export const cancelRefundSchema = z.object({
+  reason: z.string().trim().max(300).optional(),
+});
+export type CancelRefundInput = z.infer<typeof cancelRefundSchema>;
+
+/** Reconciliation-style listing filters (design §21). */
+export const refundsQuerySchema = z.object({
+  status: z
+    .enum(['REQUESTED', 'PROCESSING', 'SUCCEEDED', 'FAILED', 'CANCELLED'])
+    .optional(),
+  method: z.enum(['PROVIDER', 'RECORDED']).optional(),
+  invoiceNo: z.string().trim().max(60).optional(),
+});
+export type RefundsQueryInput = z.infer<typeof refundsQuerySchema>;

@@ -131,7 +131,9 @@ Principles applied consistently from M0 onward:
 | M15-W1 | Academic calendar UI & lifecycle invariants | `b40dbc0` |
 | M15-W2 | Term rollover engine | `07285d3` |
 | M15-W3 | Rollover wizard UI + semester-boundary walkthrough | `db8111c` |
-| M15-W4 | M15 close-out: rollover runbook, security audit, verification | *(this commit)* |
+| M15-W4 | M15 close-out: rollover runbook, security audit, verification | `229d522` |
+| M16-W0 | Refunds design doc + live Safepay refund probe | `d2d6e52` |
+| M16-W1 | Refund schema + accountant role foundation | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1424,6 +1426,48 @@ code changes — documentation only.
 + wizard complete, semester boundary verified live, runbook shipped,
 audit clean, suite/builds/migrations green.
 
+### M16-W0 — Refunds design + Safepay refund probe (`d2d6e52`)
+Committed `docs/M16_REFUNDS_DESIGN.md` (28 sections, D-1…D-8 locked) after
+LIVE-VERIFYING the Safepay sandbox refund API end to end: fresh PKR 800
+payment, partial refund (30000 paisa → TRACKER_PARTIAL_REFUND), remainder
+(→ TRACKER_REFUNDED), `refund_<uuid>` identifiers via the reporter's
+`charge.cybersource_refunds[]`, provider-side over-refund/full-refund
+guards, synchronous execution, secret-header auth. Refund webhooks remain
+externally blocked (dashboard-only registration, no dashboard
+credentials). W3 provider execution: GO. Demo DB restored post-probe.
+
+### M16-W1 — Refund schema + accountant foundation
+Persistence/authorization only — no service, endpoints, accounting or UI.
+
+- **Migration #10** (`m16_refund_foundation`): `Refund` (immutable
+  money-out ledger) + `RefundAttempt` (lifecycle; own collegeId belt;
+  REQUESTED/PROCESSING/SUCCEEDED/FAILED/CANCELLED; PROVIDER|RECORDED),
+  all financial FKs `Restrict`; raw SQL adds
+  `RefundAttempt_one_inflight_per_payment` (partial unique on paymentId
+  WHERE in-flight) and `amount > 0` CHECKs on both tables;
+  `ALTER TYPE "RoleKey" ADD VALUE 'ACCOUNTANT'`.
+- **Permission**: single new `finance.refund`; ADMIN + ACCOUNTANT hold it
+  (D-1). ACCOUNTANT matrix: fees.read/fees.manage/users.read/audit.read
+  (D-6)/finance.refund, all ALL — nothing else. Zero role conditionals;
+  PolicyService untouched.
+- **Seeds**: demo `accountant@campusos.dev` (standard demo password),
+  idempotent (system seed re-run twice in tests, counts stable).
+- **Shared contracts** (W2 wiring later): `createRefundSchema`
+  (amount>0, PKR-only, required reason, PROVIDER|RECORDED; NO
+  client-controlled tenancy/provider/identity fields), execute
+  (typed amount confirmation), cancel, listing filters +
+  RefundAttemptItem/RefundItem/PaymentRefundSummary types.
+- **Tests: 476** (15 new): migration structures + enum values + 10
+  applied migrations; real-DB invariants (CHECK violations, in-flight
+  partial unique incl. terminal-rows-don't-count, multiple NULL provider
+  refs coexist, duplicate provider ref rejected, Payment delete blocked
+  by refund FK); accountant matrix exactness + PolicyService resolution +
+  HTTP access (fees/reconciliation 200, settings/academics refused);
+  seed idempotency; shared-contract rejection matrix; refund endpoints
+  asserted ABSENT (W2). One M12 assertion legitimately updated:
+  audit.read is now ADMIN+ACCOUNTANT (D-6).
+
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1553,6 +1597,7 @@ reached 141 by the end of M9):
 | M15-W2 | 461 | rollover D1–D8 execution matrix, failure-injection atomicity, concurrent-execute CAS |
 | M15-W3 | 461 | no new API surface — UI verified via live Alloy walkthrough (no web test harness) |
 | M15-W4 | 461 | docs-only close-out; audit relied on existing W1/W2 proofs (no duplicated tests) |
+| M16-W1 | 476 | real-DB refund invariants (CHECK/partial-unique/FK), accountant grant matrix, seed idempotency |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1670,7 +1715,7 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M15-W4 (M15 closed).*
+*Last updated after M16-W1.*
 
 - **Current milestone**: **M15 COMPLETE (W1–W4)** — academic calendar
   lifecycle, rollover engine, rollover wizard, verified semester
@@ -1678,8 +1723,8 @@ milestone (see roadmap).
   still pending provider-dashboard endpoint registration).
 - **Latest commit**: the M15-W4 close-out commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
-- **Migrations**: 9 found, database schema up to date
-- **Tests**: **461/461 passing** (35 suites)
+- **Migrations**: 10 found, database schema up to date
+- **Tests**: **476/476 passing** (36 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)

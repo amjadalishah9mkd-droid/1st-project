@@ -10,6 +10,7 @@ export const RoleKey = {
   TEACHER: 'TEACHER',
   STUDENT: 'STUDENT',
   GUARDIAN: 'GUARDIAN',
+  ACCOUNTANT: 'ACCOUNTANT',
 } as const;
 export type RoleKey = (typeof RoleKey)[keyof typeof RoleKey];
 
@@ -93,6 +94,24 @@ export const InvoiceStatus = {
   CANCELLED: 'CANCELLED',
 } as const;
 export type InvoiceStatus = (typeof InvoiceStatus)[keyof typeof InvoiceStatus];
+
+/** M16-W1 — refund lifecycle states (design §10). */
+export const RefundAttemptStatus = {
+  REQUESTED: 'REQUESTED',
+  PROCESSING: 'PROCESSING',
+  SUCCEEDED: 'SUCCEEDED',
+  FAILED: 'FAILED',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type RefundAttemptStatus =
+  (typeof RefundAttemptStatus)[keyof typeof RefundAttemptStatus];
+
+/** M16-W1 — how refunded money goes back (design §§6–7). */
+export const RefundMethod = {
+  PROVIDER: 'PROVIDER',
+  RECORDED: 'RECORDED',
+} as const;
+export type RefundMethod = (typeof RefundMethod)[keyof typeof RefundMethod];
 
 export const PaymentMethod = {
   CASH: 'CASH',

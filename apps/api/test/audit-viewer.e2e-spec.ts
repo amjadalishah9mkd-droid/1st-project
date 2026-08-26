@@ -118,14 +118,15 @@ describe('M12-W4 — audit log viewer', () => {
       expect((await http.get('/api/v1/audit').set(auth(studentToken))).status).toBe(403);
     });
 
-    it('audit.read is seeded ADMIN/ALL and mapped on /audit', async () => {
+    it('audit.read is seeded ADMIN/ALL + ACCOUNTANT/ALL (M16 D-6) and mapped on /audit', async () => {
       const grants = await prisma.rolePermission.findMany({
         where: { permission: { key: 'audit.read' } },
         include: { permission: true },
       });
-      expect(grants).toHaveLength(1);
-      expect(grants[0].role).toBe('ADMIN');
-      expect(grants[0].scope).toBe('ALL');
+      // M16-W1 (decision D-6): the finance-only ACCOUNTANT role also holds
+      // full audit.read; no other role may.
+      expect(grants.map((g) => g.role).sort()).toEqual(['ACCOUNTANT', 'ADMIN']);
+      expect(grants.every((g) => g.scope === 'ALL')).toBe(true);
       expect(ROUTE_PERMISSIONS['/audit']).toBe('audit.read');
     });
 

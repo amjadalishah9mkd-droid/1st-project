@@ -20,6 +20,7 @@ enum RoleKey {
   TEACHER
   STUDENT
   GUARDIAN
+  ACCOUNTANT
 }
 
 enum UserStatus {
@@ -143,6 +144,23 @@ enum PaymentAttemptStatus {
   EXPIRED
   CANCELLED
   REFUNDED
+}
+
+/// M16-W1 — refund lifecycle (design §10). Terminal: SUCCEEDED / FAILED /
+/// CANCELLED. No APPROVED (D-2: single-step, no maker-checker).
+enum RefundAttemptStatus {
+  REQUESTED
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+/// M16-W1 — how the money goes back (design §§6–7). RECORDED = staff
+/// confirms an out-of-band cash/bank return; PROVIDER = gateway refund.
+enum RefundMethod {
+  PROVIDER
+  RECORDED
 }
 
 enum PostType {
@@ -283,6 +301,7 @@ model College {
   evidenceFiles    EvidenceFile[]
   guardianLinks    GuardianLink[]
   paymentAttempts  PaymentAttempt[]
+  refundAttempts   RefundAttempt[]
   termRollovers    TermRollover[]
 }
 
@@ -335,6 +354,8 @@ model User {
   marksEntered      Mark[]             @relation("MarkEnteredBy")
   paymentsRecorded  Payment[]          @relation("PaymentRecordedBy")
   paymentAttemptsInitiated PaymentAttempt[] @relation("PaymentAttemptInitiator")
+  refundsRecorded         Refund[]        @relation("RefundRecordedBy")
+  refundAttemptsRequested RefundAttempt[] @relation("RefundAttemptRequester")
   termRolloversExecuted    TermRollover[]
   posts             Post[]             @relation("PostAuthor")
   comments          Comment[]          @relation("CommentAuthor")
@@ -971,6 +992,8 @@ model Invoice {
 
   payments Payment[]
   attempts PaymentAttempt[]
+  refunds        Refund[]
+  refundAttempts RefundAttempt[]
 
   @@unique([collegeId, invoiceNo])
   @@index([studentId, status])
@@ -990,6 +1013,8 @@ model Payment {
   invoice    Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
   recordedBy User?   @relation("PaymentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
   attempt    PaymentAttempt?
+  refunds        Refund[]
+  refundAttempts RefundAttempt[]
 
   @@index([invoiceId])
 }
@@ -1066,6 +1091,71 @@ model GatewayEvent {
 
   @@unique([provider, eventId])
   @@index([attemptId])
+}
+
+/// M16-W1 — refund lifecycle/state machine (design §9). Analog of
+/// PaymentAttempt: collegeId is an independent tenancy belt; amount/reason
+/// are frozen server-side at creation; providerRefundRef is written only
+/// from adapter responses (never client input). DB invariants (raw SQL in
+/// migration #10): amount > 0 and at most ONE in-flight
+/// (REQUESTED/PROCESSING) attempt per payment.
+model RefundAttempt {
+  id                String              @id @default(cuid())
+  collegeId         String
+  paymentId         String
+  invoiceId         String
+  amount            Decimal             @db.Decimal(10, 2)
+  currency          String              @default("PKR")
+  reason            String
+  method            RefundMethod
+  provider          String?
+  providerRefundRef String?
+  status            RefundAttemptStatus @default(REQUESTED)
+  failureCode       String?
+  requestedById     String
+  confirmedAt       DateTime?
+  refundId          String?             @unique
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  college     College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  payment     Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  requestedBy User    @relation("RefundAttemptRequester", fields: [requestedById], references: [id], onDelete: Restrict)
+  refund      Refund? @relation(fields: [refundId], references: [id], onDelete: Restrict)
+
+  // Postgres UNIQUE allows multiple NULLs, so RECORDED attempts (no
+  // provider ref) never collide; two provider refunds can never share a ref.
+  @@unique([provider, providerRefundRef])
+  @@index([collegeId, status])
+  @@index([paymentId])
+  @@index([invoiceId])
+}
+
+/// M16-W1 — settled money-out ledger (design §8). IMMUTABLE after creation:
+/// the source of truth that money was actually returned. Only a SUCCEEDED
+/// RefundAttempt (provider-confirmed or staff-RECORDED) materializes a row.
+/// DB invariant (raw SQL, migration #10): amount > 0.
+model Refund {
+  id           String       @id @default(cuid())
+  paymentId    String
+  invoiceId    String
+  amount       Decimal      @db.Decimal(10, 2)
+  method       RefundMethod
+  reference    String?
+  refundedAt   DateTime
+  recordedById String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  payment    Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  invoice    Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  recordedBy User?   @relation("RefundRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  attempt RefundAttempt?
+
+  @@index([paymentId])
+  @@index([invoiceId])
 }
 
 // ─────────────────────────── Community ─────────────────────────
