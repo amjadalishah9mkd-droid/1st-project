@@ -130,7 +130,8 @@ Principles applied consistently from M0 onward:
 | M14-SBX | Real Safepay sandbox verification & adapter fixes | `ce6fce0` |
 | M15-W1 | Academic calendar UI & lifecycle invariants | `b40dbc0` |
 | M15-W2 | Term rollover engine | `07285d3` |
-| M15-W3 | Rollover wizard UI + semester-boundary walkthrough | *(this commit)* |
+| M15-W3 | Rollover wizard UI + semester-boundary walkthrough | `db8111c` |
+| M15-W4 | M15 close-out: rollover runbook, security audit, verification | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1378,6 +1379,51 @@ Alloy walkthrough of an entire semester boundary on the demo college.
 - **No API/schema/migration changes** (still 9 migrations); tests stay
   461/461; web prod build emits the new route; zero role conditionals.
 
+### M15-W4 — Close-out: runbook, security audit, full verification
+**Goal:** document, harden-verify and formally close M15. Zero product
+code changes — documentation only.
+
+- **OPERATIONS.md §24**: Academic term rollover / semester boundary
+  runbook — pre-flight checklist (source/destination/same-college/empty
+  destination, fee+timetable planning), draft semantics (suggested plan,
+  idempotent resume, SAME_TERM / INVALID_SOURCE_TERM /
+  TARGET_TERM_NOT_EMPTY / ALREADY_EXECUTED), wizard review
+  (CLONE/MAP/SKIP, teacher carry, CARRY/HOLD/EXCLUDE, graduation,
+  suspended ⚠, locked rows, backend-authoritative PATCH), execution
+  (server-enforced typed confirmation, atomic CAS, concurrency
+  protection, immutability, retry-verification list — no manual SQL),
+  the 8-step post-rollover sequence (counters → set-current →
+  timetable → fee structure → invoices → old-term readability →
+  dashboards → audit events) and the explicit "rollover does not
+  automatically create invoices, payments, refunds, or timetable
+  slots" statement.
+- **Read-only security/tenancy audit of the whole M15 surface** (year/
+  term UI, wizard, controllers, RolloverService, shared schemas,
+  TermRollover persistence, set-current): all 8 mutation endpoints
+  require `academics.manage`; every query filters by the authenticated
+  `user.collegeId` (13 tenancy filters in calendar.service, every
+  rollover lookup + in-transaction revalidation); the browser never
+  supplies a college; zero role-name conditionals; rival-college 404s,
+  typed-confirmation server enforcement, EXECUTED immutability and
+  concurrent-execute CAS are all proven by the existing W1/W2 suites;
+  audit metadata carries ids/counters only (no student PII); no
+  secrets in any M15 file. **No defects found.**
+- **Verification (recorded)**: 461/461 tests (35 suites); typecheck 0
+  errors across api/web/shared; API + web production builds green
+  (`/calendar/rollover/[termId]` route emitted); `prisma migrate
+  status` — 9 migrations, schema up to date; TermRollover
+  unique(collegeId,toTermId) + the `Term_one_current_per_college`
+  partial unique index verified live in W1 tests. No new migration
+  needed.
+- **Deferred items preserved unchanged** (§13): Safepay webhook live
+  verification (externally blocked), P2-IDOR-1, single global webhook
+  secret, P3 register items, merchant/provider questions, refunds/
+  accountant role (future milestone), term freeze (D6) deferred.
+
+**M15 is formally closed**: calendar lifecycle usable, rollover engine
++ wizard complete, semester boundary verified live, runbook shipped,
+audit clean, suite/builds/migrations green.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1506,6 +1552,7 @@ reached 141 by the end of M9):
 | M15-W1 | 450 | calendar CRUD/tenancy matrix, DB single-current invariant, TermRollover uniques |
 | M15-W2 | 461 | rollover D1–D8 execution matrix, failure-injection atomicity, concurrent-execute CAS |
 | M15-W3 | 461 | no new API surface — UI verified via live Alloy walkthrough (no web test harness) |
+| M15-W4 | 461 | docs-only close-out; audit relied on existing W1/W2 proofs (no duplicated tests) |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1623,10 +1670,13 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M15-W3.*
+*Last updated after M15-W4 (M15 closed).*
 
-- **Current milestone**: **M14 COMPLETE**; real-sandbox payment/verification LIVE-VERIFIED (success, decline, amount authority, recovery); genuine webhook delivery still pending provider-dashboard endpoint registration
-- **Latest commit**: see the M12-W4 milestone commit on branch
+- **Current milestone**: **M15 COMPLETE (W1–W4)** — academic calendar
+  lifecycle, rollover engine, rollover wizard, verified semester
+  boundary, operations runbook. M14 remains complete (webhook delivery
+  still pending provider-dashboard endpoint registration).
+- **Latest commit**: the M15-W4 close-out commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 9 found, database schema up to date
 - **Tests**: **461/461 passing** (35 suites)
@@ -1637,8 +1687,9 @@ milestone (see roadmap).
   demo admin/teacher/student logins verified; Google endpoints correctly
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13
-- **Next planned milestone**: none scheduled — M14+ (payments etc.)
-  requires explicit approval
+- **Next planned milestone**: none scheduled — any next milestone (e.g.
+  M16 refunds/accountant, for which a design doc exists) requires
+  explicit approval
 
 ## 15. Future Roadmap
 

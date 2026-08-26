@@ -615,3 +615,104 @@ refund API contract, education-sector onboarding requirements.
 Because migrations run before app cutover (section 5) and are additive, the
 usual rollback (code only, schema kept) is safe: older code ignores new
 columns/tables. A database restore is only needed when data was corrupted.
+
+## 24. Academic term rollover / semester boundary runbook (M15)
+
+Admin-only (`academics.manage`). Everything below is college-scoped to the
+authenticated admin; another college's terms, sections, teachers and
+students are invisible (404) — the browser can never pick a college.
+
+> **Rollover does not automatically create invoices, payments, refunds, or
+> timetable slots.** It never reads or writes money or timetable data, and
+> it never reads marks/results (no pass/fail inference). Those are separate,
+> deliberate steps in the sequence below.
+
+### Before you start (checklist)
+
+1. **Confirm the source term** — the term that is ending. The wizard
+   defaults to the current term; verify its section count looks right.
+2. **Confirm the destination term** — it must already exist (Calendar →
+   "New term") and must be **empty** (0 sections), otherwise the draft is
+   refused with `TARGET_TERM_NOT_EMPTY`.
+3. **Same college is enforced by the backend** — both terms are resolved
+   against your `collegeId`; a foreign source term yields
+   `INVALID_SOURCE_TERM` and a foreign destination is a plain 404.
+4. Review the source term's sections, enrolled students and teaching
+   assignments; decide up front who repeats, who leaves and which section
+   (if any) is a graduating cohort.
+5. Understand the money/timetable non-goal above, and make sure a
+   destination-term **fee structure** and **timetable plan** exist or are
+   scheduled — rollover will not create them for you.
+
+### Step 1 — draft (`POST /terms/:id/rollover {fromTermId}`)
+
+Calendar → **Start rollover** → pick source + destination → "Open rollover
+preview". The backend creates a `TermRollover` DRAFT with a **suggested
+plan**: every source section becomes a same-course CLONE with the same
+section name, current teachers carried, ACTIVE students defaulted to CARRY
+— except WITHDRAWN/GRADUATED students, which are force-EXCLUDED (locked).
+SUSPENDED students default to CARRY but are flagged (⚠ counter).
+
+Re-POSTing is **idempotent**: an existing DRAFT for that destination is
+resumed unchanged (this is also how you re-enter an abandoned draft — just
+start the rollover again for the same destination, or open
+`/calendar/rollover/<destination-term-id>` directly). Errors:
+
+| Code | Meaning |
+|---|---|
+| `SAME_TERM` | source = destination |
+| `INVALID_SOURCE_TERM` | source term not found in your college |
+| `TARGET_TERM_NOT_EMPTY` | destination already has sections |
+| `ALREADY_EXECUTED` (409) | a rollover into this term already ran |
+
+### Step 2 — review & edit the plan (wizard, `PATCH /terms/:id/rollover`)
+
+Per section: **CLONE** (same course), **MAP** (different destination
+course — required `targetCourseId`), or **SKIP** (do not carry);
+destination section name; **graduate students** checkbox (final cohorts:
+students' profiles become GRADUATED instead of enrolling anywhere); teacher
+carry toggle with per-teacher checkboxes. Per student: **CARRY**, **HOLD**
+(repeat — enrolls into another *carried* section's destination) or
+**EXCLUDE**. Locked rows (WITHDRAWN/GRADUATED) cannot be changed.
+
+The **backend remains authoritative**: PATCH is DRAFT-only and re-validates
+structure and tenancy (duplicate sections, MAP without course, HOLD without
+or into a SKIP target, foreign sections/courses are all rejected). The UI
+counters are a convenience; the server recomputes everything.
+
+### Step 3 — execute (`POST /terms/:id/rollover/execute {confirmLabel}`)
+
+The wizard requires typing the **exact destination term label** — and the
+server independently enforces it (`CONFIRMATION_MISMATCH`), so the typed
+confirmation can never be bypassed by a client. Execution is **one atomic
+transaction**: the rollover row is row-locked and CAS'd DRAFT→EXECUTED
+first, so **duplicate or concurrent executions collapse to exactly one
+success** (the others get `ALREADY_EXECUTED`); every plan id is re-checked
+live against your college inside the transaction, and any stale/foreign id
+aborts the whole run with **zero partial state, the DRAFT preserved and
+safely retryable**. An EXECUTED rollover is intentionally **immutable**:
+it cannot be edited or re-run. Before retrying a failed execution, verify:
+rollover status is still DRAFT (`GET /terms/:id/rollover`), the destination
+term has no unexpected sections, no destination enrollments or teaching
+assignments exist, and student statuses are unchanged — a failed run leaves
+all of these untouched. Do **not** hand-repair with SQL; fix the plan (or
+the referenced data) and execute again.
+
+### Step 4 — required post-rollover sequence
+
+1. **Verify counters** on the success screen / `GET …/rollover`
+   (`sectionsCreated`, `enrollmentsCreated`, `teachingAssignments`,
+   `enrollmentsCompleted`, `graduated`, `held`, `excluded`).
+2. **Set the destination term current**: Calendar → "Set current"
+   (`PATCH /terms/:id/set-current`) — atomic swap; a DB partial unique
+   index guarantees at most one current term per college.
+3. **Build the destination timetable** with the existing Timetable tools.
+4. **Create the destination-term fee structure** (Fees → structures).
+5. **Generate destination-term invoices** (`POST /fees/invoices/generate`)
+   with the existing fee tools.
+6. **Verify old-term data remains readable**: source sections, COMPLETED
+   enrollments, results, attendance and invoices are untouched and
+   accessible by switching term filters.
+7. **Verify dashboards** now reflect the new current term.
+8. **Review audit events**: `terms.rollover_drafted` and
+   `terms.rollover_executed` (ids and counters only — no student data).
