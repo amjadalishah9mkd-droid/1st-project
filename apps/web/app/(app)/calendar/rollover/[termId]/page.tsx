@@ -98,6 +98,8 @@ export default function RolloverWizardPage() {
   const [saving, setSaving] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmText, setConfirmText] = useState('');
+  // M17-W3 (D-4): closing the source term is an EXPLICIT opt-in.
+  const [closeSource, setCloseSource] = useState(false);
   const [executing, setExecuting] = useState(false);
 
   const load = useCallback(() => {
@@ -214,11 +216,30 @@ export default function RolloverWizardPage() {
       }
       const response = await apiFetch<RolloverPreview>(
         `/terms/${params.termId}/rollover/execute`,
-        { method: 'POST', body: JSON.stringify({ confirmLabel: confirmText }) },
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            confirmLabel: confirmText,
+            ...(closeSource ? { closeSourceTerm: true } : {}),
+          }),
+        },
       );
       setPreview(response.data);
       setConfirmOpen(false);
-      toast('Rollover executed');
+      if (closeSource) {
+        if (response.data.sourceTermClosed) {
+          toast(`Rollover executed — "${response.data.fromTermLabel}" is now closed.`);
+        } else {
+          toast(
+            response.data.sourceTermCloseError === 'TERM_IS_CURRENT'
+              ? `Rollover executed, but "${response.data.fromTermLabel}" is still the CURRENT term and was not closed — set another term current, then close it from the calendar.`
+              : `Rollover executed, but the source term could not be closed (${response.data.sourceTermCloseError ?? 'unknown'}). Close it from the calendar.`,
+            'error',
+          );
+        }
+      } else {
+        toast('Rollover executed');
+      }
     } catch (err) {
       if (err instanceof ApiError && err.code === 'ALREADY_EXECUTED') {
         toast('This rollover was already executed — reloading.', 'error');
@@ -353,6 +374,20 @@ export default function RolloverWizardPage() {
             onChange={(event) => setConfirmText(event.target.value)}
             placeholder={preview.toTermLabel}
           />
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={closeSource}
+              onChange={(event) => setCloseSource(event.target.checked)}
+            />
+            <span>
+              Also <strong>close {preview.fromTermLabel}</strong> after the rollover
+              (its academic records become read-only; arrears and refunds stay
+              possible; you can reopen it later). The rollover succeeds even if
+              the close is refused.
+            </span>
+          </label>
           <div className="flex justify-end gap-3">
             <Button variant="secondary" onClick={() => setConfirmOpen(false)} disabled={executing}>
               Cancel

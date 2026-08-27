@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { navItemsFor } from '@/components/layout/navigation';
 import Link from 'next/link';
 import type {
   AdminDashboard,
@@ -20,12 +22,30 @@ import { Badge } from '@/components/ui/badge';
 
 /** Role dashboards (M9) — every number is a live API aggregate. */
 export default function DashboardPage() {
-  const { user, hasPermission } = useSession();
+  const { user, hasPermission, scopeOf } = useSession();
+  const router = useRouter();
+  // M17-W3 (D-6): principals with NO dashboard grant (e.g. the finance-only
+  // ACCOUNTANT) are routed to their first authorized page instead of a
+  // dead-end. Purely permission-driven — no role names.
+  const hasAnyDashboard =
+    hasPermission('dashboard.admin') ||
+    hasPermission('dashboard.teacher') ||
+    hasPermission('dashboard.guardian') ||
+    hasPermission('dashboard.student');
+  useEffect(() => {
+    if (!user || hasAnyDashboard) return;
+    const items = navItemsFor(hasPermission, scopeOf).filter(
+      (item) => item.href !== '/dashboard',
+    );
+    router.replace(items[0]?.href ?? '/fees');
+  }, [user, hasAnyDashboard, hasPermission, scopeOf, router]);
+
   if (!user) return null;
   if (hasPermission('dashboard.admin')) return <AdminView name={user.firstName} />;
   if (hasPermission('dashboard.teacher')) return <TeacherView name={user.firstName} />;
   if (hasPermission('dashboard.guardian')) return <GuardianView name={user.firstName} />;
-  return <StudentView name={user.firstName} />;
+  if (hasPermission('dashboard.student')) return <StudentView name={user.firstName} />;
+  return <Skeleton rows={4} />;
 }
 
 function useDashboard<T>(path: string) {

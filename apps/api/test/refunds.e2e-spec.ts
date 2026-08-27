@@ -987,6 +987,35 @@ describe('M16-W2 — refunds', () => {
         .set(auth(studentToken));
       expect(own.status).toBe(200);
       expect(own.body.data.refundable).toBe('10.00');
+      // M17-W3 (D-5): a guardian LINKED to the student reads the summary
+      // (CHILD scope, read-only); an UNLINKED guardian stays 404.
+      const guardianUser = await prisma.user.findFirstOrThrow({
+        where: { email: `w2rf-guardian-${suffix}@campusos.dev` },
+      });
+      const unlinked = await http
+        .get(`/api/v1/fees/payments/${payment.id}/refunds`)
+        .set(auth(guardianToken));
+      expect(unlinked.status).toBe(404);
+      const link = await prisma.guardianLink.create({
+        data: {
+          collegeId,
+          guardianUserId: guardianUser.id,
+          studentProfileId,
+          relationship: 'parent',
+          status: 'ACTIVE',
+        },
+      });
+      const linked = await http
+        .get(`/api/v1/fees/payments/${payment.id}/refunds`)
+        .set(auth(guardianToken));
+      expect(linked.status).toBe(200);
+      expect(linked.body.data.refundable).toBe('10.00');
+      // strictly read-only: mutations remain 403 for guardians
+      expect(
+        (await createRefund(guardianToken, payment.id, { amount: 1 })).status,
+      ).toBe(403);
+      await prisma.guardianLink.delete({ where: { id: link.id } });
+
       // …but not another student's / rival's
       const foreign = await http
         .get(`/api/v1/fees/payments/${rivalPaymentId}/refunds`)

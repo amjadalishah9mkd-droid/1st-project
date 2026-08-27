@@ -41,6 +41,11 @@ export default function CalendarPage() {
   const [termOpen, setTermOpen] = useState(false);
   const [editingTerm, setEditingTerm] = useState<TermItem | null>(null);
   const [makeCurrent, setMakeCurrent] = useState<TermItem | null>(null);
+  // M17-W3: term lifecycle (close/reopen) with typed confirmation.
+  const [lifecycle, setLifecycle] = useState<{
+    term: TermItem;
+    kind: 'close' | 'reopen';
+  } | null>(null);
   const [settingCurrent, setSettingCurrent] = useState(false);
   const [rolloverOpen, setRolloverOpen] = useState(false);
 
@@ -125,6 +130,11 @@ export default function CalendarPage() {
                       <Badge tone="success">Current</Badge>
                     </span>
                   ) : null}
+                  {row.status === 'CLOSED' ? (
+                    <span className="ml-2 inline-block align-middle">
+                      <Badge tone="neutral">Closed</Badge>
+                    </span>
+                  ) : null}
                 </span>
               ),
             },
@@ -136,22 +146,42 @@ export default function CalendarPage() {
               key: 'actions',
               header: '',
               className: 'w-44 text-right',
-              render: (row) => (
-                <div className="flex justify-end gap-2">
-                  {!row.isCurrent ? (
+              render: (row) =>
+                row.status === 'CLOSED' ? (
+                  <div className="flex justify-end gap-2">
                     <Button
                       variant="secondary"
                       size="sm"
-                      onClick={() => setMakeCurrent(row)}
+                      onClick={() => setLifecycle({ term: row, kind: 'reopen' })}
                     >
-                      Set current
+                      Reopen…
                     </Button>
-                  ) : null}
-                  <Button variant="ghost" size="sm" onClick={() => setEditingTerm(row)}>
-                    Edit
-                  </Button>
-                </div>
-              ),
+                  </div>
+                ) : (
+                  <div className="flex justify-end gap-2">
+                    {!row.isCurrent ? (
+                      <>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => setMakeCurrent(row)}
+                        >
+                          Set current
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setLifecycle({ term: row, kind: 'close' })}
+                        >
+                          Close…
+                        </Button>
+                      </>
+                    ) : null}
+                    <Button variant="ghost" size="sm" onClick={() => setEditingTerm(row)}>
+                      Edit
+                    </Button>
+                  </div>
+                ),
             },
           ]}
         />
@@ -195,6 +225,17 @@ export default function CalendarPage() {
           onSaved={() => {
             setEditingTerm(null);
             toast('Term updated');
+            terms.refetch();
+          }}
+        />
+      ) : null}
+      {lifecycle ? (
+        <TermLifecycleDialog
+          term={lifecycle.term}
+          kind={lifecycle.kind}
+          onClose={() => setLifecycle(null)}
+          onDone={() => {
+            setLifecycle(null);
             terms.refetch();
           }}
         />
@@ -529,6 +570,81 @@ function StartRolloverDialog({
           </Button>
           <Button onClick={start} disabled={busy || !source || !toTermId || source === toTermId}>
             {busy ? 'Preparing…' : 'Open rollover preview'}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+// ── M17-W3: term close/reopen with typed confirmation ─────────
+
+function TermLifecycleDialog({
+  term,
+  kind,
+  onClose,
+  onDone,
+}: {
+  term: TermItem;
+  kind: 'close' | 'reopen';
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { toast } = useToast();
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+  const matches = confirm.trim() === term.label;
+
+  async function run() {
+    if (busy || !matches) return;
+    setBusy(true);
+    try {
+      await apiFetch(`/terms/${term.id}/${kind}`, {
+        method: 'POST',
+        body: JSON.stringify({ confirmLabel: confirm.trim() }),
+      });
+      toast(
+        kind === 'close'
+          ? `"${term.label}" is closed — its records are now read-only.`
+          : `"${term.label}" is active again.`,
+      );
+      onDone();
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'The operation failed', 'error');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open
+      title={kind === 'close' ? 'Close term' : 'Reopen term'}
+      description={
+        kind === 'close'
+          ? 'Closing makes this term\u2019s academic records read-only. Arrears payments and refunds remain possible. You can reopen it later.'
+          : 'Reopening makes this term\u2019s academic records editable again.'
+      }
+      onClose={() => (busy ? undefined : onClose())}
+    >
+      <div className="flex flex-col gap-4">
+        <Input
+          label={`Type the term label to confirm: \u201C${term.label}\u201D`}
+          value={confirm}
+          onChange={(event) => setConfirm(event.target.value)}
+          placeholder={term.label}
+        />
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button onClick={run} disabled={busy || !matches}>
+            {busy
+              ? kind === 'close'
+                ? 'Closing\u2026'
+                : 'Reopening\u2026'
+              : kind === 'close'
+                ? 'Close term'
+                : 'Reopen term'}
           </Button>
         </div>
       </div>

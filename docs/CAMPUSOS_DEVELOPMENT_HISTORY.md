@@ -140,7 +140,8 @@ Principles applied consistently from M0 onward:
 | M16-W5 | Refund CSV, operations runbook, security re-audit — M16 close-out | `d348c9f` |
 | M17-W0 | Term lifecycle design (`docs/M17_TERM_LIFECYCLE_DESIGN.md`) | `d53895c` |
 | M17-W1 | Term lifecycle foundation: TermStatus, close/reopen, rollover hook | `4a1093f` |
-| M17-W2 | CLOSED-term enforcement + netPaid consolidation (DEFECT-1 fixed) | *(this commit)* |
+| M17-W2 | CLOSED-term enforcement + netPaid consolidation (DEFECT-1 fixed) | `78210b2` |
+| M17-W3 | Lifecycle UI, rollover close offer, guardian refund read, accountant landing | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1709,6 +1710,33 @@ Persistence + transitions only; broad enforcement is W2.
   W1 assertion made suite-order-robust (seeded-terms-ACTIVE instead of
   a global CLOSED count).
 
+### M17-W3 — Lifecycle UI + finance polish
+- **Calendar**: CLOSED badge on term rows; "Close…" (hidden for the
+  current term — D-3 hint) and "Reopen…" actions through a shared
+  typed-confirmation dialog (exact label, busy-guarded, server remains
+  authoritative); CLOSED rows expose only Reopen. Alloy-verified live:
+  Spring 2027 closed (badge + toast + actions collapse) and reopened;
+  demo terms restored to the exact pre-walkthrough snapshot.
+- **Rollover execute dialog (D-4)**: explicit "Also close {source}"
+  checkbox → `closeSourceTerm: true`; success toasts distinguish
+  closed / TERM_IS_CURRENT-refused outcomes; rollover success never
+  depends on the close result (W1 backend semantics unchanged).
+- **Guardian refund read (D-5)**: `paymentSummary`'s CHILD short-circuit
+  replaced with the existing `policy.can(fees.read, {studentProfileId})`
+  check against the payment's invoice — linked guardians read the
+  read-only summary, unlinked stay 404, mutations remain 403
+  (finance.refund). e2e-tested (linked 200 + refundable, unlinked 404,
+  guardian mutation 403).
+- **Accountant landing (D-6)**: `/dashboard` now routes principals with
+  NO dashboard.* grant to their first authorized nav item via the
+  existing `navItemsFor` — purely permission-driven, zero role names;
+  works for any future finance-only role. Alloy-verified: accountant
+  login lands on /fees with finance-only navigation.
+- **Tests: 528** (guardian projection cases added inside the refunds
+  suite; count unchanged net of the added assertions living in an
+  existing test). Full regression green; typecheck 0; both prod builds
+  green.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1960,7 +1988,7 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M17-W2.*
+*Last updated after M17-W3.*
 
 - **Current milestone**: **M16 COMPLETE (W0–W5)** — refunds + accountant
   role, live-verified against the real Safepay sandbox; M15 calendar/

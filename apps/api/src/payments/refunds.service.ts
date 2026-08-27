@@ -682,9 +682,6 @@ export class RefundsService {
           collegeId: user.collegeId,
           ...(scope === 'OWN' ? { student: { userId: user.id } } : {}),
         },
-        // CHILD (guardian) read arrives with the W4 surface; foreign scopes
-        // resolve to the standard 404 here.
-        ...(scope === 'CHILD' ? { id: '__none__' } : {}),
       },
       include: {
         refunds: { orderBy: { refundedAt: 'asc' } },
@@ -695,6 +692,19 @@ export class RefundsService {
       },
     });
     if (!payment) throw notFound();
+    // M17-W3 (D-5): guardians read STRICTLY through the existing CHILD
+    // authorization — the payment's invoice must belong to a linked child
+    // (fees.service getInvoice precedent). Anything else is a plain 404.
+    if (scope === 'CHILD') {
+      const invoice = await this.prisma.invoice.findUniqueOrThrow({
+        where: { id: payment.invoiceId },
+        select: { studentId: true },
+      });
+      const allowed = await this.policy.can(user, 'fees.read', {
+        studentProfileId: invoice.studentId,
+      });
+      if (!allowed) throw notFound();
+    }
     const refunded = payment.refunds.reduce((s, r) => s + Number(r.amount), 0);
     return {
       paymentId: payment.id,
