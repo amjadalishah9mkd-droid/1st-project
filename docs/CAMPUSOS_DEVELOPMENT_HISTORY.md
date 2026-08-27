@@ -142,7 +142,8 @@ Principles applied consistently from M0 onward:
 | M17-W1 | Term lifecycle foundation: TermStatus, close/reopen, rollover hook | `4a1093f` |
 | M17-W2 | CLOSED-term enforcement + netPaid consolidation (DEFECT-1 fixed) | `78210b2` |
 | M17-W3 | Lifecycle UI, rollover close offer, guardian refund read, accountant landing | `cc6599f` |
-| M17-W4 | M17 close-out: security audit, term-lifecycle runbook | *(this commit)* |
+| M17-W4 | M17 close-out: security audit, term-lifecycle runbook | `3a30b82` |
+| M18-W0 | Academic records design (`docs/M18_ACADEMIC_RECORDS_DESIGN.md`) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2028,7 +2029,7 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M17-W4 (M17 closed).*
+*Last updated after M18-W0 (design only; no implementation).*
 
 - **Current milestone**: **M17 COMPLETE (W0–W4)** — term lifecycle
   (ACTIVE⇄CLOSED) with full academic/finance enforcement, net-paid
