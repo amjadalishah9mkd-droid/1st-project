@@ -156,8 +156,16 @@ export const createRolloverSchema = z.object({
 });
 export type CreateRolloverInput = z.infer<typeof createRolloverSchema>;
 
+/** M17-W1 — term close/reopen typed confirmation (rollover pattern). */
+export const termLifecycleSchema = z.object({
+  confirmLabel: z.string().min(1, 'Type the term label to confirm'),
+});
+export type TermLifecycleInput = z.infer<typeof termLifecycleSchema>;
+
 export const executeRolloverSchema = z.object({
   /** Typed confirmation: must equal the destination term label exactly. */
   confirmLabel: z.string().min(1),
+  // M17-W1 (D-4): EXPLICIT opt-in only — rollover never closes silently.
+  closeSourceTerm: z.boolean().optional(),
 });
 export type ExecuteRolloverInput = z.infer<typeof executeRolloverSchema>;

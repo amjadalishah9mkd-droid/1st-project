@@ -138,10 +138,18 @@ describe('M16-W1 — refund foundation', () => {
       expect(labels('RefundMethod')).toEqual(['PROVIDER', 'RECORDED']);
       expect(labels('RoleKey')).toContain('ACCOUNTANT');
 
+      // M17-W1 added migration #11 — assert the M16 migration is applied
+      // and the count can only have grown (the exact total is owned by
+      // the newest milestone's own suite).
+      const m16 = await prisma.$queryRaw<Array<{ count: bigint }>>`
+        SELECT COUNT(*)::bigint AS count FROM _prisma_migrations
+        WHERE migration_name LIKE '%m16_refund_foundation%'
+          AND finished_at IS NOT NULL AND rolled_back_at IS NULL`;
+      expect(Number(m16[0].count)).toBe(1);
       const migrations = await prisma.$queryRaw<Array<{ count: bigint }>>`
         SELECT COUNT(*)::bigint AS count FROM _prisma_migrations
         WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-      expect(Number(migrations[0].count)).toBe(10);
+      expect(Number(migrations[0].count)).toBeGreaterThanOrEqual(10);
     });
 
     it('refund creation endpoint exists (W2) and honors the foundation contract', async () => {

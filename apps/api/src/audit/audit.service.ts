@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { PaginationQuery, PageMeta } from '@campusos/shared';
 import { pageArgs, pageMeta } from '../common/pagination/pagination';
@@ -47,9 +48,18 @@ export class AuditService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async log(entry: AuditEntry): Promise<void> {
+  /**
+   * M17-W1: an optional transaction client makes the audit row part of
+   * the caller's atomic transition (used by term lifecycle) — the row
+   * exists iff the transition committed. Without it, behavior is the
+   * original fire-and-forget write.
+   */
+  async log(
+    entry: AuditEntry,
+    tx?: Prisma.TransactionClient,
+  ): Promise<void> {
     try {
-      await this.prisma.auditLog.create({
+      await (tx ?? this.prisma).auditLog.create({
         data: {
           collegeId: entry.collegeId,
           actorId: entry.actorId ?? null,

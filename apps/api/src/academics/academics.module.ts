@@ -4,6 +4,7 @@ import { DepartmentsService } from './departments.service';
 import { CoursesService } from './courses.service';
 import { CalendarService } from './calendar.service';
 import { RolloverService } from './rollover.service';
+import { TermLifecycleService } from './term-lifecycle.service';
 import { SectionsService } from './sections.service';
 import {
   AcademicYearsController,
@@ -27,6 +28,7 @@ import {
     CoursesService,
     CalendarService,
     RolloverService,
+    TermLifecycleService,
     SectionsService,
   ],
   exports: [DepartmentsService, CoursesService, CalendarService,

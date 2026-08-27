@@ -137,7 +137,9 @@ Principles applied consistently from M0 onward:
 | M16-W2 | Refund engine: service, endpoints, net accounting, adversarial suite | `c7a44a9` |
 | M16-W3 | Live Safepay sandbox verification of the refund engine | `2ab583c` |
 | M16-W4 | Refund UI + accountant journey | `57d60f3` |
-| M16-W5 | Refund CSV, operations runbook, security re-audit — M16 close-out | *(this commit)* |
+| M16-W5 | Refund CSV, operations runbook, security re-audit — M16 close-out | `d348c9f` |
+| M17-W0 | Term lifecycle design (`docs/M17_TERM_LIFECYCLE_DESIGN.md`) | `d53895c` |
+| M17-W1 | Term lifecycle foundation: TermStatus, close/reopen, rollover hook | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1627,6 +1629,48 @@ term freeze (M15 D6), P2-IDOR-1, single global webhook secret, and the
 P3 register items.
 
 
+### M17-W1 — Term lifecycle foundation
+Persistence + transitions only; broad enforcement is W2.
+
+- **Migration #11** (`m17_term_lifecycle`): new `TermStatus` enum
+  (ACTIVE|CLOSED), `Term.status @default(ACTIVE)` (all existing terms
+  remain ACTIVE — no backfill), `@@index(collegeId, status)`. Additive,
+  applied against the real DB.
+- **TermLifecycleService**: `close`/`reopen` — tenancy gate (foreign =
+  404, no state leakage), server-side typed confirmation (term label,
+  M15 pattern), one transaction with `SELECT … FOR UPDATE` on the Term
+  row, D-3 (`TERM_IS_CURRENT`) re-checked under the lock, CAS
+  transitions (concurrent calls → one 201 + one 409), in-transaction
+  audit (`terms.closed`/`terms.reopened`, label-only metadata; the row
+  exists iff the transition committed — AuditService gained an optional
+  tx parameter). `assertTermOpen(tx, collegeId, termId)` — the reusable
+  W2 guard: FOR SHARE on the Term row (serializes against close's FOR
+  UPDATE), 404 foreign/missing, 409 `TERM_CLOSED`.
+- **Endpoints**: `POST /terms/:id/close` and `…/reopen`, both
+  `academics.manage` (O-1) — accountants/teachers/students/guardians
+  refused; no new permissions, zero role conditionals.
+- **First guards live now**: set-current row-locks the target and
+  refuses CLOSED (`TERM_CLOSED`); rollover refuses a CLOSED destination
+  at draft AND inside the execution transaction; a CLOSED SOURCE stays
+  valid (O-3).
+- **D-4 hook**: `executeRolloverSchema` gains optional
+  `closeSourceTerm`; when explicitly true, the source is closed AFTER
+  the rollover commits via the standard lifecycle transition (audited
+  once); failure (e.g. source is current) never un-does the rollover —
+  reported as `sourceTermClosed:false` + `sourceTermCloseError`.
+  Omitted/false changes nothing.
+- **Tests: 516** (14 new): migration structures + defaults, full authz
+  matrix, tenancy (no mutation/no cross-tenant audit), typed
+  confirmation, round-trip + invalid transitions with exact audit
+  counts, D-3 under lock, CLOSED set-current refusal, real-Postgres
+  double-close/double-reopen/close-vs-reopen races, and the four
+  rollover integration cases. One legitimate M16-W1 assertion update:
+  the hardcoded "10 applied migrations" became "m16 migration applied +
+  count ≥ 10" (milestone-count ownership moved to the newest suite).
+- Deliberately NOT here (W2+): the 21-site enforcement sweep, netPaid
+  consolidation/DEFECT-1, guardian refund projection, accountant
+  landing, calendar/rollover UI.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1759,6 +1803,7 @@ reached 141 by the end of M9):
 | M16-W1 | 476 | real-DB refund invariants (CHECK/partial-unique/FK), accountant grant matrix, seed idempotency |
 | M16-W2 | 498 | refund engine adversarial matrix: money safety, CAS races, provider ambiguity, audit hygiene |
 | M16-W5 | 502 | refunds.csv authz/tenancy/escaping/amount-format + fees.csv net-paid regression |
+| M17-W1 | 516 | lifecycle CAS/lock matrix, D-3 under lock, transition races, rollover close-source integration |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1876,7 +1921,7 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M16-W5 (M16 closed).*
+*Last updated after M17-W1.*
 
 - **Current milestone**: **M16 COMPLETE (W0–W5)** — refunds + accountant
   role, live-verified against the real Safepay sandbox; M15 calendar/
@@ -1884,8 +1929,8 @@ milestone (see roadmap).
   pending provider-dashboard endpoint registration).
 - **Latest commit**: the M15-W4 close-out commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
-- **Migrations**: 10 found, database schema up to date
-- **Tests**: **502/502 passing** (37 suites)
+- **Migrations**: 11 found, database schema up to date
+- **Tests**: **516/516 passing** (38 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)

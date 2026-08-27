@@ -131,6 +131,14 @@ enum PaymentMethod {
 /// concurrency-safe DRAFT -> EXECUTED CAS on `status`. `plan` stores the
 /// admin-edited mapping as ids/flags only — never PII — and is revalidated
 /// against live data at execution time (never trusted stale).
+/// M17-W1 — term lifecycle (design §7). CLOSED terms are read-only for
+/// academic mutations; additive financial ledger operations (arrears,
+/// refunds) remain allowed (D-1).
+enum TermStatus {
+  ACTIVE
+  CLOSED
+}
+
 enum TermRolloverStatus {
   DRAFT
   EXECUTED
@@ -586,6 +594,8 @@ model Term {
   startsOn       DateTime @db.Date
   endsOn         DateTime @db.Date
   isCurrent      Boolean  @default(false)
+  /// M17-W1: lifecycle state. All existing terms default ACTIVE.
+  status         TermStatus @default(ACTIVE)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -599,6 +609,7 @@ model Term {
   feeStructures FeeStructure[]
 
   @@unique([academicYearId, label])
+  @@index([collegeId, status])
   @@index([collegeId, isCurrent])
 }
 

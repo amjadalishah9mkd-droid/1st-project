@@ -13,6 +13,7 @@ import type {
 } from '@campusos/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { TermLifecycleService } from './term-lifecycle.service';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 
 /**
@@ -52,6 +53,7 @@ export class RolloverService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly lifecycle: TermLifecycleService,
   ) {}
 
   // ── Draft creation with suggested plan (D1/D4/D8 defaults) ──
@@ -79,6 +81,9 @@ export class RolloverService {
     if (toTerm.id === fromTerm.id) {
       throw badRequest('SAME_TERM', 'Source and destination terms must differ');
     }
+    // M17-W1: a CLOSED term cannot receive a rollover (destination must
+    // be open); a CLOSED SOURCE remains valid (O-3 — reads only).
+    await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, toTermId);
 
     const existing = await this.prisma.termRollover.findUnique({
       where: {
@@ -408,6 +413,7 @@ export class RolloverService {
     user: AuthenticatedUser,
     toTermId: string,
     confirmLabel: string,
+    closeSourceTerm = false,
   ): Promise<RolloverPreview> {
     const rollover = await this.prisma.termRollover.findFirst({
       where: { toTermId, collegeId: user.collegeId },
@@ -425,6 +431,9 @@ export class RolloverService {
 
     const counters = await this.prisma.$transaction(
       async (tx) => {
+        // M17-W1: destination must be open, checked INSIDE the execution
+        // transaction (FOR SHARE serializes against a concurrent close).
+        await this.lifecycle.assertTermOpen(tx, user.collegeId, toTermId);
         // Row lock + CAS: exactly one execution ever proceeds.
         await tx.$queryRaw`SELECT id FROM "TermRollover" WHERE id = ${rollover.id} FOR UPDATE`;
         const claimed = await tx.termRollover.updateMany({
@@ -620,6 +629,21 @@ export class RolloverService {
       targetId: toTermId,
       metadata: { fromTermId: rollover.fromTermId, ...counters },
     });
+    // M17-W1 (D-4): closing the source term is an EXPLICIT opt-in and
+    // happens AFTER the rollover committed — a close failure (e.g. the
+    // source is still the current term) never un-does the rollover.
+    if (closeSourceTerm) {
+      const closed = await this.lifecycle.closeFromRollover(
+        user,
+        rollover.fromTermId,
+      );
+      const preview = await this.preview(user, toTermId);
+      return {
+        ...preview,
+        sourceTermClosed: closed.closed,
+        sourceTermCloseError: closed.errorCode ?? null,
+      };
+    }
     return this.preview(user, toTermId);
   }
 }

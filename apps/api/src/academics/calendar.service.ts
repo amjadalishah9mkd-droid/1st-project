@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -138,6 +139,7 @@ export class CalendarService {
     startsOn: Date;
     endsOn: Date;
     isCurrent: boolean;
+    status: 'ACTIVE' | 'CLOSED';
     _count: { sections: number };
   }): TermItem {
     return {
@@ -148,6 +150,7 @@ export class CalendarService {
       startsOn: row.startsOn.toISOString().slice(0, 10),
       endsOn: row.endsOn.toISOString().slice(0, 10),
       isCurrent: row.isCurrent,
+      status: row.status,
       sectionCount: row._count.sections,
     };
   }
@@ -267,20 +270,34 @@ export class CalendarService {
         message: 'Term not found',
       });
     }
-    const [, updated] = await this.prisma.$transaction([
-      this.prisma.term.updateMany({
+    const updated = await this.prisma.$transaction(async (tx) => {
+      // M17-W1: row-lock the target so set-current serializes against a
+      // concurrent close (design §17), then re-check lifecycle state —
+      // a CLOSED term can never become current (D-3 corollary).
+      const locked = await tx.$queryRaw<Array<{ status: string }>>`
+        SELECT "status" FROM "Term" WHERE id = ${id} FOR UPDATE`;
+      if (locked.length === 0) {
+        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Term not found' });
+      }
+      if (locked[0].status === 'CLOSED') {
+        throw new ConflictException({
+          code: 'TERM_CLOSED',
+          message: 'A closed term cannot be made current — reopen it first',
+        });
+      }
+      await tx.term.updateMany({
         where: { collegeId: user.collegeId, isCurrent: true },
         data: { isCurrent: false },
-      }),
-      this.prisma.term.update({
+      });
+      return tx.term.update({
         where: { id },
         data: { isCurrent: true },
         include: {
           academicYear: { select: { label: true } },
           _count: { select: { sections: true } },
         },
-      }),
-    ]);
+      });
+    });
     await this.audit.log({
       collegeId: user.collegeId,
       actorId: user.id,

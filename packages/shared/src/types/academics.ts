@@ -40,6 +40,8 @@ export interface TermItem {
   startsOn: string;
   endsOn: string;
   isCurrent: boolean;
+  /** M17-W1: lifecycle state — CLOSED terms are read-only for academics. */
+  status: 'ACTIVE' | 'CLOSED';
   sectionCount: number;
 }
 
@@ -228,4 +230,7 @@ export interface RolloverPreview {
   };
   counters: Record<string, number> | null;
   executedAt: string | null;
+  /** M17-W1 (D-4): present only when execute was called with closeSourceTerm. */
+  sourceTermClosed?: boolean;
+  sourceTermCloseError?: string | null;
 }

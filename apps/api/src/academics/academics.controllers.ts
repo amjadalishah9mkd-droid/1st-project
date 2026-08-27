@@ -17,6 +17,7 @@ import {
   createRolloverSchema,
   createTermSchema,
   executeRolloverSchema,
+  termLifecycleSchema,
   rolloverPlanSchema,
   paginationQuerySchema,
   updateAcademicYearSchema,
@@ -33,6 +34,7 @@ import {
   type CreateRolloverInput,
   type CreateTermInput,
   type ExecuteRolloverInput,
+  type TermLifecycleInput,
   type RolloverPlanInput,
   type UpdateAcademicYearInput,
   type UpdateCourseInput,
@@ -45,6 +47,7 @@ import { DepartmentsService } from './departments.service';
 import { CoursesService } from './courses.service';
 import { CalendarService } from './calendar.service';
 import { RolloverService } from './rollover.service';
+import { TermLifecycleService } from './term-lifecycle.service';
 import { SectionsService } from './sections.service';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { RequirePermission } from '../access/require-permission.decorator';
@@ -184,6 +187,7 @@ export class TermsController {
   constructor(
     private readonly calendar: CalendarService,
     private readonly rollover: RolloverService,
+    private readonly lifecycle: TermLifecycleService,
   ) {}
 
   // ── M15-W2: term rollover (academics.manage; college-scoped) ──
@@ -221,7 +225,34 @@ export class TermsController {
     @Param('id') toTermId: string,
     @Body(new ZodValidationPipe(executeRolloverSchema)) body: ExecuteRolloverInput,
   ) {
-    return this.rollover.execute(user, toTermId, body.confirmLabel);
+    return this.rollover.execute(
+      user,
+      toTermId,
+      body.confirmLabel,
+      body.closeSourceTerm === true,
+    );
+  }
+
+  // ── M17-W1: term lifecycle (academics.manage per O-1) ─────────
+
+  @Post(':id/close')
+  @RequirePermission(PERMISSIONS.ACADEMICS_MANAGE)
+  close(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(termLifecycleSchema)) body: TermLifecycleInput,
+  ) {
+    return this.lifecycle.close(user, id, body.confirmLabel);
+  }
+
+  @Post(':id/reopen')
+  @RequirePermission(PERMISSIONS.ACADEMICS_MANAGE)
+  reopen(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(termLifecycleSchema)) body: TermLifecycleInput,
+  ) {
+    return this.lifecycle.reopen(user, id, body.confirmLabel);
   }
 
   @Get()
