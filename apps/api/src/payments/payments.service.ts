@@ -14,6 +14,7 @@ import type {
   UnmatchedGatewayEventItem,
 } from '@campusos/shared';
 import { PrismaService } from '../prisma/prisma.service';
+import { netPaid } from '../fees/money';
 import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
 import { EventsService } from '../events/events.module';
@@ -303,10 +304,8 @@ export class PaymentsService {
           message: 'This invoice is cancelled',
         });
       }
-      // M16-W2: outstanding balance is NET of settled refunds.
-      const paid =
-        invoice.payments.reduce((sum, p) => sum + Number(p.amount), 0) -
-        invoice.refunds.reduce((sum, r) => sum + Number(r.amount), 0);
+      // M16-W2/M17-W2: outstanding balance is NET (shared helper).
+      const paid = netPaid(invoice);
       const balance = Number(invoice.amount) - paid;
       if (balance <= 0) {
         throw new BadRequestException({
@@ -465,10 +464,8 @@ export class PaymentsService {
         where: { id: attempt.invoiceId },
         include: { payments: true, refunds: { select: { amount: true } } },
       });
-      // M16-W2: balances are NET of settled refunds.
-      const paid =
-        invoice.payments.reduce((sum, p) => sum + Number(p.amount), 0) -
-        invoice.refunds.reduce((sum, r) => sum + Number(r.amount), 0);
+      // M16-W2/M17-W2: balances are NET (shared helper).
+      const paid = netPaid(invoice);
       const balance = Number(invoice.amount) - paid;
       const overpaid = Number(attempt.amount) > balance;
 

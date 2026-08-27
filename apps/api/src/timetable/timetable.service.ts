@@ -14,6 +14,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
 import type { AuthenticatedUser } from '../access/authenticated-user';
+import { TermLifecycleService } from '../academics/term-lifecycle.service';
 
 const slotInclude = {
   section: {
@@ -64,6 +65,7 @@ function overlaps(
 export class TimetableService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly lifecycle: TermLifecycleService,
     private readonly policy: PolicyService,
     private readonly audit: AuditService,
   ) {}
@@ -188,6 +190,9 @@ export class TimetableService {
       });
     }
 
+    // M17-W2: CLOSED terms are read-only for timetables.
+    await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, section.termId);
+
     await this.assertNoConflicts(user, {
       sectionId: input.sectionId,
       termId: section.termId,
@@ -233,6 +238,12 @@ export class TimetableService {
         message: 'Timetable slot not found',
       });
     }
+    // M17-W2: CLOSED terms are read-only for timetables.
+    await this.lifecycle.assertTermOpen(
+      this.prisma,
+      user.collegeId,
+      existing.section.termId,
+    );
 
     const next = {
       dayOfWeek: input.dayOfWeek ?? existing.dayOfWeek,
@@ -286,6 +297,11 @@ export class TimetableService {
           'This slot already has class sessions and cannot be deleted. Adjust its times instead.',
       });
     }
+    await this.lifecycle.assertSectionTermOpen(
+      this.prisma,
+      user.collegeId,
+      existing.sectionId,
+    );
     await this.prisma.timetableSlot.delete({ where: { id } });
     await this.audit.log({
       collegeId: user.collegeId,

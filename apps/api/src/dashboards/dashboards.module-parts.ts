@@ -1,4 +1,5 @@
 import { Controller, Get, Injectable } from '@nestjs/common';
+import { netPaid } from '../fees/money';
 import {
   PERMISSIONS,
   type AdminDashboard,
@@ -106,7 +107,10 @@ export class DashboardsService {
       }),
       this.prisma.invoice.findMany({
         where: { collegeId, status: { not: 'CANCELLED' } },
-        include: { payments: { select: { amount: true } } },
+        include: {
+          payments: { select: { amount: true } },
+          refunds: { select: { amount: true } },
+        },
       }),
     ]);
 
@@ -115,7 +119,8 @@ export class DashboardsService {
     let overdueCount = 0;
     for (const invoice of invoices) {
       invoiced += Number(invoice.amount);
-      collected += invoice.payments.reduce((sum, p) => sum + Number(p.amount), 0);
+      // M17-W2 (DEFECT-1 fix): collected is NET of settled refunds.
+      collected += netPaid(invoice);
       if (invoice.status === 'OVERDUE') overdueCount += 1;
     }
 
@@ -218,7 +223,10 @@ export class DashboardsService {
         }),
         this.prisma.invoice.findMany({
           where: { studentId: profile.id, status: { not: 'CANCELLED' } },
-          include: { payments: { select: { amount: true } } },
+          include: {
+          payments: { select: { amount: true } },
+          refunds: { select: { amount: true } },
+        },
         }),
         this.prisma.mark.count({
           where: {
@@ -252,9 +260,8 @@ export class DashboardsService {
     let balance = 0;
     let overdueInvoices = 0;
     for (const invoice of invoices) {
-      balance +=
-        Number(invoice.amount) -
-        invoice.payments.reduce((sum, p) => sum + Number(p.amount), 0);
+      // M17-W2 (DEFECT-1 fix): balance derives from NET paid.
+      balance += Number(invoice.amount) - netPaid(invoice);
       if (invoice.status === 'OVERDUE') overdueInvoices += 1;
     }
 

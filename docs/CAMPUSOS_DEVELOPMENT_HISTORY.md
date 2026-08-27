@@ -139,7 +139,8 @@ Principles applied consistently from M0 onward:
 | M16-W4 | Refund UI + accountant journey | `57d60f3` |
 | M16-W5 | Refund CSV, operations runbook, security re-audit — M16 close-out | `d348c9f` |
 | M17-W0 | Term lifecycle design (`docs/M17_TERM_LIFECYCLE_DESIGN.md`) | `d53895c` |
-| M17-W1 | Term lifecycle foundation: TermStatus, close/reopen, rollover hook | *(this commit)* |
+| M17-W1 | Term lifecycle foundation: TermStatus, close/reopen, rollover hook | `4a1093f` |
+| M17-W2 | CLOSED-term enforcement + netPaid consolidation (DEFECT-1 fixed) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1671,6 +1672,43 @@ Persistence + transitions only; broad enforcement is W2.
   consolidation/DEFECT-1, guardian refund projection, accountant
   landing, calendar/rollover UI.
 
+### M17-W2 — CLOSED-term enforcement + net accounting consolidation
+- **Academic enforcement (design §10, all sites)**: attendance (session
+  generation — guard + createMany in ONE transaction; session update;
+  sheet save), exams (create-in-term, update, publish, paper
+  create/update, marks PUT), assignments (create/update/remove/publish,
+  student submit, grade), timetable (slot create/update/delete),
+  sections (create-in-term, update, enroll, unenroll, teacher
+  assign/unassign), term definition edits. All through the ONE
+  `assertTermOpen`/`assertSectionTermOpen` guard (new section-join
+  variant with `FOR SHARE OF t`); term identity always derived
+  server-side; existing authz/404 semantics untouched.
+- **Finance enforcement (D-1/O-2)**: structure create (guard + create in
+  one tx), structure update (guard inside the existing tx), invoice
+  generation (preflight + re-assert inside the minting tx), invoice
+  cancel (term resolved from the AUTHORITATIVE invoice→structure
+  relationship; guard shares the cancellation tx). Explicitly ALLOWED
+  and proven on a CLOSED term: arrears recordPayment, the full refund
+  cycle, reconciliation reads, fees.csv (whose paid column shows the
+  closed-term invoice NET).
+- **netPaid consolidation**: new `apps/api/src/fees/money.ts` is the ONE
+  canonical `Σ payments − Σ refunds`; all eight reducer sites now use it
+  (fees paidAmount + summary, payments initiation + settlement, refunds
+  recompute, fees.csv, and the two dashboards). **DEFECT-1 fixed**:
+  admin dashboard `collected` and student dashboard `feeBalance` are
+  net-aware; zero gross `payments.reduce` remains outside money.ts
+  (grep-proven).
+- **Tests: 528** (12 new): every mutation family 409 `TERM_CLOSED` with
+  zero rows written; ACTIVE-control + reopen-then-mutate round trip;
+  allowed-finance proofs; real-Postgres races (close vs invoice
+  generation, close vs structure creation) proving the tx-level guard
+  (Term-before-Invoice lock order preserved); DEFECT-1 regression:
+  dashboard collected/outstanding EQUAL fees-summary totals before and
+  after partial (400−150) and full (net 0 → invoice PENDING per D-5)
+  refunds, with other invoices keeping the arithmetic non-trivial. One
+  W1 assertion made suite-order-robust (seeded-terms-ACTIVE instead of
+  a global CLOSED count).
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1804,6 +1842,7 @@ reached 141 by the end of M9):
 | M16-W2 | 498 | refund engine adversarial matrix: money safety, CAS races, provider ambiguity, audit hygiene |
 | M16-W5 | 502 | refunds.csv authz/tenancy/escaping/amount-format + fees.csv net-paid regression |
 | M17-W1 | 516 | lifecycle CAS/lock matrix, D-3 under lock, transition races, rollover close-source integration |
+| M17-W2 | 528 | closed-term 409 matrix across every family, tx-level guard races, DEFECT-1 dashboard==summary |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1921,7 +1960,7 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M17-W1.*
+*Last updated after M17-W2.*
 
 - **Current milestone**: **M16 COMPLETE (W0–W5)** — refunds + accountant
   role, live-verified against the real Safepay sandbox; M15 calendar/
@@ -1930,7 +1969,7 @@ milestone (see roadmap).
 - **Latest commit**: the M15-W4 close-out commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 11 found, database schema up to date
-- **Tests**: **516/516 passing** (38 suites)
+- **Tests**: **528/528 passing** (39 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)

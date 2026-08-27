@@ -72,6 +72,33 @@ export class TermLifecycleService {
     }
   }
 
+  /**
+   * Convenience guard for section-scoped mutations (attendance, timetable,
+   * assignments, enrollment, teaching): resolves the owning term in the
+   * same query and locks the Term row FOR SHARE. 404 when the section is
+   * missing/foreign; 409 TERM_CLOSED when its term is closed.
+   */
+  async assertSectionTermOpen(
+    tx: Tx | PrismaService,
+    collegeId: string,
+    sectionId: string,
+  ): Promise<void> {
+    const rows = await tx.$queryRaw<Array<{ status: string }>>`
+      SELECT t."status" FROM "Term" t
+      JOIN "Section" s ON s."termId" = t.id
+      WHERE s.id = ${sectionId} AND s."collegeId" = ${collegeId}
+      FOR SHARE OF t`;
+    if (rows.length === 0) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Section not found' });
+    }
+    if (rows[0].status === 'CLOSED') {
+      throw new ConflictException({
+        code: 'TERM_CLOSED',
+        message: 'This term is closed — its records are read-only',
+      });
+    }
+  }
+
   async close(
     user: AuthenticatedUser,
     termId: string,

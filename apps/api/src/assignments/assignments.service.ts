@@ -21,6 +21,7 @@ import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
 import { EventsService } from '../events/events.module';
 import type { AuthenticatedUser } from '../access/authenticated-user';
+import { TermLifecycleService } from '../academics/term-lifecycle.service';
 import { pageArgs, pageMeta } from '../common/pagination/pagination';
 
 const assignmentInclude = {
@@ -50,6 +51,7 @@ function forbidden(): ForbiddenException {
 export class AssignmentsService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly lifecycle: TermLifecycleService,
     private readonly policy: PolicyService,
     private readonly audit: AuditService,
     private readonly events: EventsService,
@@ -242,6 +244,12 @@ export class AssignmentsService {
     ) {
       throw forbidden();
     }
+    // M17-W2: CLOSED terms are read-only for assignments.
+    await this.lifecycle.assertSectionTermOpen(
+      this.prisma,
+      user.collegeId,
+      input.sectionId,
+    );
 
     const created = await this.prisma.assignment.create({
       data: {
@@ -272,6 +280,11 @@ export class AssignmentsService {
     input: UpdateAssignmentInput,
   ): Promise<AssignmentItem> {
     const existing = await this.requireManaged(user, id);
+    await this.lifecycle.assertSectionTermOpen(
+      this.prisma,
+      user.collegeId,
+      existing.sectionId,
+    );
     if (input.maxPoints !== undefined) {
       const over = await this.prisma.submission.findFirst({
         where: { assignmentId: id, points: { gt: input.maxPoints } },
@@ -301,6 +314,11 @@ export class AssignmentsService {
 
   async remove(user: AuthenticatedUser, id: string): Promise<{ removed: true }> {
     const existing = await this.requireManaged(user, id);
+    await this.lifecycle.assertSectionTermOpen(
+      this.prisma,
+      user.collegeId,
+      existing.sectionId,
+    );
     const submissions = await this.prisma.submission.count({
       where: { assignmentId: id },
     });
@@ -324,6 +342,11 @@ export class AssignmentsService {
 
   async publish(user: AuthenticatedUser, id: string): Promise<AssignmentItem> {
     const existing = await this.requireManaged(user, id);
+    await this.lifecycle.assertSectionTermOpen(
+      this.prisma,
+      user.collegeId,
+      existing.sectionId,
+    );
     if (existing.publishedAt) {
       throw new BadRequestException({
         code: 'ALREADY_PUBLISHED',
@@ -437,6 +460,11 @@ export class AssignmentsService {
         message: 'Assignment not found',
       });
     }
+    await this.lifecycle.assertSectionTermOpen(
+      this.prisma,
+      user.collegeId,
+      assignment.sectionId,
+    );
     const student = await this.prisma.studentProfile.findFirst({
       where: { userId: user.id, collegeId: user.collegeId },
       select: { id: true },
@@ -537,6 +565,11 @@ export class AssignmentsService {
         message: 'Submission not found',
       });
     }
+    await this.lifecycle.assertSectionTermOpen(
+      this.prisma,
+      user.collegeId,
+      submission.assignment.sectionId,
+    );
     if (
       !(await this.policy.can(user, 'assignments.grade', {
         sectionId: submission.assignment.sectionId,

@@ -24,6 +24,8 @@ import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
 import { EventsService } from '../events/events.module';
 import type { AuthenticatedUser } from '../access/authenticated-user';
+import { TermLifecycleService } from '../academics/term-lifecycle.service';
+import { netPaid } from './money';
 import { pageArgs, pageMeta } from '../common/pagination/pagination';
 
 function forbidden(): ForbiddenException {
@@ -51,9 +53,7 @@ type InvoiceRecord = Prisma.InvoiceGetPayload<{ include: typeof invoiceInclude }
  * Invoice.amount are immutable; only derived status/balances use this.
  */
 function paidAmount(row: InvoiceRecord): number {
-  const paid = row.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
-  const refunded = row.refunds.reduce((sum, refund) => sum + Number(refund.amount), 0);
-  return paid - refunded;
+  return netPaid(row);
 }
 
 function toInvoiceItem(row: InvoiceRecord): InvoiceItem {
@@ -77,6 +77,7 @@ function toInvoiceItem(row: InvoiceRecord): InvoiceItem {
 export class FeesService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly lifecycle: TermLifecycleService,
     private readonly policy: PolicyService,
     private readonly audit: AuditService,
     private readonly events: EventsService,
@@ -163,7 +164,12 @@ export class FeesService {
     // Server computes the total — it always equals the component sum.
     const totalAmount = input.components.reduce((sum, c) => sum + c.amount, 0);
 
-    const created = await this.prisma.feeStructure.create({
+    // M17-W2 (D-1): term-bound fee structures cannot be created for a
+    // CLOSED term. Guard + write share one transaction (Term FOR SHARE
+    // vs close's FOR UPDATE — Term-before-Invoice lock order).
+    const created = await this.prisma.$transaction(async (tx) => {
+      await this.lifecycle.assertTermOpen(tx, user.collegeId, input.termId);
+      return tx.feeStructure.create({
       data: {
         collegeId: user.collegeId,
         termId: input.termId,
@@ -178,6 +184,7 @@ export class FeesService {
         components: true,
         _count: { select: { invoices: true } },
       },
+      });
     });
     await this.audit.log({
       collegeId: user.collegeId,
@@ -205,6 +212,8 @@ export class FeesService {
       : undefined;
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // M17-W2 (D-1/O-2 family): CLOSED-term structures are read-only.
+      await this.lifecycle.assertTermOpen(tx, user.collegeId, existing.termId);
       if (input.components) {
         await tx.feeComponent.deleteMany({ where: { structureId: id } });
         await tx.feeComponent.createMany({
@@ -244,6 +253,9 @@ export class FeesService {
     if (!structure) {
       throw new NotFoundException({ code: 'NOT_FOUND', message: 'Fee structure not found' });
     }
+    // M17-W2 (D-1): no NEW invoices against a CLOSED term (preflight;
+    // re-asserted inside the creation transaction below).
+    await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, structure.termId);
 
     const students = await this.prisma.studentProfile.findMany({
       where: {
@@ -281,6 +293,9 @@ export class FeesService {
     const dueDate = new Date(`${input.dueDate}T00:00:00Z`);
     const createdInvoices: Array<{ id: string; userId: string }> = [];
     await this.prisma.$transaction(async (tx) => {
+      // M17-W2: re-assert INSIDE the creating transaction — invoices can
+      // never be minted after the term's CLOSED state committed.
+      await this.lifecycle.assertTermOpen(tx, user.collegeId, structure.termId);
       for (const student of targets) {
         sequence += 1;
         const invoice = await tx.invoice.create({
@@ -475,10 +490,20 @@ export class FeesService {
         message: 'This invoice is already cancelled',
       });
     }
-    const updated = await this.prisma.invoice.update({
+    // M17-W2 (O-2): the term is resolved from the AUTHORITATIVE invoice→
+    // structure relationship — never a client-supplied identifier — and
+    // the guard shares the cancellation transaction.
+    const structureTerm = await this.prisma.feeStructure.findUniqueOrThrow({
+      where: { id: row.structureId },
+      select: { termId: true },
+    });
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await this.lifecycle.assertTermOpen(tx, user.collegeId, structureTerm.termId);
+      return tx.invoice.update({
       where: { id },
       data: { status: 'CANCELLED' },
       include: invoiceInclude,
+      });
     });
     await this.audit.log({
       collegeId: user.collegeId,
@@ -573,10 +598,8 @@ export class FeesService {
     let overdueCount = 0;
     for (const invoice of invoices) {
       invoiced += Number(invoice.amount);
-      // M16-W2: collected is NET of settled refunds.
-      collected +=
-        invoice.payments.reduce((sum, p) => sum + Number(p.amount), 0) -
-        invoice.refunds.reduce((sum, r) => sum + Number(r.amount), 0);
+      // M16-W2/M17-W2: collected is NET of settled refunds (shared helper).
+      collected += netPaid(invoice);
       if (invoice.status === 'PAID') paidCount += 1;
       if (invoice.status === 'OVERDUE') overdueCount += 1;
     }

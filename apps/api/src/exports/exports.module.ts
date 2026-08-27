@@ -16,6 +16,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
 import { toCsv, CsvTooLargeError, CSV_ROW_CAP } from '../common/csv';
+import { netPaid } from '../fees/money';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { CurrentUser } from '../access/current-user.decorator';
 import type { AuthenticatedUser } from '../access/authenticated-user';
@@ -225,10 +226,7 @@ export class ExportsService {
         invoice.student.rollNo,
         invoice.student.admissionNo,
         invoice.amount.toString(),
-        (
-          invoice.payments.reduce((sum, p) => sum + Number(p.amount), 0) -
-          invoice.refunds.reduce((sum, r) => sum + Number(r.amount), 0)
-        ).toString(),
+        netPaid(invoice).toString(),
         invoice.status,
         invoice.dueDate.toISOString().slice(0, 10),
       ]),

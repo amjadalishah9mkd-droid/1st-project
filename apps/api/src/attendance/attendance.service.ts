@@ -17,6 +17,7 @@ import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
 import { EventsService } from '../events/events.module';
 import type { AuthenticatedUser } from '../access/authenticated-user';
+import { TermLifecycleService } from '../academics/term-lifecycle.service';
 
 const sessionInclude = {
   slot: { select: { dayOfWeek: true, startTime: true, endTime: true, room: true } },
@@ -66,6 +67,7 @@ function forbidden(): ForbiddenException {
 export class AttendanceService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly lifecycle: TermLifecycleService,
     private readonly policy: PolicyService,
     private readonly audit: AuditService,
     private readonly events: EventsService,
@@ -118,9 +120,15 @@ export class AttendanceService {
           entry.date >= section.term.startsOn && entry.date <= section.term.endsOn,
       );
 
-    const result = await this.prisma.classSession.createMany({
-      data,
-      skipDuplicates: true, // idempotency via @@unique([slotId, date])
+    // M17-W2: guard + write share one transaction — a session can never
+    // be created after the term's CLOSED state committed (lock: Term
+    // FOR SHARE vs close's FOR UPDATE).
+    const result = await this.prisma.$transaction(async (tx) => {
+      await this.lifecycle.assertSectionTermOpen(tx, user.collegeId, sectionId);
+      return tx.classSession.createMany({
+        data,
+        skipDuplicates: true, // idempotency via @@unique([slotId, date])
+      });
     });
 
     const sessions = await this.listSessions(user, sectionId, {
@@ -193,6 +201,11 @@ export class AttendanceService {
     ) {
       throw forbidden();
     }
+    await this.lifecycle.assertSectionTermOpen(
+      this.prisma,
+      user.collegeId,
+      session.sectionId,
+    );
     const updated = await this.prisma.classSession.update({
       where: { id: sessionId },
       data: { status: input.status, note: input.note },
@@ -287,6 +300,12 @@ export class AttendanceService {
         message: 'Attendance cannot be recorded for a cancelled session',
       });
     }
+    // M17-W2: CLOSED terms are read-only for attendance.
+    await this.lifecycle.assertSectionTermOpen(
+      this.prisma,
+      user.collegeId,
+      session.sectionId,
+    );
 
     // Every record must belong to an actively enrolled student.
     const enrolled = await this.prisma.enrollment.findMany({

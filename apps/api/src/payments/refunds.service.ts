@@ -15,6 +15,7 @@ import type {
   RefundsQueryInput,
 } from '@campusos/shared';
 import { PrismaService } from '../prisma/prisma.service';
+import { netPaid } from '../fees/money';
 import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
 import { EventsService } from '../events/events.module';
@@ -117,13 +118,11 @@ export class RefundsService {
       },
     });
     if (invoice.status === 'CANCELLED') return;
-    const paid = invoice.payments.reduce((s, p) => s + Number(p.amount), 0);
-    const refunded = invoice.refunds.reduce((s, r) => s + Number(r.amount), 0);
-    const netPaid = paid - refunded;
+    const net = netPaid(invoice);
     const status =
-      netPaid >= Number(invoice.amount) && netPaid > 0
+      net >= Number(invoice.amount) && net > 0
         ? 'PAID'
-        : netPaid > 0
+        : net > 0
           ? 'PARTIAL'
           : 'PENDING';
     if (status !== invoice.status) {

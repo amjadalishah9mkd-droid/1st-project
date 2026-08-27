@@ -164,11 +164,16 @@ describe('M17-W1 — term lifecycle foundation', () => {
         SELECT COUNT(*)::bigint AS count FROM _prisma_migrations
         WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
       expect(Number(migrations[0].count)).toBe(11);
-      // pre-existing demo terms defaulted ACTIVE
-      const closedPreexisting = await prisma.term.count({
-        where: { collegeId, status: 'CLOSED', label: { not: { contains: 'W1TL' } } },
+      // the SEEDED demo terms defaulted ACTIVE (other suites create and
+      // close their own fixture terms — those are not "pre-existing").
+      const closedSeeded = await prisma.term.count({
+        where: {
+          collegeId,
+          status: 'CLOSED',
+          label: { in: ['Fall 2026', 'Spring 2027'] },
+        },
       });
-      expect(closedPreexisting).toBe(0);
+      expect(closedSeeded).toBe(0);
     });
 
     it('status persists and is exposed on the term listing', async () => {

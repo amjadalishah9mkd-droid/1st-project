@@ -20,6 +20,7 @@ import { AuditService } from '../audit/audit.service';
 import { StudentsService } from '../users/students.service';
 import { TeachersService } from '../users/teachers.service';
 import type { AuthenticatedUser } from '../access/authenticated-user';
+import { TermLifecycleService } from './term-lifecycle.service';
 import { pageArgs, pageMeta } from '../common/pagination/pagination';
 
 const sectionInclude = {
@@ -67,6 +68,7 @@ function toItem(row: SectionRecord): SectionItem {
 export class SectionsService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly lifecycle: TermLifecycleService,
     private readonly policy: PolicyService,
     private readonly audit: AuditService,
     private readonly students: StudentsService,
@@ -154,6 +156,8 @@ export class SectionsService {
         message: 'The selected term does not exist in this college',
       });
     }
+    // M17-W2: sections cannot be created in a CLOSED term.
+    await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, input.termId);
     const duplicate = await this.prisma.section.findFirst({
       where: {
         courseId: input.courseId,
@@ -205,6 +209,8 @@ export class SectionsService {
         message: 'Section not found',
       });
     }
+    // M17-W2: CLOSED terms are read-only for section structure.
+    await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, existing.termId);
     if (
       input.capacity !== undefined &&
       input.capacity < existing._count.enrollments
@@ -338,6 +344,8 @@ export class SectionsService {
         message: 'Section not found',
       });
     }
+    // M17-W2: CLOSED terms are read-only for section membership/structure.
+    await this.lifecycle.assertSectionTermOpen(this.prisma, user.collegeId, sectionId);
     // Cross-module read through the owning service (tenant-checked).
     const student = await this.students.profileInCollege(
       user.collegeId,
@@ -403,6 +411,8 @@ export class SectionsService {
         message: 'Section not found',
       });
     }
+    // M17-W2: CLOSED terms are read-only for section membership/structure.
+    await this.lifecycle.assertSectionTermOpen(this.prisma, user.collegeId, sectionId);
     const enrollment = await this.prisma.enrollment.findUnique({
       where: {
         studentId_sectionId: { studentId: studentProfileId, sectionId },
@@ -447,6 +457,8 @@ export class SectionsService {
         message: 'Section not found',
       });
     }
+    // M17-W2: CLOSED terms are read-only for section membership/structure.
+    await this.lifecycle.assertSectionTermOpen(this.prisma, user.collegeId, sectionId);
     const teacher = await this.teachers.profileInCollege(
       user.collegeId,
       teacherProfileId,
@@ -512,6 +524,8 @@ export class SectionsService {
         message: 'Section not found',
       });
     }
+    // M17-W2: CLOSED terms are read-only for section membership/structure.
+    await this.lifecycle.assertSectionTermOpen(this.prisma, user.collegeId, sectionId);
     const existing = await this.prisma.teachingAssignment.findUnique({
       where: {
         teacherId_sectionId: { teacherId: teacherProfileId, sectionId },

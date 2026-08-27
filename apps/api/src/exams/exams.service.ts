@@ -27,6 +27,7 @@ import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
 import { EventsService } from '../events/events.module';
 import type { AuthenticatedUser } from '../access/authenticated-user';
+import { TermLifecycleService } from '../academics/term-lifecycle.service';
 import { pageArgs, pageMeta } from '../common/pagination/pagination';
 
 function forbidden(): ForbiddenException {
@@ -52,6 +53,7 @@ type PaperRecord = Prisma.ExamPaperGetPayload<{ include: typeof paperInclude }>;
 export class ExamsService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly lifecycle: TermLifecycleService,
     private readonly policy: PolicyService,
     private readonly audit: AuditService,
     private readonly events: EventsService,
@@ -212,6 +214,8 @@ export class ExamsService {
         message: 'The selected term does not exist in this college',
       });
     }
+    // M17-W2: exams cannot be created in a CLOSED term.
+    await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, input.termId);
     const created = await this.prisma.exam.create({
       data: {
         collegeId: user.collegeId,
@@ -240,6 +244,7 @@ export class ExamsService {
     input: UpdateExamInput,
   ): Promise<ExamItem> {
     const existing = await this.requireExam(user, id);
+    await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, existing.termId);
     if (existing.status === 'PUBLISHED') {
       throw new BadRequestException({
         code: 'EXAM_PUBLISHED',
@@ -266,6 +271,7 @@ export class ExamsService {
    */
   async publish(user: AuthenticatedUser, id: string): Promise<ExamItem> {
     const exam = await this.requireExam(user, id);
+    await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, exam.termId);
     if (exam.status === 'PUBLISHED') {
       throw new BadRequestException({
         code: 'ALREADY_PUBLISHED',
@@ -330,6 +336,7 @@ export class ExamsService {
     input: CreateExamPaperInput,
   ): Promise<ExamPaperItem> {
     const exam = await this.requireExam(user, examId);
+    await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, exam.termId);
     if (exam.status === 'PUBLISHED') {
       throw new BadRequestException({
         code: 'EXAM_PUBLISHED',
@@ -389,6 +396,7 @@ export class ExamsService {
     input: UpdateExamPaperInput,
   ): Promise<ExamPaperItem> {
     const exam = await this.requireExam(user, examId);
+    await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, exam.termId);
     if (exam.status === 'PUBLISHED') {
       throw new BadRequestException({
         code: 'EXAM_PUBLISHED',
@@ -465,6 +473,11 @@ export class ExamsService {
     input: SaveMarksInput,
   ): Promise<MarksSheet> {
     const paper = await this.requirePaperForMarks(user, paperId);
+    await this.lifecycle.assertTermOpen(
+      this.prisma,
+      user.collegeId,
+      paper.exam.termId,
+    );
     if (paper.exam.status === 'PUBLISHED') {
       throw new BadRequestException({
         code: 'MARKS_LOCKED',
@@ -663,6 +676,7 @@ export class ExamsService {
 
   async analytics(user: AuthenticatedUser, examId: string): Promise<ExamAnalytics> {
     const exam = await this.requireExam(user, examId);
+    await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, exam.termId);
     const papers = await this.prisma.examPaper.findMany({
       where: { examId },
       include: {
@@ -785,7 +799,7 @@ export class ExamsService {
       where: { id: paperId, exam: { collegeId: user.collegeId } },
       include: {
         ...paperInclude,
-        exam: { select: { id: true, title: true, status: true } },
+        exam: { select: { id: true, title: true, status: true, termId: true } },
       },
     });
     if (!paper) {

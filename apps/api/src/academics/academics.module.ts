@@ -32,6 +32,6 @@ import {
     SectionsService,
   ],
   exports: [DepartmentsService, CoursesService, CalendarService,
-    RolloverService, SectionsService],
+    RolloverService, SectionsService, TermLifecycleService],
 })
 export class AcademicsModule {}
