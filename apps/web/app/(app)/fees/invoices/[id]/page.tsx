@@ -19,6 +19,7 @@ import { ConfirmDialog, Dialog } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { invoiceTone } from '../../fee-utils';
+import { InvoiceRefundsSection } from '../../refunds';
 import { formatAmount, formatDateTime } from '@/lib/format';
 
 export default function InvoiceDetailPage() {
@@ -185,6 +186,14 @@ export default function InvoiceDetailPage() {
           )}
         </section>
       </div>
+
+      {/* M16-W4: refund history + finance.refund-gated actions. */}
+      <InvoiceRefundsSection
+        payments={invoice.payments}
+        invoiceAmount={invoice.amount}
+        invoiceStatus={invoice.status}
+        onChanged={load}
+      />
 
       {invoice.attempts.length > 0 ? (
         <section className="mt-4 rounded-card border border-line bg-surface-raised shadow-card">

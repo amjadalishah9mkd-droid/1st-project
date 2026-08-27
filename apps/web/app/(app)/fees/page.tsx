@@ -26,6 +26,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { invoiceTone } from './fee-utils';
+import { RefundsReconciliationView } from './refunds';
 import { formatAmount } from '@/lib/format';
 import { ExportCsvButton } from '@/components/export-csv-button';
 
@@ -76,7 +77,7 @@ function StudentFeesView() {
 
 // ── Admin view ───────────────────────────────────────────────
 
-type Tab = 'invoices' | 'structures' | 'reconciliation';
+type Tab = 'invoices' | 'structures' | 'reconciliation' | 'refunds';
 
 function AdminFeesView() {
   const [tab, setTab] = useState<Tab>('invoices');
@@ -140,6 +141,7 @@ function AdminFeesView() {
             ['invoices', `Invoices`],
             ['structures', `Structures`],
             ['reconciliation', `Reconciliation`],
+            ['refunds', `Refunds`],
           ] as Array<[Tab, string]>
         ).map(([key, label]) => (
           <button
@@ -235,6 +237,8 @@ function AdminFeesView() {
             },
           ]}
         />
+      ) : tab === 'refunds' ? (
+        <RefundsReconciliationView />
       ) : (
         <ReconciliationView
           onSettled={() => {

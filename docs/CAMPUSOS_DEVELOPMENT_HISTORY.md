@@ -135,7 +135,8 @@ Principles applied consistently from M0 onward:
 | M16-W0 | Refunds design doc + live Safepay refund probe | `d2d6e52` |
 | M16-W1 | Refund schema + accountant role foundation | `4aa9a9e` |
 | M16-W2 | Refund engine: service, endpoints, net accounting, adversarial suite | `c7a44a9` |
-| M16-W3 | Live Safepay sandbox verification of the refund engine | *(this commit)* |
+| M16-W3 | Live Safepay sandbox verification of the refund engine | `2ab583c` |
+| M16-W4 | Refund UI + accountant journey | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1537,6 +1538,44 @@ audit row and single notification per transition all held. **No defects;
 zero code changes.** Probe data removed; demo DB restored exactly
 (sandbox tracker remains refunded, W0 precedent).
 
+### M16-W4 — Refund UI + accountant journey
+Frontend only; the W2 backend stayed authoritative and untouched.
+
+- **`apps/web/app/(app)/fees/refunds.tsx`** (new): `InvoiceRefundsSection`
+  (per-payment history + refundable headroom from
+  `GET /fees/payments/:id/refunds`; "Refund…" shown only to resolved
+  `finance.refund` holders), `RefundDialog` (payment facts + prior
+  refunds + server refundable, amount prefilled with the full remaining
+  amount, required reason, PROVIDER/RECORDED per payment method, then a
+  typed-amount confirmation step with the execute button disabled until
+  the exact frozen amount is typed; REQUESTED can be cancelled;
+  busy-guarded; PROCESSING/FAILED outcomes surfaced with the backend's
+  codes — EXCEEDS_REFUNDABLE refreshes stale views), and
+  `RefundsReconciliationView` (Fees → Refunds tab: status filter,
+  provider-ref/failure column, "Verify with provider" for PROCESSING,
+  Cancel for REQUESTED, no controls on terminal rows).
+- Invoice detail wires the section for staff AND students (read-only:
+  no buttons without finance.refund); guardians' CHILD scope has no
+  refund read projection (W2 contract) — the section hides gracefully;
+  a guardian read projection is a recorded W5+ contract gap.
+- **Accountant journey (Alloy-verified live)**: login → permission-driven
+  nav shows only Dashboard/Fees/Announcements/Audit log; full refund
+  create→typed-confirm→execute cycle; Refunds reconciliation; audit rows
+  visible; /settings redirected away by the existing middleware. Known
+  cosmetic gap: /dashboard falls back to the student view and shows a
+  clean permission error for accountants (no dashboard.* grant) —
+  candidate for W5 polish, not touched here.
+- **Alloy walkthrough**: admin partial refund 50 on a 700 CASH payment
+  (Paid 700→650, Balance 800→850, summary Collected net −50, history +
+  Refunds tab rows); accountant refund 25 (650→625); student read-only
+  visibility on their own invoice ("Pay now" reflects the net 825
+  balance). All walkthrough refunds/attempts/notifications removed and
+  invoice statuses restored — affected-table snapshot diffed clean; all
+  four demo logins 200. No provider-side money created (PROVIDER path
+  already live-verified in W3; UI provider branch relies on W2 e2e).
+- **No backend changes**; tests stay 498/498; migrations stay 10; zero
+  role conditionals; no client-controlled tenancy/provider fields.
+
 
 ## 7. Architecture Evolution
 
@@ -1786,7 +1825,7 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M16-W3.*
+*Last updated after M16-W4.*
 
 - **Current milestone**: **M15 COMPLETE (W1–W4)** — academic calendar
   lifecycle, rollover engine, rollover wizard, verified semester
