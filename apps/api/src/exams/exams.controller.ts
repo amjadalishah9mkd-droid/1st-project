@@ -17,6 +17,10 @@ import {
   saveMarksSchema,
   updateExamPaperSchema,
   updateExamSchema,
+  finalizeResultSchema,
+  amendResultSchema,
+  type FinalizeResultInput,
+  type AmendResultInput,
   PERMISSIONS,
   type CreateExamInput,
   type CreateExamPaperInput,
@@ -28,6 +32,7 @@ import {
 import { z } from 'zod';
 import { ExamsService } from './exams.service';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
+import { ResultsFinalizationService } from './results-finalization.service';
 import { RequirePermission } from '../access/require-permission.decorator';
 import { CurrentUser } from '../access/current-user.decorator';
 import type { AuthenticatedUser } from '../access/authenticated-user';
@@ -38,7 +43,10 @@ const listQuerySchema = paginationQuerySchema.extend({
 
 @Controller()
 export class ExamsController {
-  constructor(private readonly exams: ExamsService) {}
+  constructor(
+    private readonly exams: ExamsService,
+    private readonly finalization: ResultsFinalizationService,
+  ) {}
 
   // ── Exams ──────────────────────────────────────────────────
 
@@ -163,5 +171,27 @@ export class ExamsController {
     body: GradeBandsUpdateInput,
   ) {
     return this.exams.updateGradeBands(user, body);
+  }
+
+  // ── M18-W1: academic result finalization (results.finalize) ──
+
+  @Post('results/terms/:termId/finalize')
+  @RequirePermission(PERMISSIONS.RESULTS_FINALIZE)
+  finalize(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('termId') termId: string,
+    @Body(new ZodValidationPipe(finalizeResultSchema)) body: FinalizeResultInput,
+  ) {
+    return this.finalization.finalize(user, termId, body.studentId, body.confirmLabel);
+  }
+
+  @Post('results/records/:id/amend')
+  @RequirePermission(PERMISSIONS.RESULTS_FINALIZE)
+  amend(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(amendResultSchema)) body: AmendResultInput,
+  ) {
+    return this.finalization.amend(user, id, body.reason, body.confirmLabel);
   }
 }

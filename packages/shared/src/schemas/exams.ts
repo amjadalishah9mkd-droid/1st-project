@@ -70,3 +70,20 @@ export const resultsQuerySchema = z.object({
   studentId: z.string().optional(),
   termId: z.string().optional(),
 });
+
+// ── M18-W1: academic result finalization (design §17) ─────────────────
+// Typed confirmation = the term label (M15/M17 pattern), validated
+// server-side. The client never supplies collegeId, status, version or
+// supersession identity.
+
+export const finalizeResultSchema = z.object({
+  studentId: z.string().min(1, 'Student is required'),
+  confirmLabel: z.string().min(1, 'Type the term label to confirm'),
+});
+export type FinalizeResultInput = z.infer<typeof finalizeResultSchema>;
+
+export const amendResultSchema = z.object({
+  reason: z.string().trim().min(3, 'A reason is required').max(300),
+  confirmLabel: z.string().min(1, 'Type the term label to confirm'),
+});
+export type AmendResultInput = z.infer<typeof amendResultSchema>;

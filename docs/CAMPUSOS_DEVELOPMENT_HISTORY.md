@@ -143,7 +143,8 @@ Principles applied consistently from M0 onward:
 | M17-W2 | CLOSED-term enforcement + netPaid consolidation (DEFECT-1 fixed) | `78210b2` |
 | M17-W3 | Lifecycle UI, rollover close offer, guardian refund read, accountant landing | `cc6599f` |
 | M17-W4 | M17 close-out: security audit, term-lifecycle runbook | `3a30b82` |
-| M18-W0 | Academic records design (`docs/M18_ACADEMIC_RECORDS_DESIGN.md`) | *(this commit)* |
+| M18-W0 | Academic records design (`docs/M18_ACADEMIC_RECORDS_DESIGN.md`) | `9c4f31c` |
+| M18-W1 | Result finalization foundation: TermResult/CourseResult, finalize/amend engine | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1778,6 +1779,47 @@ maker-checker, P2-IDOR-1, per-college webhook secrets, monitoring/
 backup automation, report cards/transcripts (M18 candidate), P3
 register. No M18 work started.
 
+### M18-W1 — Result finalization foundation
+- **Migration #12** (`m18_academic_records`): `TermResultStatus`
+  (FINALIZED|SUPERSEDED|VOID), `TermResult` (versioned immutable
+  snapshot: collegeId belt, overall %, grade label/point, term GPA,
+  credits attempted/earned, attendance %, remark, finalizedBy/At,
+  `supersededById @unique` amendment chain) + `CourseResult`
+  (denormalized immutable course lines — code/title/credits frozen so
+  history survives catalog edits) + raw-SQL partial unique
+  `TermResult_one_finalized_per_student_term`. Additive only.
+- **`results.finalize`** permission (ADMIN-only via matrix; seeded
+  idempotently). Zero role conditionals.
+- **ResultsFinalizationService**: one transaction — Term FOR SHARE
+  (serializes with M17 close/reopen), O-1 CLOSED-only re-check under
+  the lock (`TERM_NOT_CLOSED`), snapshot computed exclusively from
+  PUBLISHED exams' locked marks + term attendance, typed confirmation
+  (term label), `NO_PUBLISHED_RESULTS` guard, partial unique as the
+  concurrency CAS (`ALREADY_FINALIZED` for losers, zero partial rows).
+  Amendment (O-5 foundation): recompute from current marks → version
+  N+1, old row CAS FINALIZED→SUPERSEDED with the supersededById chain;
+  superseded versions immutable and re-amendment refused. Endpoints:
+  `POST /results/terms/:termId/finalize`, `POST
+  /results/records/:id/amend`. Audits `results.finalized`/`amended`
+  (ids/version only).
+- **O-4 policy gap preserved honestly**: seeded GradeBands ship
+  `gradePoint = null` — the repository defines NO official grade-point
+  scale, so GPA/creditsEarned/pass-fail stay null until the institution
+  configures its scale; once gradePoints exist, the locked
+  credit-weighted formula computes (test proves 4.0×3 + 2.0×2 over 5
+  credits = 3.2). No scale was invented.
+- **Tests: 537** (9 new): migration structures; ACTIVE-term rejection;
+  authz matrix (admin ✓, teacher/student/accountant 403, anon 401,
+  rival term/student 404); frozen-value correctness (75% → B+ across
+  3+2 credits); duplicate + true-concurrency finalize → [201,409] with
+  one audit; immutability under direct mark edits AND term reopening
+  (O-6); amendment chain v1→v2 with v1 preserved; GPA-when-configured;
+  financial isolation + NO_PUBLISHED_RESULTS. One legitimate update:
+  M17-W1's hardcoded "11 migrations" generalized (same precedent as
+  M16→M17).
+- NOT in W1 (W2/W3): report-card/transcript read endpoints, batch
+  finalization, void, UI/print.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1912,6 +1954,7 @@ reached 141 by the end of M9):
 | M16-W5 | 502 | refunds.csv authz/tenancy/escaping/amount-format + fees.csv net-paid regression |
 | M17-W1 | 516 | lifecycle CAS/lock matrix, D-3 under lock, transition races, rollover close-source integration |
 | M17-W2 | 528 | closed-term 409 matrix across every family, tx-level guard races, DEFECT-1 dashboard==summary |
+| M18-W1 | 537 | finalization CLOSED-only + partial-unique races, snapshot immutability under mark edits/reopen, amendment chain, GPA policy-gap honesty |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -2029,7 +2072,7 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M18-W0 (design only; no implementation).*
+*Last updated after M18-W1.*
 
 - **Current milestone**: **M17 COMPLETE (W0–W4)** — term lifecycle
   (ACTIVE⇄CLOSED) with full academic/finance enforcement, net-paid
@@ -2038,8 +2081,8 @@ milestone (see roadmap).
   still pending provider-dashboard endpoint registration).
 - **Latest commit**: the M15-W4 close-out commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
-- **Migrations**: 11 found, database schema up to date
-- **Tests**: **528/528 passing** (39 suites)
+- **Migrations**: 12 found, database schema up to date
+- **Tests**: **537/537 passing** (40 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)

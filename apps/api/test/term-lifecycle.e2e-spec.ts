@@ -160,10 +160,17 @@ describe('M17-W1 — term lifecycle foundation', () => {
         SELECT indexname FROM pg_indexes
         WHERE tablename = 'Term' AND indexname = 'Term_collegeId_status_idx'`;
       expect(indexes).toHaveLength(1);
+      // M18 added migration #12 — assert the M17 migration is applied and
+      // the count only grows (exact totals belong to the newest suite).
+      const m17 = await prisma.$queryRaw<Array<{ count: bigint }>>`
+        SELECT COUNT(*)::bigint AS count FROM _prisma_migrations
+        WHERE migration_name LIKE '%m17_term_lifecycle%'
+          AND finished_at IS NOT NULL AND rolled_back_at IS NULL`;
+      expect(Number(m17[0].count)).toBe(1);
       const migrations = await prisma.$queryRaw<Array<{ count: bigint }>>`
         SELECT COUNT(*)::bigint AS count FROM _prisma_migrations
         WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-      expect(Number(migrations[0].count)).toBe(11);
+      expect(Number(migrations[0].count)).toBeGreaterThanOrEqual(11);
       // the SEEDED demo terms defaulted ACTIVE (other suites create and
       // close their own fixture terms — those are not "pre-existing").
       const closedSeeded = await prisma.term.count({

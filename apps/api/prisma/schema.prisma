@@ -139,6 +139,15 @@ enum TermStatus {
   CLOSED
 }
 
+/// M18-W1 — finalized academic snapshot lifecycle (design §13).
+/// FINALIZED = the active immutable record; SUPERSEDED = replaced by a
+/// newer version (kept forever); VOID = administratively invalidated.
+enum TermResultStatus {
+  FINALIZED
+  SUPERSEDED
+  VOID
+}
+
 enum TermRolloverStatus {
   DRAFT
   EXECUTED
@@ -284,46 +293,47 @@ model College {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users            User[]
-  academicYears    AcademicYear[]
-  terms            Term[]
-  departments      Department[]
-  courses          Course[]
-  sections         Section[]
-  teacherProfiles  TeacherProfile[]
-  studentProfiles  StudentProfile[]
-  exams            Exam[]
-  gradeBands       GradeBand[]
-  feeStructures    FeeStructure[]
-  invoices         Invoice[]
-  posts            Post[]
-  groups           Group[]
-  societies        Society[]
-  events           Event[]
-  resources        Resource[]
-  reports          Report[]
+  users             User[]
+  academicYears     AcademicYear[]
+  terms             Term[]
+  departments       Department[]
+  courses           Course[]
+  sections          Section[]
+  teacherProfiles   TeacherProfile[]
+  studentProfiles   StudentProfile[]
+  exams             Exam[]
+  gradeBands        GradeBand[]
+  feeStructures     FeeStructure[]
+  invoices          Invoice[]
+  posts             Post[]
+  groups            Group[]
+  societies         Society[]
+  events            Event[]
+  resources         Resource[]
+  reports           Report[]
   moderationActions ModerationAction[]
-  announcements    Announcement[]
-  auditLogs        AuditLog[]
-  identityClaims   StudentIdentityClaim[]
-  evidenceFiles    EvidenceFile[]
-  guardianLinks    GuardianLink[]
-  paymentAttempts  PaymentAttempt[]
-  refundAttempts   RefundAttempt[]
-  termRollovers    TermRollover[]
+  announcements     Announcement[]
+  auditLogs         AuditLog[]
+  identityClaims    StudentIdentityClaim[]
+  evidenceFiles     EvidenceFile[]
+  guardianLinks     GuardianLink[]
+  paymentAttempts   PaymentAttempt[]
+  refundAttempts    RefundAttempt[]
+  termRollovers     TermRollover[]
+  TermResult        TermResult[]
 }
 
 // ────────────────────── Identity & Access ──────────────────────
 
 model User {
-  id                 String     @id @default(cuid())
+  id                 String           @id @default(cuid())
   collegeId          String
   email              String
   // Nullable since M11: Google-born accounts have no password. Password
   // login already fails closed when the hash is absent.
   passwordHash       String?
   role               RoleKey
-  status             UserStatus @default(ACTIVE)
+  status             UserStatus       @default(ACTIVE)
   // M11 identity verification lifecycle. LEGACY = pre-M11 trusted accounts
   // (admin-created / invite-accepted); no new gate applies to them.
   verificationStatus UserVerification @default(LEGACY)
@@ -331,55 +341,56 @@ model User {
   lastName           String
   phone              String?
   avatarUrl          String?
-  mustChangePassword Boolean    @default(true)
+  mustChangePassword Boolean          @default(true)
   // M12-W2 — suppresses NOTIFICATION email only; transactional mail
   // (invites, resets, verification decisions) always ignores this.
-  emailOptOut        Boolean    @default(false)
+  emailOptOut        Boolean          @default(false)
   lastLoginAt        DateTime?
-  createdAt          DateTime   @default(now())
-  updatedAt          DateTime   @updatedAt
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
   college College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
 
-  teacherProfile TeacherProfile?
-  studentProfile StudentProfile?
-  refreshTokens  RefreshToken[]
-  notifications  Notification[]
-  credentialTokens       CredentialToken[] @relation("CredentialTokenUser")
-  credentialTokensIssued CredentialToken[] @relation("CredentialTokenIssuer")
+  teacherProfile         TeacherProfile?
+  studentProfile         StudentProfile?
+  refreshTokens          RefreshToken[]
+  notifications          Notification[]
+  credentialTokens       CredentialToken[]      @relation("CredentialTokenUser")
+  credentialTokensIssued CredentialToken[]      @relation("CredentialTokenIssuer")
   authIdentities         AuthIdentity[]
   identityClaims         StudentIdentityClaim[] @relation("ClaimUser")
   identityClaimsDecided  StudentIdentityClaim[] @relation("ClaimDecidedBy")
   evidenceFiles          EvidenceFile[]
-  guardianLinks          GuardianLink[] @relation("GuardianLinks")
-  guardianLinksCreated   GuardianLink[] @relation("GuardianLinkCreator")
+  guardianLinks          GuardianLink[]         @relation("GuardianLinks")
+  guardianLinksCreated   GuardianLink[]         @relation("GuardianLinkCreator")
 
-  sessionsTaken     ClassSession[]     @relation("SessionTakenBy")
-  attendanceMarked  AttendanceRecord[] @relation("AttendanceMarkedBy")
-  assignmentsCreated Assignment[]      @relation("AssignmentCreatedBy")
-  submissionsGraded Submission[]       @relation("SubmissionGradedBy")
-  examsPublished    Exam[]             @relation("ExamPublishedBy")
-  marksEntered      Mark[]             @relation("MarkEnteredBy")
-  paymentsRecorded  Payment[]          @relation("PaymentRecordedBy")
-  paymentAttemptsInitiated PaymentAttempt[] @relation("PaymentAttemptInitiator")
-  refundsRecorded         Refund[]        @relation("RefundRecordedBy")
-  refundAttemptsRequested RefundAttempt[] @relation("RefundAttemptRequester")
+  sessionsTaken            ClassSession[]     @relation("SessionTakenBy")
+  attendanceMarked         AttendanceRecord[] @relation("AttendanceMarkedBy")
+  assignmentsCreated       Assignment[]       @relation("AssignmentCreatedBy")
+  submissionsGraded        Submission[]       @relation("SubmissionGradedBy")
+  examsPublished           Exam[]             @relation("ExamPublishedBy")
+  marksEntered             Mark[]             @relation("MarkEnteredBy")
+  paymentsRecorded         Payment[]          @relation("PaymentRecordedBy")
+  paymentAttemptsInitiated PaymentAttempt[]   @relation("PaymentAttemptInitiator")
+  refundsRecorded          Refund[]           @relation("RefundRecordedBy")
+  refundAttemptsRequested  RefundAttempt[]    @relation("RefundAttemptRequester")
+  termResultsFinalized     TermResult[]       @relation("TermResultFinalizedBy")
   termRolloversExecuted    TermRollover[]
-  posts             Post[]             @relation("PostAuthor")
-  comments          Comment[]          @relation("CommentAuthor")
-  likes             Like[]
-  groupsCreated     Group[]            @relation("GroupCreatedBy")
-  groupMemberships  GroupMember[]
-  societyMemberships SocietyMember[]
-  eventsCreated     Event[]            @relation("EventCreatedBy")
-  eventRsvps        EventRsvp[]
-  resourcesUploaded Resource[]         @relation("ResourceUploader")
-  reportsFiled      Report[]           @relation("ReportReporter")
-  reportsResolved   Report[]           @relation("ReportResolvedBy")
-  moderationActionsTaken ModerationAction[] @relation("ModerationActor")
+  posts                    Post[]             @relation("PostAuthor")
+  comments                 Comment[]          @relation("CommentAuthor")
+  likes                    Like[]
+  groupsCreated            Group[]            @relation("GroupCreatedBy")
+  groupMemberships         GroupMember[]
+  societyMemberships       SocietyMember[]
+  eventsCreated            Event[]            @relation("EventCreatedBy")
+  eventRsvps               EventRsvp[]
+  resourcesUploaded        Resource[]         @relation("ResourceUploader")
+  reportsFiled             Report[]           @relation("ReportReporter")
+  reportsResolved          Report[]           @relation("ReportResolvedBy")
+  moderationActionsTaken   ModerationAction[] @relation("ModerationActor")
   moderationActionsAgainst ModerationAction[] @relation("ModerationTargetUser")
-  announcementsAuthored Announcement[] @relation("AnnouncementAuthor")
-  auditLogs         AuditLog[]         @relation("AuditActor")
+  announcementsAuthored    Announcement[]     @relation("AnnouncementAuthor")
+  auditLogs                AuditLog[]         @relation("AuditActor")
 
   @@unique([collegeId, email])
   @@index([collegeId, role])
@@ -587,26 +598,27 @@ model AcademicYear {
 /// 20260825* m15_calendar_invariants migration. setCurrentTerm's
 /// clear-then-set transaction remains the application-level path.
 model Term {
-  id             String   @id @default(cuid())
+  id             String     @id @default(cuid())
   collegeId      String
   academicYearId String
   label          String
-  startsOn       DateTime @db.Date
-  endsOn         DateTime @db.Date
-  isCurrent      Boolean  @default(false)
+  startsOn       DateTime   @db.Date
+  endsOn         DateTime   @db.Date
+  isCurrent      Boolean    @default(false)
   /// M17-W1: lifecycle state. All existing terms default ACTIVE.
   status         TermStatus @default(ACTIVE)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
 
-  college      College      @relation(fields: [collegeId], references: [id], onDelete: Restrict)
-  academicYear AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  college       College        @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  academicYear  AcademicYear   @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
   rolloversFrom TermRollover[] @relation("RolloverFromTerm")
   rolloversTo   TermRollover[] @relation("RolloverToTerm")
 
   sections      Section[]
   exams         Exam[]
   feeStructures FeeStructure[]
+  TermResult    TermResult[]
 
   @@unique([academicYearId, label])
   @@index([collegeId, status])
@@ -650,6 +662,7 @@ model Course {
   sections      Section[]
   feeStructures FeeStructure[]
   resources     Resource[]
+  CourseResult  CourseResult[]
 
   @@unique([collegeId, code])
   @@index([departmentId])
@@ -676,6 +689,7 @@ model Section {
   classSessions       ClassSession[]
   assignments         Assignment[]
   examPapers          ExamPaper[]
+  CourseResult        CourseResult[]
 
   @@unique([courseId, termId, name])
   @@index([termId])
@@ -733,6 +747,7 @@ model StudentProfile {
   invoices          Invoice[]
   identityClaims    StudentIdentityClaim[]
   guardianLinks     GuardianLink[]
+  TermResult        TermResult[]
 
   @@unique([collegeId, admissionNo])
   @@index([departmentId])
@@ -934,6 +949,74 @@ model Mark {
   @@index([studentId])
 }
 
+/// M18-W1 — one FINALIZED academic snapshot per student per term
+/// (versioned; design §12). IMMUTABLE after creation: corrections create
+/// a new version and CAS the old row to SUPERSEDED — never in-place
+/// edits. DB invariant (raw SQL, migration #12): at most one FINALIZED
+/// row per (studentId, termId).
+model TermResult {
+  id                String           @id @default(cuid())
+  collegeId         String
+  studentId         String
+  termId            String
+  status            TermResultStatus @default(FINALIZED)
+  version           Int              @default(1)
+  overallPercentage Decimal          @db.Decimal(5, 2)
+  gradeLabel        String?
+  /// Null when the college has not configured GradeBand.gradePoint —
+  /// CampusOS never invents a grade-point scale (O-4 policy gap).
+  gradePoint        Decimal?         @db.Decimal(4, 2)
+  termGpa           Decimal?         @db.Decimal(4, 2)
+  creditsAttempted  Int
+  creditsEarned     Int?
+  attendancePercent Decimal?         @db.Decimal(5, 2)
+  remark            String?
+  finalizedById     String
+  finalizedAt       DateTime
+  /// Amendment chain: the NEWER version that replaced this row.
+  supersededById    String?          @unique
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  college      College        @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  student      StudentProfile @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  term         Term           @relation(fields: [termId], references: [id], onDelete: Restrict)
+  finalizedBy  User           @relation("TermResultFinalizedBy", fields: [finalizedById], references: [id], onDelete: Restrict)
+  supersededBy TermResult?    @relation("TermResultSupersession", fields: [supersededById], references: [id], onDelete: Restrict)
+  supersedes   TermResult?    @relation("TermResultSupersession")
+
+  courseResults CourseResult[]
+
+  @@index([collegeId, termId])
+  @@index([studentId])
+}
+
+/// M18-W1 — immutable per-course lines under a TermResult snapshot.
+/// Course code/title/credits are DENORMALIZED on purpose: historical
+/// records must survive later catalog edits (design §12).
+model CourseResult {
+  id           String   @id @default(cuid())
+  termResultId String
+  courseId     String
+  sectionId    String
+  courseCode   String
+  courseTitle  String
+  credits      Int
+  obtained     Decimal  @db.Decimal(10, 2)
+  maxMarks     Decimal  @db.Decimal(10, 2)
+  percentage   Decimal  @db.Decimal(5, 2)
+  gradeLabel   String?
+  gradePoint   Decimal? @db.Decimal(4, 2)
+  passed       Boolean?
+  createdAt    DateTime @default(now())
+
+  termResult TermResult @relation(fields: [termResultId], references: [id], onDelete: Cascade)
+  course     Course     @relation(fields: [courseId], references: [id], onDelete: Restrict)
+  section    Section    @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+
+  @@unique([termResultId, courseId])
+}
+
 model GradeBand {
   id         String   @id @default(cuid())
   collegeId  String
@@ -1001,8 +1084,8 @@ model Invoice {
   student   StudentProfile @relation(fields: [studentId], references: [id], onDelete: Restrict)
   structure FeeStructure   @relation(fields: [structureId], references: [id], onDelete: Restrict)
 
-  payments Payment[]
-  attempts PaymentAttempt[]
+  payments       Payment[]
+  attempts       PaymentAttempt[]
   refunds        Refund[]
   refundAttempts RefundAttempt[]
 
@@ -1021,9 +1104,9 @@ model Payment {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
-  invoice    Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
-  recordedBy User?   @relation("PaymentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
-  attempt    PaymentAttempt?
+  invoice        Invoice         @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  recordedBy     User?           @relation("PaymentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  attempt        PaymentAttempt?
   refunds        Refund[]
   refundAttempts RefundAttempt[]
 
@@ -1053,9 +1136,9 @@ model PaymentAttempt {
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt
 
-  college     College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
-  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
-  initiatedBy User    @relation("PaymentAttemptInitiator", fields: [initiatedById], references: [id], onDelete: Restrict)
+  college     College  @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  initiatedBy User     @relation("PaymentAttemptInitiator", fields: [initiatedById], references: [id], onDelete: Restrict)
   payment     Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
 
   @@unique([provider, providerRef])
