@@ -15,6 +15,7 @@ import type {
   UpdateTermInput,
 } from '@campusos/shared';
 import { PrismaService } from '../prisma/prisma.service';
+import { TermLifecycleService } from './term-lifecycle.service';
 import { AuditService } from '../audit/audit.service';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 import { pageArgs, pageMeta } from '../common/pagination/pagination';
@@ -24,6 +25,7 @@ import { pageArgs, pageMeta } from '../common/pagination/pagination';
 export class CalendarService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly lifecycle: TermLifecycleService,
     private readonly audit: AuditService,
   ) {}
 
@@ -239,13 +241,10 @@ export class CalendarService {
         message: 'Term not found',
       });
     }
-    // M17-W2: a CLOSED term's definition is read-only (reopen to edit).
-    if (existing.status === 'CLOSED') {
-      throw new ConflictException({
-        code: 'TERM_CLOSED',
-        message: 'This term is closed — its records are read-only',
-      });
-    }
+    // M17-W4: routed through the ONE shared guard (FOR SHARE on the Term
+    // row) instead of an inline status check — consistent lock semantics
+    // with every other CLOSED-term enforcement point.
+    await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, id);
     const startsOn = input.startsOn ? new Date(input.startsOn) : existing.startsOn;
     const endsOn = input.endsOn ? new Date(input.endsOn) : existing.endsOn;
     if (startsOn.getTime() >= endsOn.getTime()) {

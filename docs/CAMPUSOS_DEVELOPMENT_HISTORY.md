@@ -141,7 +141,8 @@ Principles applied consistently from M0 onward:
 | M17-W0 | Term lifecycle design (`docs/M17_TERM_LIFECYCLE_DESIGN.md`) | `d53895c` |
 | M17-W1 | Term lifecycle foundation: TermStatus, close/reopen, rollover hook | `4a1093f` |
 | M17-W2 | CLOSED-term enforcement + netPaid consolidation (DEFECT-1 fixed) | `78210b2` |
-| M17-W3 | Lifecycle UI, rollover close offer, guardian refund read, accountant landing | *(this commit)* |
+| M17-W3 | Lifecycle UI, rollover close offer, guardian refund read, accountant landing | `cc6599f` |
+| M17-W4 | M17 close-out: security audit, term-lifecycle runbook | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1737,6 +1738,45 @@ Persistence + transitions only; broad enforcement is W2.
   existing test). Full regression green; typecheck 0; both prod builds
   green.
 
+### M17-W4 — Security audit + runbook (M17 CLOSED)
+- **Adversarial re-audit: PASS.** Term.status is written ONLY by
+  TermLifecycleService's CAS transitions (grep + trace); no
+  terminal-state resurrection paths; typed confirmation and
+  TERM_IS_CURRENT are server-authoritative under the row lock (proven
+  by the W1/W2 suites, re-run green); zero role-name authorization
+  conditionals; zero unscoped Term/mutation queries; zero
+  client-controlled collegeId/status/isCurrent/audit metadata; guard
+  coverage re-counted at every §10/§11 inventory site (attendance 3,
+  exams 6+, assignments 6, timetable 3, sections 6, fees 5, rollover 2);
+  allowed finance operations re-verified untouched; Term-before-Invoice
+  lock order intact (no reverse path).
+- **One consistency hardening**: `calendar.updateTerm` routed through
+  the shared `assertTermOpen` guard (FOR SHARE) instead of its W2
+  inline status check — identical behavior, uniform lock semantics.
+- **DEFECT-1: RESOLVED (in W2, re-verified)** — no gross
+  `payments.reduce` exists outside `money.ts`; the dashboard==summary
+  regression tests remain green.
+- **OPERATIONS §26**: term-lifecycle runbook — CLOSED semantics with
+  the financial-history rationale, close/reopen procedures with typed
+  confirmation and audit expectations, current-term and rollover
+  interactions (explicit source-close checkbox, failure never undoes a
+  rollover), full error-semantics table with safe recovery ("never
+  manually mutate the database"), and a 7-point post-close checklist.
+
+**M17 FINAL STATUS — CLOSED.** W0 design (`d53895c`) → W1 foundation
+(`4a1093f`: migration #11, TermStatus, CAS close/reopen, D-3 under
+lock, rollover hook) → W2 enforcement (`78210b2`: 21-site guard sweep,
+netPaid consolidation, DEFECT-1 fix, tx-level race proofs) → W3 UI +
+finance polish (`cc6599f`: calendar dialogs, rollover close offer,
+guardian refund CHILD read (D-5), accountant landing (D-6)) → W4
+close-out (this commit). Final: 528/528 tests (39 suites), 11
+migrations, typecheck 0, both prod builds green. Deferred items
+UNCHANGED: refund webhooks + dashboard registration (externally
+blocked), provider polling, receipts/PDFs, advanced refund reporting,
+maker-checker, P2-IDOR-1, per-college webhook secrets, monitoring/
+backup automation, report cards/transcripts (M18 candidate), P3
+register. No M18 work started.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1988,12 +2028,13 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M17-W3.*
+*Last updated after M17-W4 (M17 closed).*
 
-- **Current milestone**: **M16 COMPLETE (W0–W5)** — refunds + accountant
-  role, live-verified against the real Safepay sandbox; M15 calendar/
-  rollover and M14 payments remain complete (webhook delivery still
-  pending provider-dashboard endpoint registration).
+- **Current milestone**: **M17 COMPLETE (W0–W4)** — term lifecycle
+  (ACTIVE⇄CLOSED) with full academic/finance enforcement, net-paid
+  consolidation, lifecycle UI and runbook; M16 refunds+accountant, M15
+  calendar/rollover and M14 payments remain complete (webhook delivery
+  still pending provider-dashboard endpoint registration).
 - **Latest commit**: the M15-W4 close-out commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 11 found, database schema up to date

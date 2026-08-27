@@ -814,3 +814,93 @@ construction (proven by the W2 adversarial suite and the W3 live run).
 Refund webhooks are NOT operationally available (provider dashboard
 registration remains externally blocked); reconciliation verification is
 the truth mechanism.
+
+## 26. Term lifecycle runbook (M17)
+
+Term close/reopen requires `academics.manage` (ADMIN); accountants,
+teachers, students and guardians are refused. Everything is scoped to
+the operator's own college — a foreign term id is an indistinguishable
+404 and leaks nothing.
+
+### What CLOSED means operationally
+
+A CLOSED term's academic record is **read-only**: attendance (session
+generation, edits, sheets), exams/papers/marks/publishing, assignments
+and submissions/grading, timetable slots, enrollments, teaching
+assignments, section creation/edits, and the term's own definition are
+all refused with 409 `TERM_CLOSED`. Term-bound **fee-structure creation
+and edits, invoice generation, and invoice cancellation** are also
+blocked (O-2).
+
+**Still allowed on CLOSED terms** — immutable financial history must
+remain operable after academic closure: arrears `recordPayment`, online
+settlement of existing invoices, the full refund cycle, reconciliation,
+and CSV exports. Payments and refunds are additive immutable ledgers;
+settling or refunding old-term money never rewrites academic history.
+
+### Closing a term
+
+1. Confirm the intended term on **Calendar** (label, year, dates).
+2. Confirm it is **not the current term** — current terms cannot be
+   closed (`TERM_IS_CURRENT`); set another term current first.
+3. Confirm active academic work for the term is genuinely finished.
+4. Calendar → the term row → **Close…** → type the exact term label
+   (server-validated typed confirmation) → Close term.
+5. Success: the row shows a **Closed** badge, only "Reopen…" remains,
+   and a `terms.closed` audit event exists (label-only metadata).
+
+### Reopening a term
+
+Appropriate when closure was premature or a correction to historical
+academic data is genuinely required. Same permission, same typed
+confirmation (Calendar → Reopen…). Emits `terms.reopened`. Consequence:
+every blocked mutation becomes possible again — reopen deliberately,
+correct, then close again.
+
+### Current-term interaction
+
+- The current term can never be closed (`TERM_IS_CURRENT`, re-checked
+  under the database row lock — not a UI nicety).
+- A CLOSED term can never be made current (`TERM_CLOSED` on
+  set-current). Set-current must target an ACTIVE term.
+
+### Rollover interaction
+
+- A CLOSED term is **rejected as a rollover destination** (at draft AND
+  inside the execution transaction).
+- A CLOSED term **remains valid as a rollover source** (reads only).
+- The rollover execute dialog offers an explicit **"Also close
+  {source}"** checkbox — never automatic. If the close is refused
+  (typically because the source is still current), **the rollover is
+  still fully successful**; the response carries
+  `sourceTermClosed: false` with the refusal code, and the operator
+  closes the term from the calendar after switching the current term.
+
+### Error semantics
+
+| Code | Meaning | Action |
+|---|---|---|
+| `TERM_CLOSED` (409) | mutation against a closed term | intended; reopen first if the change is genuinely required |
+| `TERM_IS_CURRENT` (400) | tried to close the current term | set another term current, retry |
+| `INVALID_TRANSITION` (409) | close on CLOSED / reopen on ACTIVE / lost a concurrent race | refresh; exactly one concurrent transition ever wins |
+| `CONFIRMATION_MISMATCH` (400) | typed label wrong | type the exact label |
+| 404 | foreign or nonexistent term | verify the college/term |
+| rollover `sourceTermCloseError` | post-rollover close refused | rollover is complete; close from the calendar |
+
+Concurrency is CAS + row-lock protected (one winner, one 409; exactly
+one audit row per real transition). **Never manually mutate the
+database to force a lifecycle state** — use the endpoints; they are the
+only path that preserves the invariants and the audit trail.
+
+### Post-close verification checklist
+
+1. Term shows CLOSED (badge / `GET /terms` status).
+2. The current-term invariant is intact (exactly one current term, and
+   it is not the closed one).
+3. `terms.closed` audit event present.
+4. A spot-check academic write (e.g. a timetable edit) returns 409
+   `TERM_CLOSED`.
+5. Arrears payment / refund on an old invoice still works.
+6. Rollover result recorded correctly if closure came from the rollover
+   flow.
+7. No cross-tenant visibility anywhere (foreign terms remain 404).
