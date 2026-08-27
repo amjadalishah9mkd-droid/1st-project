@@ -47,6 +47,13 @@ const feesQuery = z.object({
   termId: z.string().optional(),
 });
 const resultsQuery = z.object({ examId: z.string().min(1) });
+// M16-W5 — refund export filters mirror the reconciliation Refunds view.
+const refundsQuery = z.object({
+  status: z
+    .enum(['REQUESTED', 'PROCESSING', 'SUCCEEDED', 'FAILED', 'CANCELLED'])
+    .optional(),
+  method: z.enum(['PROVIDER', 'RECORDED']).optional(),
+});
 
 @Injectable()
 export class ExportsService {
@@ -202,6 +209,9 @@ export class ExportsService {
           },
         },
         payments: { select: { amount: true } },
+        // M16-W5: exported "paid" is NET of settled refunds (D-5), matching
+        // every other money surface since M16-W2.
+        refunds: { select: { amount: true } },
       },
       orderBy: { createdAt: 'asc' },
       // F1: cap materialization memory, not just the response.
@@ -215,9 +225,10 @@ export class ExportsService {
         invoice.student.rollNo,
         invoice.student.admissionNo,
         invoice.amount.toString(),
-        invoice.payments
-          .reduce((sum, p) => sum + Number(p.amount), 0)
-          .toString(),
+        (
+          invoice.payments.reduce((sum, p) => sum + Number(p.amount), 0) -
+          invoice.refunds.reduce((sum, r) => sum + Number(r.amount), 0)
+        ).toString(),
         invoice.status,
         invoice.dueDate.toISOString().slice(0, 10),
       ]),
@@ -275,6 +286,69 @@ export class ExportsService {
     await this.logExport(user, 'results', marks.length);
     return csv;
   }
+
+  /**
+   * M16-W5 — refund attempts export (finance surface). Gated exactly like
+   * the reconciliation view: fees.manage resolved to ALL (ADMIN and
+   * ACCOUNTANT). Tenant-scoped by the session collegeId; ids/amounts/
+   * refs/reason only — no student PII beyond the existing finance-export
+   * policy (invoice number identifies the account).
+   */
+  async refunds(
+    user: AuthenticatedUser,
+    query: z.infer<typeof refundsQuery>,
+  ): Promise<string> {
+    await this.assertAllScope(user, 'fees.manage');
+    const rows = await this.prisma.refundAttempt.findMany({
+      where: {
+        collegeId: user.collegeId,
+        ...(query.status ? { status: query.status } : {}),
+        ...(query.method ? { method: query.method } : {}),
+      },
+      include: {
+        invoice: { select: { invoiceNo: true } },
+        requestedBy: { select: { firstName: true, lastName: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: CSV_ROW_CAP + 1,
+    });
+    const csv = toCsv(
+      [
+        'attemptId',
+        'refundId',
+        'invoiceNo',
+        'paymentId',
+        'amount',
+        'currency',
+        'method',
+        'status',
+        'reason',
+        'providerRefundRef',
+        'failureCode',
+        'requestedBy',
+        'createdAt',
+        'confirmedAt',
+      ],
+      rows.map((row) => [
+        row.id,
+        row.refundId,
+        row.invoice.invoiceNo,
+        row.paymentId,
+        Number(row.amount).toFixed(2),
+        row.currency,
+        row.method,
+        row.status,
+        row.reason,
+        row.providerRefundRef,
+        row.failureCode,
+        `${row.requestedBy.firstName} ${row.requestedBy.lastName}`,
+        row.createdAt.toISOString(),
+        row.confirmedAt?.toISOString() ?? null,
+      ]),
+    );
+    await this.logExport(user, 'refunds', rows.length);
+    return csv;
+  }
 }
 
 function sendCsv(res: Response, filename: string, csv: string): void {
@@ -325,6 +399,15 @@ export class ExportsController {
     @Res() res: Response,
   ): Promise<void> {
     await this.run(res, 'results.csv', () => this.exports.results(user, query));
+  }
+
+  @Get('refunds.csv')
+  async refunds(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query(new ZodValidationPipe(refundsQuery)) query: z.infer<typeof refundsQuery>,
+    @Res() res: Response,
+  ): Promise<void> {
+    await this.run(res, 'refunds.csv', () => this.exports.refunds(user, query));
   }
 
   /** CSV responses bypass the JSON envelope; errors keep the envelope. */

@@ -855,6 +855,94 @@ describe('M16-W2 — refunds', () => {
     });
   });
 
+  describe('M16-W5 — refunds.csv export', () => {
+    let csvPaymentId: string;
+    let csvInvoiceNo: string;
+
+    beforeAll(async () => {
+      const { invoice, payment } = await makeInvoiceWithPayment({
+        invoiceAmount: '120.00',
+        paymentAmount: '120.00',
+      });
+      csvPaymentId = payment.id;
+      csvInvoiceNo = invoice.invoiceNo;
+      // Reason exercises CSV escaping: comma, quotes and a newline.
+      const create = await http
+        .post(`/api/v1/fees/payments/${payment.id}/refunds`)
+        .set(auth(accountantToken))
+        .send({
+          amount: 45,
+          currency: 'PKR',
+          reason: 'duplicate, "double-charged"\nsecond line',
+          method: 'RECORDED',
+        });
+      expect(create.status).toBe(201);
+      expect(
+        (await executeRefund(accountantToken, create.body.data.id, '45.00')).status,
+      ).toBe(201);
+    });
+
+    it('accountant and admin export; student/teacher/anonymous are refused', async () => {
+      for (const token of [accountantToken, adminToken]) {
+        const res = await http.get('/api/v1/exports/refunds.csv').set(auth(token));
+        expect(res.status).toBe(200);
+        expect(res.headers['content-type']).toContain('text/csv');
+      }
+      expect(
+        (await http.get('/api/v1/exports/refunds.csv').set(auth(studentToken))).status,
+      ).toBe(403);
+      expect(
+        (await http.get('/api/v1/exports/refunds.csv').set(auth(teacherToken))).status,
+      ).toBe(403);
+      expect((await http.get('/api/v1/exports/refunds.csv')).status).toBe(401);
+    });
+
+    it('rows are tenant-scoped, exactly two-decimal, escaped, and filterable', async () => {
+      const res = await http
+        .get('/api/v1/exports/refunds.csv?status=SUCCEEDED')
+        .set(auth(accountantToken));
+      expect(res.status).toBe(200);
+      const body = res.text;
+      // header intact
+      expect(body.startsWith('attemptId,refundId,invoiceNo,paymentId,amount')).toBe(true);
+      // exact PKR two-decimal representation
+      expect(body).toContain(',45.00,PKR,RECORDED,SUCCEEDED,');
+      // RFC-4180 escaping: quoted cell with doubled quotes, comma and newline preserved
+      expect(body).toContain('"duplicate, ""double-charged""\nsecond line"');
+      // requester name present per finance-export convention
+      expect(body).toContain('Bilal Hussain');
+      // rival-college attempt never appears
+      expect(body).not.toContain(rivalAttemptId);
+      // status filter semantics match the reconciliation view
+      const requestedOnly = await http
+        .get('/api/v1/exports/refunds.csv?status=REQUESTED')
+        .set(auth(accountantToken));
+      expect(requestedOnly.text).not.toContain(csvPaymentId);
+    });
+
+    it('an unmatched filter still returns a valid header-only CSV', async () => {
+      const res = await http
+        .get('/api/v1/exports/refunds.csv?status=PROCESSING&method=PROVIDER')
+        .set(auth(adminToken));
+      expect(res.status).toBe(200);
+      const lines = res.text.trim().split('\r\n');
+      expect(lines).toHaveLength(1); // header only
+    });
+
+    it('fees.csv paid column is NET of settled refunds (D-5 across exports)', async () => {
+      const res = await http
+        .get('/api/v1/exports/fees.csv')
+        .set(auth(accountantToken));
+      expect(res.status).toBe(200);
+      // the 120 invoice with a 120 payment and 45 refund exports paid=75
+      const line = res.text
+        .split('\r\n')
+        .find((row) => row.startsWith(csvInvoiceNo));
+      expect(line).toBeDefined();
+      expect(line).toContain(',75,');
+    });
+  });
+
   describe('audit hygiene & listings', () => {
     it('refund audit metadata carries ids/amounts/codes only — no PII, no reason text', async () => {
       const rows = await prisma.auditLog.findMany({

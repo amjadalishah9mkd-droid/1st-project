@@ -716,3 +716,101 @@ the referenced data) and execute again.
 7. **Verify dashboards** now reflect the new current term.
 8. **Review audit events**: `terms.rollover_drafted` and
    `terms.rollover_executed` (ids and counters only — no student data).
+
+## 25. Refund operations runbook (M16)
+
+Refund mutations require `finance.refund` (ADMIN and ACCOUNTANT only).
+Everything is scoped to the operator's own college; foreign payments and
+attempts are indistinguishable from nonexistent (404).
+
+> **Refunds do not mutate the original Payment amount/history and do not
+> create payments, invoices, timetable records, or fee structures.** Only
+> the derived Invoice status is recomputed from
+> `netPaid = Σ payments − Σ refunds` (net 0 → PENDING).
+
+### Before initiating any refund
+
+1. Confirm you are operating in the correct college (your session decides;
+   the browser can never choose one).
+2. Confirm the payment and its invoice (invoice detail → Payments).
+3. Verify the payment is actually settled money (a `Payment` row —
+   in-flight gateway attempts are not refundable).
+4. Inspect existing refunds on the payment (invoice detail → Refunds, or
+   `GET /fees/payments/:id/refunds`).
+5. The remaining refundable amount is server-computed:
+   `payment.amount − Σ settled refunds`. Never trust a stale screen — it
+   is re-checked inside the transaction at creation AND execution.
+6. Record a meaningful reason (kept on the attempt; never in audit
+   metadata).
+7. Choose the method: **RECORDED** for CASH/BANK payments (and for
+   out-of-band returns of online money); **PROVIDER** only for
+   gateway-settled ONLINE payments.
+
+### RECORDED refunds
+
+Use when the money is returned outside CampusOS (cash drawer, bank
+transfer). The operator must verify externally that the money actually
+left — the typed-amount confirmation is the authoritative staff act that
+materializes the immutable `Refund` row in one transaction. The Payment
+itself is never modified; the invoice status is recomputed (a PAID
+invoice can return to PARTIAL, and to PENDING at net 0).
+
+### PROVIDER (Safepay) refunds
+
+Live-verified end to end in M16-W3. CampusOS sends the FROZEN attempt
+amount (paisa at the adapter boundary) to
+`POST /order/payments/v3/{tracker}/refund`; the provider refund reference
+(`refund_…`) is captured from the provider reporter — never from the
+browser. Partial refunds are supported until the payment is exhausted;
+the provider independently enforces the same bound.
+
+**Provider truth is authoritative. Never manually mark a provider refund
+successful.**
+
+- If the execute call is rejected or unreachable, the attempt stays
+  **PROCESSING** — this is deliberate: the money may have moved.
+- Resolve it with **Verify with provider** (Fees → Reconciliation →
+  Refunds). Verification reads the payment reporter and, only on a
+  matching unclaimed provider refund record, finalizes SUCCEEDED; a
+  reachable reporter showing no refund fails the attempt
+  (`PROVIDER_REJECTED`); a mismatched amount fails it
+  (`AMOUNT_MISMATCH`) with zero money recorded.
+- If the provider is unreachable, PRESERVE the PROCESSING state and
+  verify later. Repeated verification is replay-safe (no duplicate
+  Refund rows, audit events or notifications).
+
+### Failure handling / retry
+
+FAILED, SUCCEEDED and CANCELLED are terminal — never resurrected. To
+retry a failed refund, create a **new** RefundAttempt (the in-flight slot
+frees automatically) after re-checking the remaining refundable amount.
+Only REQUESTED attempts can be cancelled; PROCESSING can not (money may
+be moving — verify instead).
+
+### Concurrency guarantees (for the operator's confidence)
+
+At most ONE in-flight attempt per payment (DB partial unique index);
+every transition is CAS-guarded; the invoice row lock serializes refunds
+against settlements and manual recordings; the refundable headroom is
+re-validated at execution time — over-refunds are impossible by
+construction (proven by the W2 adversarial suite and the W3 live run).
+
+### Post-refund verification checklist
+
+1. RefundAttempt reached the expected terminal state.
+2. A `Refund` row exists (SUCCEEDED only) with the exact amount.
+3. Provider reference recorded (PROVIDER refunds).
+4. Remaining refundable amount decreased accordingly.
+5. Invoice status recomputed correctly (PARTIAL / PENDING per D-5;
+   CANCELLED invoices stay CANCELLED — their money is still refundable).
+6. `payments.refund_*` audit event present (ids/amounts only).
+7. Student notification delivered (success) / requester notified
+   (provider failure).
+8. The attempt appears in Reconciliation → Refunds.
+9. `GET /exports/refunds.csv` includes the row when a report is needed
+   (fees.manage/ALL only; supports `status`/`method` filters).
+10. The original Payment row is unchanged — always.
+
+Refund webhooks are NOT operationally available (provider dashboard
+registration remains externally blocked); reconciliation verification is
+the truth mechanism.

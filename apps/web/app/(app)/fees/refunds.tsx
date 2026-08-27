@@ -14,6 +14,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { formatAmount, formatDateTime } from '@/lib/format';
+import { ExportCsvButton } from '@/components/export-csv-button';
 
 /**
  * M16-W4 — refund UI. The browser NEVER decides money truth: refundable
@@ -496,7 +497,8 @@ export function RefundsReconciliationView() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="max-w-xs">
+      <div className="flex items-end justify-between gap-3">
+        <div className="max-w-xs flex-1">
         <Select
           label="Status"
           value={status}
@@ -509,6 +511,12 @@ export function RefundsReconciliationView() {
             { value: 'FAILED', label: 'Failed' },
             { value: 'CANCELLED', label: 'Cancelled' },
           ]}
+        />
+        </div>
+        <ExportCsvButton
+          permission="fees.manage"
+          path={`/exports/refunds.csv${status ? `?status=${status}` : ''}`}
+          filename="refunds.csv"
         />
       </div>
       {loading ? (

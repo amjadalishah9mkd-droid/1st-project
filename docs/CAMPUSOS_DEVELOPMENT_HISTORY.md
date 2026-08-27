@@ -136,7 +136,8 @@ Principles applied consistently from M0 onward:
 | M16-W1 | Refund schema + accountant role foundation | `4aa9a9e` |
 | M16-W2 | Refund engine: service, endpoints, net accounting, adversarial suite | `c7a44a9` |
 | M16-W3 | Live Safepay sandbox verification of the refund engine | `2ab583c` |
-| M16-W4 | Refund UI + accountant journey | *(this commit)* |
+| M16-W4 | Refund UI + accountant journey | `57d60f3` |
+| M16-W5 | Refund CSV, operations runbook, security re-audit — M16 close-out | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1576,6 +1577,55 @@ Frontend only; the W2 backend stayed authoritative and untouched.
 - **No backend changes**; tests stay 498/498; migrations stay 10; zero
   role conditionals; no client-controlled tenancy/provider fields.
 
+### M16-W5 — Refund CSV + runbook + security re-audit (M16 CLOSED)
+- **Hardening finding (fixed)**: `GET /exports/fees.csv` still exported a
+  GROSS "paid" column — the one net-of-refunds blast-radius site missed
+  in W2. Now `Σ payments − Σ refunds`, regression-tested.
+- **`GET /exports/refunds.csv`** added inside the existing M12-W3 export
+  architecture (same `assertAllScope` model — `fees.manage` resolved ALL,
+  so ADMIN + ACCOUNTANT; tenant-scoped; `status`/`method` filters
+  mirroring the reconciliation view; columns: attempt/refund/invoice/
+  payment ids, exact two-decimal amount, currency, method, status,
+  reason, provider ref, failure code, requester name, timestamps; audit
+  `exports.generated`). Export button added to the Refunds tab.
+- **Tests: 502** (4 new): export authz matrix (accountant/admin 200,
+  student/teacher 403, anon 401), tenancy (rival attempt absent),
+  RFC-4180 escaping of a comma/quote/newline reason, exact `45.00`
+  formatting, filter semantics, header-only empty result, and the
+  fees.csv net-paid regression.
+- **OPERATIONS §25**: refund runbook — pre-flight checklist, RECORDED vs
+  PROVIDER guidance, "provider truth is authoritative / never manually
+  force SUCCEEDED / preserve PROCESSING when unreachable", terminal-state
+  retry rules, concurrency guarantees, 10-point post-refund verification,
+  explicit non-goals (no webhook availability claimed).
+- **Security re-audit: PASS, no defects.** Full-path trace UI→controller→
+  Zod→PolicyService→service→tx→adapter→audit/notifications: every public
+  refund entry point tenant-gates before any internal id lookup; zero
+  role-name authorization conditionals (community group-membership roles
+  and the M13 guardian-invite data check are pre-existing, non-authz);
+  no client-controlled collegeId/invoiceId/provider refs/status/recorder
+  ids; Payment/PaymentAttempt/Invoice.amount/invoiceNo immutable; CAS on
+  every transition; audit metadata whitelist intact; W2's 26-test
+  adversarial suite re-verified green.
+- **Gap dispositions**: accountant `/dashboard` landing (clean
+  no-permission fallback) — accepted as a documented cosmetic limitation,
+  finance functionality unaffected; guardian CHILD-scope refund read
+  projection — DEFERRED (no backend broadened).
+
+**M16 FINAL STATUS — CLOSED.** Delivered: refund domain (Refund +
+RefundAttempt, migration #10), ACCOUNTANT role + `finance.refund`,
+RECORDED refunds, Safepay PROVIDER refunds (live-verified twice: W0
+probe + W3 app-path), partial refunds to exhaustion, net-of-refunds
+accounting everywhere (incl. exports), reconciliation + verify, refund
+UI + accountant journey, exactly-once notifications and audit, refunds
+CSV, operations runbook, security audit. Deferred (unchanged status):
+refund webhooks + dashboard registration (externally blocked),
+automatic provider polling, refund receipts/PDFs, advanced refund
+dashboards/reporting, maker-checker (`finance.refund.approve`),
+guardian refund CHILD projection, accountant dashboard landing polish,
+term freeze (M15 D6), P2-IDOR-1, single global webhook secret, and the
+P3 register items.
+
 
 ## 7. Architecture Evolution
 
@@ -1708,6 +1758,7 @@ reached 141 by the end of M9):
 | M15-W4 | 461 | docs-only close-out; audit relied on existing W1/W2 proofs (no duplicated tests) |
 | M16-W1 | 476 | real-DB refund invariants (CHECK/partial-unique/FK), accountant grant matrix, seed idempotency |
 | M16-W2 | 498 | refund engine adversarial matrix: money safety, CAS races, provider ambiguity, audit hygiene |
+| M16-W5 | 502 | refunds.csv authz/tenancy/escaping/amount-format + fees.csv net-paid regression |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -1825,16 +1876,16 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M16-W4.*
+*Last updated after M16-W5 (M16 closed).*
 
-- **Current milestone**: **M15 COMPLETE (W1–W4)** — academic calendar
-  lifecycle, rollover engine, rollover wizard, verified semester
-  boundary, operations runbook. M14 remains complete (webhook delivery
-  still pending provider-dashboard endpoint registration).
+- **Current milestone**: **M16 COMPLETE (W0–W5)** — refunds + accountant
+  role, live-verified against the real Safepay sandbox; M15 calendar/
+  rollover and M14 payments remain complete (webhook delivery still
+  pending provider-dashboard endpoint registration).
 - **Latest commit**: the M15-W4 close-out commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 10 found, database schema up to date
-- **Tests**: **498/498 passing** (37 suites)
+- **Tests**: **502/502 passing** (37 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
