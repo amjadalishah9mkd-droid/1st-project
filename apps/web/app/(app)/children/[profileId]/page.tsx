@@ -459,12 +459,20 @@ function ResultsTab({ profileId }: { profileId: string }) {
                 · {rows[0].examType.charAt(0) + rows[0].examType.slice(1).toLowerCase()}
               </span>
             </span>
-            <Link
-              href={`/results/report/${examId}?studentId=${profileId}`}
-              className="text-xs font-medium text-brand-700 hover:underline"
-            >
-              Report card
-            </Link>
+            <span className="flex gap-3">
+              <Link
+                href={`/results/report/${examId}?studentId=${profileId}`}
+                className="text-xs font-medium text-brand-700 hover:underline"
+              >
+                Report card
+              </Link>
+              <Link
+                href={`/results/transcript?studentId=${profileId}`}
+                className="text-xs font-medium text-brand-700 hover:underline"
+              >
+                Transcript
+              </Link>
+            </span>
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

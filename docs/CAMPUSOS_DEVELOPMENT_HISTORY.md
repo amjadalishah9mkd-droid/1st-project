@@ -145,7 +145,8 @@ Principles applied consistently from M0 onward:
 | M17-W4 | M17 close-out: security audit, term-lifecycle runbook | `3a30b82` |
 | M18-W0 | Academic records design (`docs/M18_ACADEMIC_RECORDS_DESIGN.md`) | `9c4f31c` |
 | M18-W1 | Result finalization foundation: TermResult/CourseResult, finalize/amend engine | `c555035` |
-| M18-W2 | Report-card + transcript engines, batch finalization, VOID | *(this commit)* |
+| M18-W2 | Report-card + transcript engines, batch finalization, VOID | `68ad6a8` |
+| M18-W3 | Academic records UI: term report card + transcript + print | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1853,6 +1854,36 @@ register. No M18 work started.
 - NOT in W2 (W3): report-card/transcript UI, print views, Alloy
   walkthrough.
 
+### M18-W3 — Academic records UI + print
+- **New pages** (pure presentation over the W2 APIs — zero frontend
+  academic math, backend authoritative): `/results/record/[termId]`
+  (finalized term report card: student/term header, frozen course table,
+  overall/grade/GPA/credits/attendance, version note, dedicated
+  NOT_FINALIZED explanation state) and `/results/transcript` (FINALIZED
+  terms only, per-term tables + "Open report card" links, cumulative
+  credits + CGPA block with an explicit "grade-point scale not
+  configured" explanation when null). Shared render module
+  `results/academic-record.tsx`; null GPA/points always shown as
+  "Not configured"/"—", never 0.00.
+- **Print**: reuses the M12-W3 browser-print pattern verbatim
+  (window.print(), print-hide, print:border-0, break-inside-avoid) —
+  no PDF dependency.
+- **Navigation**: Results page header gains a Transcript link (carries
+  the staff-selected studentId); guardian child page gains a Transcript
+  link beside the existing per-exam Report card link. Permission-driven
+  only; no role names; no new grants; the M12 per-exam report is
+  untouched.
+- **Alloy walkthrough**: temp fixture (CLOSED "W3DEMO" term, two
+  published courses 88/100 + 62/100) finalized via the real API (75%,
+  B+, GPA null) → student viewed transcript + report card read-only
+  with honest Not-configured GPA and no mutation controls; admin read
+  both via ?studentId (200); accountant refused (403, no results.read);
+  guardian linked/unlinked paths already proven by the W2 e2e. Fixture
+  fully removed afterwards — affected-table snapshot diffed EXACT; all
+  four demo logins 200.
+- **No backend/schema/permission changes**; tests stay 543/543; both
+  prod builds green with the two new routes emitted.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -2106,7 +2137,7 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M18-W2.*
+*Last updated after M18-W3.*
 
 - **Current milestone**: **M17 COMPLETE (W0–W4)** — term lifecycle
   (ACTIVE⇄CLOSED) with full academic/finance enforcement, net-paid

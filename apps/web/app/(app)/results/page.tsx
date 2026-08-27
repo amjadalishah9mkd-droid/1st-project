@@ -47,6 +47,16 @@ export default function ResultsPage() {
     <div className="mx-auto max-w-4xl">
       <PageHeader
         title="Results"
+        actions={
+          <Link
+            href={`/results/transcript${
+              canPickStudent && studentId ? `?studentId=${studentId}` : ''
+            }`}
+            className="rounded-md border border-line bg-surface-raised px-3 py-2 text-sm font-medium hover:bg-surface"
+          >
+            Transcript
+          </Link>
+        }
         description={
           isStudent
             ? 'Your published exam results with percentage and grade.'
