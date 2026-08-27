@@ -26,6 +26,7 @@ describe('M18-W1 — result finalization', () => {
   let teacherToken: string;
   let studentToken: string;
   let accountantToken: string;
+  let guardianToken: string;
   const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
   // fixture: one CLOSED term with two courses of published results
@@ -209,6 +210,23 @@ describe('M18-W1 — result finalization', () => {
     teacherToken = await login('teacher@campusos.dev');
     studentToken = await login('student@campusos.dev');
     accountantToken = await login('accountant@campusos.dev');
+    await prisma.user.upsert({
+      where: {
+        collegeId_email: { collegeId, email: `w18-guardian-${suffix}@campusos.dev` },
+      },
+      update: {},
+      create: {
+        collegeId,
+        email: `w18-guardian-${suffix}@campusos.dev`,
+        passwordHash: admin.passwordHash,
+        role: 'GUARDIAN',
+        status: 'ACTIVE',
+        firstName: 'Weight',
+        lastName: 'Guardian',
+        mustChangePassword: false,
+      },
+    });
+    guardianToken = await login(`w18-guardian-${suffix}@campusos.dev`);
   });
 
   afterAll(async () => {
@@ -234,7 +252,17 @@ describe('M18-W1 — result finalization', () => {
     await prisma.studentProfile.deleteMany({ where: { collegeId: rivalCollegeId } });
     await prisma.department.deleteMany({ where: { collegeId: rivalCollegeId } });
     await prisma.auditLog.deleteMany({ where: { collegeId: rivalCollegeId } });
-    await prisma.user.deleteMany({ where: { collegeId: rivalCollegeId } });
+    await prisma.guardianLink.deleteMany({
+      where: { guardian: { email: `w18-guardian-${suffix}@campusos.dev` } },
+    });
+    await prisma.user.deleteMany({
+      where: {
+        OR: [
+          { collegeId: rivalCollegeId },
+          { email: `w18-guardian-${suffix}@campusos.dev` },
+        ],
+      },
+    });
     await prisma.college.delete({ where: { id: rivalCollegeId } });
     await app.close();
   });
@@ -493,4 +521,210 @@ describe('M18-W1 — result finalization', () => {
       expect(res.body.error.code).toBe('NO_PUBLISHED_RESULTS');
     });
   });
+
+  describe('M18-W2 — report, transcript, batch, void', () => {
+    it('report card serves the SNAPSHOT (v3), never live marks; OWN forces self', async () => {
+      // sabotage live marks again — the snapshot must not care
+      await prisma.mark.updateMany({
+        where: { examPaperId: paperAId, studentId: studentProfileId },
+        data: { marksObtained: 1 },
+      });
+      const admin = await http
+        .get(`/api/v1/results/report/term/${termId}?studentId=${studentProfileId}`)
+        .set(auth(adminToken));
+      expect(admin.status).toBe(200);
+      expect(admin.body.data.version).toBe(3);
+      expect(admin.body.data.overallPercentage).toBe('75'); // frozen v3
+      // student OWN — requested foreign studentId is IGNORED, reads self
+      const own = await http
+        .get(`/api/v1/results/report/term/${termId}?studentId=${rivalStudentId}`)
+        .set(auth(studentToken));
+      expect(own.status).toBe(200);
+      expect(own.body.data.studentId).toBe(studentProfileId);
+      // restore the mark
+      await prisma.mark.updateMany({
+        where: { examPaperId: paperAId, studentId: studentProfileId },
+        data: { marksObtained: 90 },
+      });
+    });
+
+    it('historical CourseResult survives catalog edits (frozen code/title/credits)', async () => {
+      const before = await http
+        .get(`/api/v1/results/report/term/${termId}?studentId=${studentProfileId}`)
+        .set(auth(adminToken));
+      const frozen = before.body.data.courses.find(
+        (c: { credits: number }) => c.credits === 3,
+      );
+      await prisma.course.update({
+        where: { id: courseAId },
+        data: { title: 'RENAMED LATER', credits: 9 },
+      });
+      const after = await http
+        .get(`/api/v1/results/report/term/${termId}?studentId=${studentProfileId}`)
+        .set(auth(adminToken));
+      const still = after.body.data.courses.find(
+        (c: { courseCode: string }) => c.courseCode === frozen.courseCode,
+      );
+      expect(still.courseTitle).toBe(frozen.courseTitle); // NOT 'RENAMED LATER'
+      expect(still.credits).toBe(3); // NOT 9
+      await prisma.course.update({
+        where: { id: courseAId },
+        data: { title: frozen.courseTitle, credits: 3 },
+      });
+    });
+
+    it('transcript assembles FINALIZED terms only; CGPA null without a full grade-point scale', async () => {
+      const res = await http
+        .get(`/api/v1/results/transcript?studentId=${studentProfileId}`)
+        .set(auth(adminToken));
+      expect(res.status).toBe(200);
+      const t = res.body.data;
+      expect(t.terms).toHaveLength(1);
+      expect(t.terms[0].version).toBe(3); // active version only
+      expect(t.creditsAttempted).toBe(5);
+      // CGPA derives from the FROZEN course grade points inside the
+      // snapshots — v3 was finalized while the scale was configured, so
+      // the transcript keeps 3.20 even though the live bands were reset
+      // to null afterwards. Historical stability over live config.
+      expect(t.cgpa).toBe('3.20');
+      expect(t.creditsEarned).toBe(5);
+    });
+
+    it('read authorization: guardian CHILD linked/unlinked; anon 401; rival admin sees nothing', async () => {
+      expect(
+        (await http.get(`/api/v1/results/transcript?studentId=${studentProfileId}`))
+          .status,
+      ).toBe(401);
+      // unlinked guardian → 404
+      expect(
+        (
+          await http
+            .get(`/api/v1/results/transcript?studentId=${studentProfileId}`)
+            .set(auth(guardianToken))
+        ).status,
+      ).toBe(404);
+      // linked guardian → 200 read-only
+      const guardianUser = await prisma.user.findFirstOrThrow({
+        where: { email: `w18-guardian-${suffix}@campusos.dev` },
+      });
+      const link = await prisma.guardianLink.create({
+        data: {
+          collegeId,
+          guardianUserId: guardianUser.id,
+          studentProfileId,
+          relationship: 'parent',
+          status: 'ACTIVE',
+        },
+      });
+      const linked = await http
+        .get(`/api/v1/results/transcript?studentId=${studentProfileId}`)
+        .set(auth(guardianToken));
+      expect(linked.status).toBe(200);
+      expect(linked.body.data.terms).toHaveLength(1);
+      await prisma.guardianLink.delete({ where: { id: link.id } });
+      // rival student id (cross-college) → 404, no existence leak
+      expect(
+        (
+          await http
+            .get(`/api/v1/results/transcript?studentId=${rivalStudentId}`)
+            .set(auth(adminToken))
+        ).status,
+      ).toBe(404);
+    });
+
+    it('finalization worklist + batch finalization reuse the same engine', async () => {
+      const list = await http
+        .get(`/api/v1/results/terms/${termId}/finalization`)
+        .set(auth(adminToken));
+      expect(list.status).toBe(200);
+      const rows = list.body.data.students as Array<{
+        studentId: string;
+        finalized: boolean;
+      }>;
+      expect(rows.find((r) => r.studentId === studentProfileId)?.finalized).toBe(true);
+      // batch over [already-finalized, no-results] → per-student outcomes
+      const empty = await prisma.studentProfile.findFirstOrThrow({
+        where: {
+          collegeId,
+          enrollments: { none: { section: { termId } } },
+        },
+      });
+      const batch = await http
+        .post(`/api/v1/results/terms/${termId}/finalize-batch`)
+        .set(auth(adminToken))
+        .send({ studentIds: [studentProfileId, empty.id], confirmLabel: termLabel });
+      expect(batch.status).toBe(201);
+      expect(batch.body.data.finalized).toBe(0);
+      expect(batch.body.data.failed).toBe(2);
+      const codes = (batch.body.data.outcomes as Array<{ errorCode?: string }>).map(
+        (o) => o.errorCode,
+      );
+      expect(codes).toContain('ALREADY_FINALIZED');
+      expect(codes).toContain('NO_PUBLISHED_RESULTS');
+      // teacher cannot batch/list
+      expect(
+        (
+          await http
+            .post(`/api/v1/results/terms/${termId}/finalize-batch`)
+            .set(auth(teacherToken))
+            .send({ studentIds: [studentProfileId], confirmLabel: termLabel })
+        ).status,
+      ).toBe(403);
+    });
+
+    it('VOID: CAS on the active version, history preserved, transcript excludes it, no deletion', async () => {
+      const active = await prisma.termResult.findFirstOrThrow({
+        where: { termId, studentId: studentProfileId, status: 'FINALIZED' },
+      });
+      const voided = await http
+        .post(`/api/v1/results/records/${active.id}/void`)
+        .set(auth(adminToken))
+        .send({ reason: 'issued in error', confirmLabel: termLabel });
+      expect(voided.status).toBe(201);
+      expect(voided.body.data.status).toBe('VOID');
+      // row + course lines preserved
+      const row = await prisma.termResult.findUniqueOrThrow({
+        where: { id: active.id },
+        include: { courseResults: true },
+      });
+      expect(row.status).toBe('VOID');
+      expect(row.courseResults.length).toBeGreaterThan(0);
+      // superseded history untouched and still queryable
+      expect(
+        await prisma.termResult.count({ where: { termId, status: 'SUPERSEDED' } }),
+      ).toBe(2);
+      // transcript now excludes the voided term
+      const t = await http
+        .get(`/api/v1/results/transcript?studentId=${studentProfileId}`)
+        .set(auth(adminToken));
+      expect(t.body.data.terms).toHaveLength(0);
+      // re-void refused; superseded rows cannot be voided either
+      expect(
+        (
+          await http
+            .post(`/api/v1/results/records/${active.id}/void`)
+            .set(auth(adminToken))
+            .send({ reason: 'again', confirmLabel: termLabel })
+        ).status,
+      ).toBe(409);
+      // exactly one audit
+      expect(
+        await prisma.auditLog.count({
+          where: { action: 'results.voided', targetId: active.id },
+        }),
+      ).toBe(1);
+      // the freed partial-unique slot allows a fresh finalization (v1 again)
+      const fresh = await finalize(adminToken, termId, studentProfileId, termLabel);
+      expect(fresh.status).toBe(201);
+      // Mark/Term untouched by the whole read/void surface
+      const mark = await prisma.mark.findFirstOrThrow({
+        where: { examPaperId: paperAId, studentId: studentProfileId },
+      });
+      expect(mark.marksObtained.toString()).toBe('90');
+      expect(
+        (await prisma.term.findUniqueOrThrow({ where: { id: termId } })).status,
+      ).toBe('CLOSED');
+    });
+  });
+
 });

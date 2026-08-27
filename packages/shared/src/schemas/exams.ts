@@ -87,3 +87,15 @@ export const amendResultSchema = z.object({
   confirmLabel: z.string().min(1, 'Type the term label to confirm'),
 });
 export type AmendResultInput = z.infer<typeof amendResultSchema>;
+
+export const finalizeBatchSchema = z.object({
+  studentIds: z.array(z.string().min(1)).min(1).max(500),
+  confirmLabel: z.string().min(1, 'Type the term label to confirm'),
+});
+export type FinalizeBatchInput = z.infer<typeof finalizeBatchSchema>;
+
+export const voidResultSchema = z.object({
+  reason: z.string().trim().min(3, 'A reason is required').max(300),
+  confirmLabel: z.string().min(1, 'Type the term label to confirm'),
+});
+export type VoidResultInput = z.infer<typeof voidResultSchema>;

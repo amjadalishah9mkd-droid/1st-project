@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 
@@ -56,6 +57,7 @@ interface FrozenCourse {
 export class ResultsFinalizationService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly policy: PolicyService,
     private readonly audit: AuditService,
   ) {}
 
@@ -138,6 +140,287 @@ export class ResultsFinalizationService {
       },
     });
     return this.toItem(record);
+  }
+
+
+  // ── M18-W2: batch finalization (same engine, per-student txs) ─
+
+  async finalizeBatch(
+    user: AuthenticatedUser,
+    termId: string,
+    studentIds: string[],
+    confirmLabel: string,
+  ) {
+    const term = await this.prisma.term.findFirst({
+      where: { id: termId, collegeId: user.collegeId },
+      select: { id: true, label: true },
+    });
+    if (!term) throw notFound('Term');
+    if (confirmLabel !== term.label) {
+      throw new BadRequestException({
+        code: 'CONFIRMATION_MISMATCH',
+        message: 'Type the exact term label to confirm',
+      });
+    }
+    const outcomes: Array<{
+      studentId: string;
+      finalized: boolean;
+      errorCode?: string;
+    }> = [];
+    for (const studentId of studentIds) {
+      try {
+        // The SAME single-student engine and invariants — each student in
+        // its own atomic transaction; a failure never touches the others.
+        await this.finalize(user, termId, studentId, confirmLabel);
+        outcomes.push({ studentId, finalized: true });
+      } catch (error) {
+        const code =
+          typeof error === 'object' && error !== null && 'getResponse' in error
+            ? ((error as { getResponse(): { code?: string } }).getResponse()
+                .code ?? 'FAILED')
+            : 'FAILED';
+        outcomes.push({ studentId, finalized: false, errorCode: code });
+      }
+    }
+    return {
+      termId,
+      finalized: outcomes.filter((o) => o.finalized).length,
+      failed: outcomes.filter((o) => !o.finalized).length,
+      outcomes,
+    };
+  }
+
+  // ── M18-W2: VOID (design §13 — preserves history, never deletes) ─
+
+  async void(
+    user: AuthenticatedUser,
+    termResultId: string,
+    reason: string,
+    confirmLabel: string,
+  ) {
+    const existing = await this.prisma.termResult.findFirst({
+      where: { id: termResultId, collegeId: user.collegeId },
+      include: {
+        term: { select: { label: true } },
+        courseResults: true,
+      },
+    });
+    if (!existing) throw notFound('Result');
+    if (confirmLabel !== existing.term.label) {
+      throw new BadRequestException({
+        code: 'CONFIRMATION_MISMATCH',
+        message: 'Type the exact term label to confirm',
+      });
+    }
+    // CAS: only the active FINALIZED version can be voided; SUPERSEDED
+    // history and already-VOID rows are untouchable. The row itself is
+    // preserved forever — VOID is a status, never a delete.
+    const voided = await this.prisma.termResult.updateMany({
+      where: { id: termResultId, status: 'FINALIZED' },
+      data: { status: 'VOID' },
+    });
+    if (voided.count === 0) {
+      throw new ConflictException({
+        code: 'INVALID_TRANSITION',
+        message: 'Only the active finalized version can be voided',
+      });
+    }
+    await this.audit.log({
+      collegeId: user.collegeId,
+      actorId: user.id,
+      action: 'results.voided',
+      targetType: 'TermResult',
+      targetId: termResultId,
+      metadata: {
+        studentId: existing.studentId,
+        termId: existing.termId,
+        version: existing.version,
+      },
+    });
+    const current = await this.prisma.termResult.findUniqueOrThrow({
+      where: { id: termResultId },
+      include: { courseResults: true },
+    });
+    return this.toItem(current);
+  }
+
+  // ── M18-W2: reads (results.read OWN/CHILD/ALL — exams.results
+  //    precedent; snapshots ONLY, never rebuilt from mutable marks) ─
+
+  /** Resolve the target student under the caller's results.read scope. */
+  private async resolveReadTarget(
+    user: AuthenticatedUser,
+    requestedStudentId?: string,
+  ): Promise<string> {
+    const scope = await this.policy.scopeFor(user, 'results.read');
+    if (!scope) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Not found' });
+    }
+    if (scope === 'OWN') {
+      const own = await this.prisma.studentProfile.findFirst({
+        where: { userId: user.id, collegeId: user.collegeId },
+        select: { id: true },
+      });
+      if (!own) throw notFound('Student');
+      return own.id; // OWN only ever reads itself — requested ids ignored
+    }
+    if (!requestedStudentId) {
+      throw new BadRequestException({
+        code: 'MISSING_TARGET',
+        message: 'Provide studentId',
+      });
+    }
+    const student = await this.prisma.studentProfile.findFirst({
+      where: { id: requestedStudentId, collegeId: user.collegeId },
+      select: { id: true },
+    });
+    if (!student) throw notFound('Student');
+    if (scope === 'CHILD') {
+      const allowed = await this.policy.can(user, 'results.read', {
+        studentProfileId: student.id,
+      });
+      if (!allowed) throw notFound('Student');
+    }
+    return student.id;
+  }
+
+  /** Finalized term report card (the immutable snapshot — O-2). */
+  async report(
+    user: AuthenticatedUser,
+    termId: string,
+    requestedStudentId?: string,
+  ) {
+    const studentId = await this.resolveReadTarget(user, requestedStudentId);
+    const record = await this.prisma.termResult.findFirst({
+      where: {
+        collegeId: user.collegeId,
+        termId,
+        studentId,
+        status: 'FINALIZED',
+      },
+      include: {
+        courseResults: { orderBy: { courseCode: 'asc' } },
+        term: { select: { label: true } },
+        student: {
+          select: {
+            rollNo: true,
+            user: { select: { firstName: true, lastName: true } },
+          },
+        },
+      },
+    });
+    if (!record) {
+      throw new NotFoundException({
+        code: 'NOT_FINALIZED',
+        message: 'No finalized result exists for this term',
+      });
+    }
+    return {
+      ...this.toItem(record),
+      termLabel: record.term.label,
+      studentName: `${record.student.user.firstName} ${record.student.user.lastName}`,
+      rollNo: record.student.rollNo,
+    };
+  }
+
+  /**
+   * Transcript (O-3): dynamically assembled from FINALIZED snapshots
+   * ONLY (SUPERSEDED and VOID excluded). CGPA is credit-weighted across
+   * finalized course lines and computed ONLY when EVERY line carries a
+   * configured grade point — a partially configured scale yields null
+   * rather than a misleading number (no invented policy). All attempts
+   * remain visible; no repeat-course replacement (deferred by design).
+   */
+  async transcript(user: AuthenticatedUser, requestedStudentId?: string) {
+    const studentId = await this.resolveReadTarget(user, requestedStudentId);
+    const student = await this.prisma.studentProfile.findFirstOrThrow({
+      where: { id: studentId },
+      select: {
+        rollNo: true,
+        admissionNo: true,
+        status: true,
+        user: { select: { firstName: true, lastName: true } },
+      },
+    });
+    const records = await this.prisma.termResult.findMany({
+      where: { collegeId: user.collegeId, studentId, status: 'FINALIZED' },
+      include: {
+        courseResults: { orderBy: { courseCode: 'asc' } },
+        term: { select: { label: true, startsOn: true } },
+      },
+      orderBy: { term: { startsOn: 'asc' } },
+    });
+    const allCourses = records.flatMap((r) => r.courseResults);
+    const creditsAttempted = allCourses.reduce((s, c) => s + c.credits, 0);
+    const everyPointed =
+      allCourses.length > 0 && allCourses.every((c) => c.gradePoint !== null);
+    const cgpa = everyPointed
+      ? round2(
+          allCourses.reduce(
+            (s, c) => s + Number(c.gradePoint) * c.credits,
+            0,
+          ) / creditsAttempted,
+        )
+      : null;
+    const creditsEarned = everyPointed
+      ? allCourses.reduce((s, c) => s + (c.passed ? c.credits : 0), 0)
+      : null;
+    return {
+      studentId,
+      studentName: `${student.user.firstName} ${student.user.lastName}`,
+      rollNo: student.rollNo,
+      admissionNo: student.admissionNo,
+      academicStatus: student.status,
+      creditsAttempted,
+      creditsEarned,
+      cgpa: cgpa !== null ? cgpa.toFixed(2) : null,
+      terms: records.map((record) => ({
+        termLabel: record.term.label,
+        ...this.toItem(record),
+      })),
+    };
+  }
+
+  /** Staff finalization worklist for a term (results.finalize). */
+  async finalizationList(user: AuthenticatedUser, termId: string) {
+    const term = await this.prisma.term.findFirst({
+      where: { id: termId, collegeId: user.collegeId },
+      select: { id: true, label: true, status: true },
+    });
+    if (!term) throw notFound('Term');
+    const students = await this.prisma.studentProfile.findMany({
+      where: {
+        collegeId: user.collegeId,
+        enrollments: { some: { section: { termId } } },
+      },
+      select: {
+        id: true,
+        rollNo: true,
+        user: { select: { firstName: true, lastName: true } },
+      },
+      orderBy: { rollNo: 'asc' },
+    });
+    const results = await this.prisma.termResult.findMany({
+      where: { collegeId: user.collegeId, termId },
+      select: { studentId: true, status: true, version: true },
+    });
+    const byStudent = new Map(
+      results
+        .filter((r) => r.status === 'FINALIZED')
+        .map((r) => [r.studentId, r]),
+    );
+    return {
+      termId: term.id,
+      termLabel: term.label,
+      termStatus: term.status,
+      students: students.map((s) => ({
+        studentId: s.id,
+        name: `${s.user.firstName} ${s.user.lastName}`,
+        rollNo: s.rollNo,
+        finalized: byStudent.has(s.id),
+        version: byStudent.get(s.id)?.version ?? null,
+      })),
+    };
   }
 
   // ── internals ────────────────────────────────────────────────

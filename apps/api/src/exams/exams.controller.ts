@@ -18,8 +18,12 @@ import {
   updateExamPaperSchema,
   updateExamSchema,
   finalizeResultSchema,
+  finalizeBatchSchema,
+  voidResultSchema,
   amendResultSchema,
   type FinalizeResultInput,
+  type FinalizeBatchInput,
+  type VoidResultInput,
   type AmendResultInput,
   PERMISSIONS,
   type CreateExamInput,
@@ -193,5 +197,59 @@ export class ExamsController {
     @Body(new ZodValidationPipe(amendResultSchema)) body: AmendResultInput,
   ) {
     return this.finalization.amend(user, id, body.reason, body.confirmLabel);
+  }
+
+  @Post('results/terms/:termId/finalize-batch')
+  @RequirePermission(PERMISSIONS.RESULTS_FINALIZE)
+  finalizeBatch(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('termId') termId: string,
+    @Body(new ZodValidationPipe(finalizeBatchSchema)) body: FinalizeBatchInput,
+  ) {
+    return this.finalization.finalizeBatch(
+      user,
+      termId,
+      body.studentIds,
+      body.confirmLabel,
+    );
+  }
+
+  @Post('results/records/:id/void')
+  @RequirePermission(PERMISSIONS.RESULTS_FINALIZE)
+  void(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(voidResultSchema)) body: VoidResultInput,
+  ) {
+    return this.finalization.void(user, id, body.reason, body.confirmLabel);
+  }
+
+  @Get('results/terms/:termId/finalization')
+  @RequirePermission(PERMISSIONS.RESULTS_FINALIZE)
+  finalizationList(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('termId') termId: string,
+  ) {
+    return this.finalization.finalizationList(user, termId);
+  }
+
+  // Reads ride the existing results.read scopes (OWN/CHILD/ALL).
+  @Get('results/report/term/:termId')
+  @RequirePermission(PERMISSIONS.RESULTS_READ)
+  reportCard(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('termId') termId: string,
+    @Query('studentId') studentId?: string,
+  ) {
+    return this.finalization.report(user, termId, studentId || undefined);
+  }
+
+  @Get('results/transcript')
+  @RequirePermission(PERMISSIONS.RESULTS_READ)
+  transcript(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('studentId') studentId?: string,
+  ) {
+    return this.finalization.transcript(user, studentId || undefined);
   }
 }

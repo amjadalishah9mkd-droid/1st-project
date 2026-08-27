@@ -144,7 +144,8 @@ Principles applied consistently from M0 onward:
 | M17-W3 | Lifecycle UI, rollover close offer, guardian refund read, accountant landing | `cc6599f` |
 | M17-W4 | M17 close-out: security audit, term-lifecycle runbook | `3a30b82` |
 | M18-W0 | Academic records design (`docs/M18_ACADEMIC_RECORDS_DESIGN.md`) | `9c4f31c` |
-| M18-W1 | Result finalization foundation: TermResult/CourseResult, finalize/amend engine | *(this commit)* |
+| M18-W1 | Result finalization foundation: TermResult/CourseResult, finalize/amend engine | `c555035` |
+| M18-W2 | Report-card + transcript engines, batch finalization, VOID | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1820,6 +1821,38 @@ register. No M18 work started.
 - NOT in W1 (W2/W3): report-card/transcript read endpoints, batch
   finalization, void, UI/print.
 
+### M18-W2 — Report-card + transcript engines
+- **Reads (results.read OWN/CHILD/ALL, exams.results precedent — never
+  rebuilt from mutable marks)**: `GET /results/report/term/:termId`
+  (the FINALIZED snapshot; OWN ignores requested ids and reads self;
+  404 `NOT_FINALIZED` when no active snapshot),
+  `GET /results/transcript` (O-3: dynamically assembled from FINALIZED
+  snapshots only — SUPERSEDED/VOID excluded; frozen CourseResult
+  code/title/credits, proven immune to later catalog edits).
+- **CGPA**: credit-weighted across the FROZEN course grade points inside
+  snapshots — computed only when EVERY finalized line carries a point
+  (partial scales → honest null); live band re-configuration cannot
+  rewrite historical CGPA (test proves 3.20 survives resetting the
+  scale). All attempts count; repeat-course replacement stays deferred.
+- **Batch finalization**: `POST /results/terms/:id/finalize-batch`
+  loops the SAME single-student engine (per-student atomic txs,
+  partial-unique CAS), returning per-student outcomes
+  (ALREADY_FINALIZED / NO_PUBLISHED_RESULTS observed in-test).
+  Worklist: `GET /results/terms/:id/finalization` (results.finalize).
+- **VOID** (design §13): `POST /results/records/:id/void` — CAS
+  FINALIZED→VOID, typed confirmation + reason, row and course lines
+  preserved forever, transcript excludes it, superseded history
+  untouched, re-void/void-superseded refused, `results.voided` audited
+  once, and the freed partial-unique slot allows a fresh v1
+  finalization.
+- **Tests: 543** (6 new in the M18 suite → 15): snapshot-over-live-marks
+  reads, catalog-edit immunity, transcript assembly + frozen-CGPA
+  stability, guardian CHILD linked/unlinked + anon 401 + cross-college
+  404s, worklist/batch outcomes + teacher 403, full VOID matrix with
+  Mark/Term untouched. No schema changes; migrations stay 12.
+- NOT in W2 (W3): report-card/transcript UI, print views, Alloy
+  walkthrough.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -1955,6 +1988,7 @@ reached 141 by the end of M9):
 | M17-W1 | 516 | lifecycle CAS/lock matrix, D-3 under lock, transition races, rollover close-source integration |
 | M17-W2 | 528 | closed-term 409 matrix across every family, tx-level guard races, DEFECT-1 dashboard==summary |
 | M18-W1 | 537 | finalization CLOSED-only + partial-unique races, snapshot immutability under mark edits/reopen, amendment chain, GPA policy-gap honesty |
+| M18-W2 | 543 | snapshot reads over live marks, catalog-edit immunity, frozen-CGPA stability, VOID matrix, batch outcomes |
 
 Key security tests maintained across the suite: tenant isolation (every
 module), race conditions (claims ×2 suites), authorization denial
@@ -2072,7 +2106,7 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M18-W1.*
+*Last updated after M18-W2.*
 
 - **Current milestone**: **M17 COMPLETE (W0–W4)** — term lifecycle
   (ACTIVE⇄CLOSED) with full academic/finance enforcement, net-paid
@@ -2082,7 +2116,7 @@ milestone (see roadmap).
 - **Latest commit**: the M15-W4 close-out commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 12 found, database schema up to date
-- **Tests**: **537/537 passing** (40 suites)
+- **Tests**: **543/543 passing** (40 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
