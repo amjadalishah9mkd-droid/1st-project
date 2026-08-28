@@ -23,6 +23,7 @@ import {
 import { LocalStorageAdapter } from './storage.adapter';
 import { FileUrlSignerService } from './url-signer.service';
 import { EvidenceAuthzService } from './evidence-authz.service';
+import { StoredFileAuthzService } from './stored-file-authz.service';
 import { RateLimiterService } from '../common/rate-limiter.service';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { CurrentUser } from '../access/current-user.decorator';
@@ -48,6 +49,7 @@ export class FilesController {
     private readonly storage: LocalStorageAdapter,
     private readonly signer: FileUrlSignerService,
     private readonly evidenceAuthz: EvidenceAuthzService,
+    private readonly storedFileAuthz: StoredFileAuthzService,
     private readonly limiter: RateLimiterService,
   ) {}
 
@@ -73,6 +75,13 @@ export class FilesController {
       });
     }
     const stored = await this.storage.save(file.buffer, file.originalname);
+    // M19-W1: every new upload gets an ownership record (tenant + owner),
+    // enforced at sign time by StoredFileAuthzService.
+    await this.storedFileAuthz.record({
+      key: stored.key,
+      collegeId: user.collegeId,
+      ownerUserId: user.id,
+    });
     return {
       url: `${FILE_URL_PREFIX}${stored.key}`,
       name: file.originalname,
@@ -111,6 +120,9 @@ export class FilesController {
     // M11-W3: verification evidence is a restricted file class. Signing —
     // the only way to a working URL — requires per-user authorization.
     await this.evidenceAuthz.assertCanSign(user, key);
+    // M19-W1 (P2-IDOR-1): tenant/ownership authorization for every key with
+    // an ownership record; unknown keys are grandfathered pre-M19 uploads.
+    await this.storedFileAuthz.assertCanSign(user, key);
     const { exp, sig } = this.signer.sign(key);
     return {
       url: `${FILE_URL_PREFIX}${encodeURIComponent(key)}?exp=${exp}&sig=${sig}`,

@@ -148,7 +148,8 @@ Principles applied consistently from M0 onward:
 | M18-W2 | Report-card + transcript engines, batch finalization, VOID | `68ad6a8` |
 | M18-W3 | Academic records UI: term report card + transcript + print | `7f0062b` |
 | M18-W4 | M18 close-out: security audit, academic-records runbook | `3ca22e1` |
-| M19-W0 | Platform hardening discovery + design (`docs/M19_PLATFORM_HARDENING_DESIGN.md`) | *(this commit)* |
+| M19-W0 | Platform hardening discovery + design (`docs/M19_PLATFORM_HARDENING_DESIGN.md`) | `fb6c474` |
+| M19-W1 | Stored-file ownership authorization (P2-IDOR-1, migration #13) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2180,7 +2181,39 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M19-W0 (design/discovery only — M19 NOT implemented).*
+## M19-W1 — Stored-file ownership authorization (P2-IDOR-1)
+
+O-1 approved as designed. Migration #13
+(`20260828055018_m19_stored_file_authorization`) adds `FilePurpose` +
+`StoredFile` (collegeId, key unique, purpose, ownerUserId?, createdById?,
+Restrict college FK, SetNull user FKs) and backfills ownership rows for every
+DERIVABLE legacy key: EvidenceFile rows (EVIDENCE), Post attachments
+(COMMUNITY_ATTACHMENT), Assignment attachments via Section (OTHER),
+Submission fileUrl via Section/StudentProfile (SUBMISSION) — all idempotent
+(`ON CONFLICT (key) DO NOTHING`), keys sanity-filtered. Non-derivable keys get
+NO row and stay grandfathered (M10-W1 capability-URL behavior), so every
+existing stored URL keeps working; the grandfathered class only shrinks.
+
+Enforcement: new `StoredFileAuthzService` (files module). Every upload
+(`POST /files` and verification evidence) records ownership insert-first
+(unique key = idempotency backstop). `POST /files/sign` now runs
+EvidenceAuthzService (unchanged, stricter) THEN StoredFileAuthzService:
+recorded keys are signable by their owner or same-college members;
+foreign-tenant callers get 404 indistinguishable from a missing file. Evidence
+retention purge also removes the ownership row. No new permissions, no role
+conditionals, no client collegeId, no ownership metadata in responses.
+
+New suite `test/stored-file-authz.e2e-spec.ts` (11 tests, real Postgres):
+ownership recording, response-shape minimality, owner/same-college/
+cross-college matrix, missing-file behavior, cross-college owner precedence,
+grandfathered legacy keys (all users, download round-trip), simulated
+backfilled row tenancy, evidence strictness preserved (same-college teacher
+404), duplicate-insert uniqueness (both racers P2002, original row survives),
+malformed-URL rejection. M18 migration-count assertion updated 12 → >=12
+(forward-only migrations are expected to accrue). 554/554 tests, typecheck 0,
+13 migrations, prod builds green, stack healthy.
+
+*Last updated after M19-W1 (W2 backup/mail/limiter work NOT started).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security

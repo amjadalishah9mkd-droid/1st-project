@@ -93,6 +93,8 @@ export class EvidenceRetentionService {
       // Storage first (idempotent), then metadata — crash-safe convergence.
       await this.storage.delete(evidence.key);
       await this.prisma.evidenceFile.delete({ where: { id: evidence.id } });
+      // M19-W1: remove the ownership record with the binary (idempotent).
+      await this.prisma.storedFile.deleteMany({ where: { key: evidence.key } });
       await this.audit.log({
         collegeId: evidence.collegeId,
         actorId: null,

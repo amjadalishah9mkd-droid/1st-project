@@ -268,7 +268,7 @@ describe('M18-W1 — result finalization', () => {
   });
 
   describe('migration #12 structures', () => {
-    it('tables, enum and the partial unique index exist; 12 migrations applied', async () => {
+    it('tables, enum and the partial unique index exist; >=12 migrations applied', async () => {
       const tables = await prisma.$queryRaw<Array<{ table_name: string }>>`
         SELECT table_name FROM information_schema.tables
         WHERE table_name IN ('TermResult', 'CourseResult')`;
@@ -280,7 +280,8 @@ describe('M18-W1 — result finalization', () => {
       const migrations = await prisma.$queryRaw<Array<{ count: bigint }>>`
         SELECT COUNT(*)::bigint AS count FROM _prisma_migrations
         WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-      expect(Number(migrations[0].count)).toBe(12);
+      // M19+ adds forward-only migrations; M18 requires at least its 12.
+      expect(Number(migrations[0].count)).toBeGreaterThanOrEqual(12);
     });
   });
 

@@ -102,6 +102,17 @@ export class VerificationService {
         size: stored.size,
       },
     });
+    // M19-W1: ownership record (EvidenceAuthzService stays the primary,
+    // stricter gate for evidence keys; this adds the uniform tenant record).
+    await this.prisma.storedFile.create({
+      data: {
+        key: stored.key,
+        collegeId: user.collegeId,
+        ownerUserId: user.id,
+        createdById: user.id,
+        purpose: 'EVIDENCE',
+      },
+    });
     return {
       evidenceFileKey: stored.key,
       name: evidenceName(stored.key),

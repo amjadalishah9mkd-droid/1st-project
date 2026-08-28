@@ -316,6 +316,7 @@ model College {
   auditLogs         AuditLog[]
   identityClaims    StudentIdentityClaim[]
   evidenceFiles     EvidenceFile[]
+  storedFiles       StoredFile[]
   guardianLinks     GuardianLink[]
   paymentAttempts   PaymentAttempt[]
   refundAttempts    RefundAttempt[]
@@ -361,6 +362,8 @@ model User {
   identityClaims         StudentIdentityClaim[] @relation("ClaimUser")
   identityClaimsDecided  StudentIdentityClaim[] @relation("ClaimDecidedBy")
   evidenceFiles          EvidenceFile[]
+  storedFilesOwned       StoredFile[]           @relation("StoredFileOwner")
+  storedFilesCreated     StoredFile[]           @relation("StoredFileCreator")
   guardianLinks          GuardianLink[]         @relation("GuardianLinks")
   guardianLinksCreated   GuardianLink[]         @relation("GuardianLinkCreator")
 
@@ -543,6 +546,37 @@ model EvidenceFile {
   uploader User    @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
 
   @@index([uploaderId])
+}
+
+// M19-W1 — stored-file ownership record (P2-IDOR-1). Every new upload gets a
+// row; signing a key that HAS a row requires same-college membership or
+// ownership (files/stored-file-authz.service.ts). Keys without a row are
+// grandfathered pre-M19 uploads and keep the M10-W1 capability-URL behavior,
+// so every existing stored URL keeps working. Backfill for derivable legacy
+// keys (evidence, assignment/post attachments, submissions) happens in
+// migration #13.
+enum FilePurpose {
+  COMMUNITY_ATTACHMENT
+  SUBMISSION
+  EVIDENCE
+  OTHER
+}
+
+model StoredFile {
+  id          String      @id @default(cuid())
+  collegeId   String
+  key         String      @unique
+  purpose     FilePurpose @default(OTHER)
+  ownerUserId String?
+  createdById String?
+  createdAt   DateTime    @default(now())
+
+  college   College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  ownerUser User?   @relation("StoredFileOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  createdBy User?   @relation("StoredFileCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([collegeId])
+  @@index([ownerUserId])
 }
 
 // M11 — claim binding a login account to a real student identity
