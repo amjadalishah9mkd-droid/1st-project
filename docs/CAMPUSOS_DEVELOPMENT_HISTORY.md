@@ -147,7 +147,8 @@ Principles applied consistently from M0 onward:
 | M18-W1 | Result finalization foundation: TermResult/CourseResult, finalize/amend engine | `c555035` |
 | M18-W2 | Report-card + transcript engines, batch finalization, VOID | `68ad6a8` |
 | M18-W3 | Academic records UI: term report card + transcript + print | `7f0062b` |
-| M18-W4 | M18 close-out: security audit, academic-records runbook | *(this commit)* |
+| M18-W4 | M18 close-out: security audit, academic-records runbook | `3ca22e1` |
+| M19-W0 | Platform hardening discovery + design (`docs/M19_PLATFORM_HARDENING_DESIGN.md`) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2179,8 +2180,19 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M18-W4 (M18 closed).*
+*Last updated after M19-W0 (design/discovery only — M19 NOT implemented).*
 
+- **M19 status**: DESIGN/DISCOVERY COMPLETE only —
+  `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
+  Hardening & Debt Retirement (P2-IDOR-1 file authorization, mail
+  escaping, Google callback limiter, guardian-PII disposition, backup
+  automation, baseline observability). Open decisions O-1…O-4 await
+  approval; W1 not started. Discovery corrected two stale register
+  entries: the announcements DEPARTMENT scope is actually IMPLEMENTED
+  (validation + label resolution in module-parts), and the
+  StudentProfile guardian columns are actively USED by
+  students.service (the true debt is PII duplication outside
+  GuardianLink, pending O-2 — not "dead columns").
 - **Current milestone**: **M18 COMPLETE (W0–W4)** — academic records:
   immutable finalized term results, versioned amendments, VOID,
   transcripts with frozen credit-weighted GPA (null until the
