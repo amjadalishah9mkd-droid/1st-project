@@ -79,6 +79,10 @@ export interface StudentItem {
 
 export interface StudentDetail extends StudentItem {
   dateOfBirth: string | null;
+  // Emergency-contact fields (M19-W2/O-2): historical "guardian*" names are
+  // kept for API compatibility, but these values are contact info only and
+  // never grant guardian access (GuardianLink is authoritative). Null unless
+  // the caller has full users.read scope or is the student themself.
   guardianName: string | null;
   guardianPhone: string | null;
   guardianEmail: string | null;

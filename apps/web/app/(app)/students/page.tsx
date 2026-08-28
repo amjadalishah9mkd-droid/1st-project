@@ -205,8 +205,8 @@ function CreateStudentDialog({
         <Input label="Roll no" name="rollNo" error={form.fieldErrors.rollNo} />
         <Input label="Batch" name="batch" placeholder="2026" error={form.fieldErrors.batch} />
         <Input label="Phone (optional)" name="phone" error={form.fieldErrors.phone} />
-        <Input label="Guardian name (optional)" name="guardianName" error={form.fieldErrors.guardianName} />
-        <Input label="Guardian phone (optional)" name="guardianPhone" error={form.fieldErrors.guardianPhone} />
+        <Input label="Emergency contact name (optional)" name="guardianName" error={form.fieldErrors.guardianName} />
+        <Input label="Emergency contact phone (optional)" name="guardianPhone" error={form.fieldErrors.guardianPhone} />
         {form.formError ? (
           <p className="sm:col-span-2 rounded-card border border-danger-500/30 bg-danger-50 px-4 py-3 text-sm text-danger-700" role="alert">
             {form.formError}

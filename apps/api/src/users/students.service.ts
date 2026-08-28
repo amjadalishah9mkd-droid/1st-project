@@ -187,13 +187,21 @@ export class StudentsService {
       });
     }
 
+    // M19-W2 (O-2): the guardian* columns are EMERGENCY-CONTACT data, not a
+    // guardian-access channel (GuardianLink is the only authorization
+    // mechanism). Exposure is minimized by existing policy scope: full-scope
+    // staff (ALL) and the student themself (OWN) see the contact details;
+    // ASSIGNED-scope viewers (teachers of a shared section) get null —
+    // they have no operational need for a family phone/email.
+    const includeEmergencyContact = scope === 'ALL' || scope === 'OWN';
+
     return {
       ...toItem(profile),
       dateOfBirth: profile.dateOfBirth?.toISOString().slice(0, 10) ?? null,
-      guardianName: profile.guardianName,
-      guardianPhone: profile.guardianPhone,
-      guardianEmail: profile.guardianEmail,
-      address: profile.address,
+      guardianName: includeEmergencyContact ? profile.guardianName : null,
+      guardianPhone: includeEmergencyContact ? profile.guardianPhone : null,
+      guardianEmail: includeEmergencyContact ? profile.guardianEmail : null,
+      address: includeEmergencyContact ? profile.address : null,
       enrollments: profile.enrollments.map((enrollment) => ({
         id: enrollment.id,
         sectionId: enrollment.sectionId,

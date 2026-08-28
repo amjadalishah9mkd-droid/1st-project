@@ -108,13 +108,37 @@ function fmt(iso: string): string {
   return new Date(iso).toUTCString();
 }
 
+/**
+ * M19-W2 — HTML entity escaping at the single rendering chokepoint.
+ * Template lines are plain text by design (no template intentionally emits
+ * markup), so EVERY interpolated value is escaped for text-node AND
+ * attribute context. Subjects/text bodies are not HTML and are covered by
+ * MailService.sanitize (CR/LF header-injection stripping).
+ */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** Only http(s) URLs may ever become clickable anchors. */
+const SAFE_LINK = /^https?:\/\//i;
+
 function layout(lines: string[]): { text: string; html: string } {
   const text = lines.join('\n\n');
   const html = `<div style="font-family:sans-serif;max-width:560px">${lines
     .map((line) =>
-      line.startsWith('http')
-        ? `<p><a href="${line}">${line}</a></p>`
-        : `<p>${line}</p>`,
+      // URL paragraphs render as anchors only for http(s); the escaped
+      // value is used in BOTH the href attribute and the text node, so
+      // quotes/ampersands can never break out of the attribute. Anything
+      // else — javascript:, data:, relative paths — renders as inert
+      // escaped text.
+      SAFE_LINK.test(line)
+        ? `<p><a href="${escapeHtml(line)}">${escapeHtml(line)}</a></p>`
+        : `<p>${escapeHtml(line)}</p>`,
     )
     .join('')}<p style="color:#888;font-size:12px">CampusOS — this link is personal; do not forward it.</p></div>`;
   return { text, html };

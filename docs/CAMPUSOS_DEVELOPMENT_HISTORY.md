@@ -149,7 +149,8 @@ Principles applied consistently from M0 onward:
 | M18-W3 | Academic records UI: term report card + transcript + print | `7f0062b` |
 | M18-W4 | M18 close-out: security audit, academic-records runbook | `3ca22e1` |
 | M19-W0 | Platform hardening discovery + design (`docs/M19_PLATFORM_HARDENING_DESIGN.md`) | `fb6c474` |
-| M19-W1 | Stored-file ownership authorization (P2-IDOR-1, migration #13) | *(this commit)* |
+| M19-W1 | Stored-file ownership authorization (P2-IDOR-1, migration #13) | `7fdec0e` |
+| M19-W2 | Input & guardian-privacy hardening (mail escaping, callback limiter, O-2) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2213,7 +2214,46 @@ malformed-URL rejection. M18 migration-count assertion updated 12 → >=12
 (forward-only migrations are expected to accrue). 554/554 tests, typecheck 0,
 13 migrations, prod builds green, stack healthy.
 
-*Last updated after M19-W1 (W2 backup/mail/limiter work NOT started).*
+## M19-W2 — Input & guardian-privacy hardening
+
+**A. Mail escaping.** All HTML entity-escaping now happens at the single
+`layout()` chokepoint in `mail/templates.ts`: every line is escaped for
+text-node AND attribute context; URL paragraphs become anchors only for
+`^https?://` (escaped in both href and text, so quotes/ampersands cannot
+break the attribute); `javascript:`/`data:` values render as inert escaped
+text. Plain-text bodies and subjects unchanged (subjects remain covered by
+MailService CR/LF sanitization). No template engine added; appearance for
+benign input identical.
+
+**B. Google callback limiter.** New `googleCallback` policy (60/min per IP,
+same engine and identity as `googleStart`), asserted before any state/cookie
+processing. Query params are attacker-controlled and deliberately excluded
+from the key — varying them cannot bypass the limit. Process-local by design
+(Blueprint §14; per-instance bound documented). 429 envelope carries no
+OAuth state, codes or cookies.
+
+**C. Emergency-contact channel (O-2, approved).** Audit confirmed the
+`StudentProfile.guardian*` columns are written only via tenant-scoped
+`users.manage` create/update, returned ONLY by the student-detail endpoint,
+absent from lists/exports/imports/dashboards/guardian APIs/mail, and used
+nowhere for authorization. Hardening: detail now returns the contact fields
+(and address) only to full-scope staff (`users.read` ALL) and the student
+themself (OWN); ASSIGNED-scope teachers keep record access but receive null
+PII. Columns relabeled as emergency-contact in schema comments, shared-type
+docs and web UI labels — names/data unchanged, GuardianLink remains the sole
+authorization channel. No migration needed (migration count stays 13).
+
+New suite `test/m19-w2-hardening.e2e-spec.ts` (14 tests): hostile
+HTML/quote/ampersand payloads render as entities; legitimate https anchors
+preserved; javascript:/data: URLs inert; attribute-breakout blocked; CR/LF
+injection flattened; callback throttling at threshold with param-variation
+bypass attempt, safe under-limit behavior; emergency-contact matrix
+(admin/self see values, ASSIGNED teacher nulls, cross-college 404, list
+minimization, matching contact email grants no guardian access, unlink
+leaves no residual access). 568/568 tests (42 suites), typecheck 0, 13
+migrations, prod builds green, stack healthy.
+
+*Last updated after M19-W2 (W3 backup/observability NOT started).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security

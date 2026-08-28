@@ -81,8 +81,8 @@ export default function StudentDetailPage() {
               ['Batch', student.batch],
               ['Department', student.departmentName],
               ['Date of birth', student.dateOfBirth ?? '—'],
-              ['Guardian', student.guardianName ?? '—'],
-              ['Guardian phone', student.guardianPhone ?? '—'],
+              ['Emergency contact', student.guardianName ?? '—'],
+              ['Emergency contact phone', student.guardianPhone ?? '—'],
               ['Address', student.address ?? '—'],
             ].map(([label, value]) => (
               <div key={label} className="flex justify-between gap-4">
@@ -205,7 +205,7 @@ function EditStudentDialog({
           error={form.fieldErrors.status}
         />
         <Input label="Phone" name="phone" defaultValue={student.phone ?? ''} error={form.fieldErrors.phone} />
-        <Input label="Guardian name" name="guardianName" defaultValue={student.guardianName ?? ''} error={form.fieldErrors.guardianName} />
+        <Input label="Emergency contact name" name="guardianName" defaultValue={student.guardianName ?? ''} error={form.fieldErrors.guardianName} />
         {form.formError ? (
           <p className="sm:col-span-2 rounded-card border border-danger-500/30 bg-danger-50 px-4 py-3 text-sm text-danger-700" role="alert">
             {form.formError}

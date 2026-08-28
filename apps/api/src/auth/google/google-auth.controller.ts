@@ -87,6 +87,10 @@ export class GoogleAuthController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
+    // M19-W2: brute-force/state-spam protection, symmetric with /start.
+    // Runs before any state/cookie processing; the 429 envelope carries no
+    // OAuth state, codes or cookies.
+    this.limiter.assert('googleCallback', requestMeta(req).ip);
     const stateCookie = req.cookies?.[this.google.stateCookieName()] as
       | string
       | undefined;

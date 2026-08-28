@@ -762,6 +762,11 @@ model StudentProfile {
   rollNo        String
   batch         String
   dateOfBirth   DateTime?     @db.Date
+  // M19-W2 (O-2): emergency-contact information ONLY. These columns never
+  // establish guardian identity or access — GuardianLink is the sole
+  // authorization channel. Kept under their historical names for
+  // compatibility; exposure is minimized in students.service (full-scope
+  // staff and the student themself).
   guardianName  String?
   guardianPhone String?
   guardianEmail String?

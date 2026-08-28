@@ -20,6 +20,16 @@ export const RATE_POLICIES = {
   inviteInfo: { limit: 30, windowMs: 60_000 },
   /** GET /auth/google/start — per IP. */
   googleStart: { limit: 60, windowMs: 60_000 },
+  /**
+   * GET /auth/google/callback — per IP (M19-W2). Mirrors googleStart:
+   * the caller is unauthenticated, so the source IP is the only stable
+   * limiting identity; query params (code/state/error) are attacker-
+   * controlled and deliberately NOT part of the key, so varying them
+   * cannot bypass the limit. Process-local like every policy here
+   * (Blueprint §14 — no Redis); per-instance bound documented in
+   * OPERATIONS.md.
+   */
+  googleCallback: { limit: 60, windowMs: 60_000 },
   /** POST /verification/evidence — per user (disk-fill protection). */
   evidenceUpload: { limit: 15, windowMs: 60 * 60_000 },
   /** POST /verification/claims — per user. */
