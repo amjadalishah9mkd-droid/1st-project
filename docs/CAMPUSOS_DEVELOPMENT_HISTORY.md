@@ -146,7 +146,8 @@ Principles applied consistently from M0 onward:
 | M18-W0 | Academic records design (`docs/M18_ACADEMIC_RECORDS_DESIGN.md`) | `9c4f31c` |
 | M18-W1 | Result finalization foundation: TermResult/CourseResult, finalize/amend engine | `c555035` |
 | M18-W2 | Report-card + transcript engines, batch finalization, VOID | `68ad6a8` |
-| M18-W3 | Academic records UI: term report card + transcript + print | *(this commit)* |
+| M18-W3 | Academic records UI: term report card + transcript + print | `7f0062b` |
+| M18-W4 | M18 close-out: security audit, academic-records runbook | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -1884,6 +1885,47 @@ register. No M18 work started.
 - **No backend/schema/permission changes**; tests stay 543/543; both
   prod builds green with the two new routes emitted.
 
+### M18-W4 — Security audit + runbook (M18 CLOSED)
+- **Source-level audit: PASS.** TermResult writes exist ONLY at the
+  four intended CAS/insert points inside the finalization service
+  (void CAS, supersede CAS, snapshot create, chain link); zero
+  CourseResult update/delete paths anywhere; 17 collegeId gates on the
+  M18 surface; live GradeBands consulted ONLY at finalization time —
+  read paths render frozen values exclusively; zero role conditionals;
+  zero client-controlled version/status/supersededById/finalizedById/
+  collegeId; no hardcoded GPA scale, thresholds, rank, standing,
+  repeat-course rules, dues gating or PDF dependencies anywhere; the
+  W3 UI performs no academic math and exposes no mutation controls.
+- **Two hardening assertions added** (genuine gaps): voiding a
+  SUPERSEDED historical version is refused (409), and amend/void are
+  403 for students/teachers/accountants — everything else was already
+  proven by the existing 15-test suite (concurrency winner/loser,
+  immutability under mark/catalog/band edits and reopen, VOID matrix,
+  guardian scopes, batch reuse of the single engine).
+- **OPERATIONS §27**: academic-records runbook — FINALIZED semantics,
+  finalize prerequisites (CLOSED term, published marks, typed
+  confirmation), batch partial-success interpretation, amendment
+  version-chain rules ("never delete history"), VOID scope and limits,
+  the honest GPA/CGPA reality (no scale → null; frozen points survive
+  later edits; never fabricate GPA), guardian access, never-do-this
+  list, full error-semantics table, and a 6-point verification
+  checklist.
+
+**M18 FINAL STATUS — CLOSED.** W0 design (`9c4f31c`) → W1 foundation
+(`c555035`: migration #12, TermResult/CourseResult, finalize/amend
+engine, results.finalize) → W2 engines (`68ad6a8`: report/transcript
+reads, batch, VOID, frozen-CGPA) → W3 UI (`7f0062b`: report-card +
+transcript pages, browser-print, guardian/student surfaces) → W4
+close-out (this commit). Final: 543/543 tests (40 suites), 12
+migrations, typecheck 0, builds green. Deferred/open (unchanged):
+institutional grade-point scale (O-4 — GPA/CGPA null until
+configured), repeat-course CGPA policy (O-11), rank/standing,
+server-side PDF, advanced academic reporting, refund webhooks +
+dashboard registration (externally blocked), provider polling,
+receipts platform, maker-checker, P2-IDOR-1, per-college webhook
+secrets, monitoring/backup automation, P3 register. No M19 work
+started.
+
 ## 7. Architecture Evolution
 
 Core request path (unchanged in shape since M1, extended in depth):
@@ -2137,12 +2179,14 @@ milestone (see roadmap).
 
 ## 14. Current System State
 
-*Last updated after M18-W3.*
+*Last updated after M18-W4 (M18 closed).*
 
-- **Current milestone**: **M17 COMPLETE (W0–W4)** — term lifecycle
-  (ACTIVE⇄CLOSED) with full academic/finance enforcement, net-paid
-  consolidation, lifecycle UI and runbook; M16 refunds+accountant, M15
-  calendar/rollover and M14 payments remain complete (webhook delivery
+- **Current milestone**: **M18 COMPLETE (W0–W4)** — academic records:
+  immutable finalized term results, versioned amendments, VOID,
+  transcripts with frozen credit-weighted GPA (null until the
+  institution configures its scale), report-card/transcript UI with
+  browser-print; M17 term lifecycle, M16 refunds+accountant, M15
+  rollover and M14 payments all remain complete (webhook delivery
   still pending provider-dashboard endpoint registration).
 - **Latest commit**: the M15-W4 close-out commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`

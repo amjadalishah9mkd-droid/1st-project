@@ -707,6 +707,39 @@ describe('M18-W1 — result finalization', () => {
             .send({ reason: 'again', confirmLabel: termLabel })
         ).status,
       ).toBe(409);
+      // W4 hardening: an explicitly SUPERSEDED historical version can
+      // never be voided through the endpoint either.
+      const supersededRow = await prisma.termResult.findFirstOrThrow({
+        where: { termId, status: 'SUPERSEDED' },
+      });
+      expect(
+        (
+          await http
+            .post(`/api/v1/results/records/${supersededRow.id}/void`)
+            .set(auth(adminToken))
+            .send({ reason: 'history attack', confirmLabel: termLabel })
+        ).status,
+      ).toBe(409);
+      // W4 hardening: amend/void are results.finalize surfaces — students
+      // and other non-authorized principals are refused outright.
+      for (const token of [studentToken, teacherToken, accountantToken]) {
+        expect(
+          (
+            await http
+              .post(`/api/v1/results/records/${active.id}/void`)
+              .set(auth(token))
+              .send({ reason: 'nope nope', confirmLabel: termLabel })
+          ).status,
+        ).toBe(403);
+        expect(
+          (
+            await http
+              .post(`/api/v1/results/records/${active.id}/amend`)
+              .set(auth(token))
+              .send({ reason: 'nope nope', confirmLabel: termLabel })
+          ).status,
+        ).toBe(403);
+      }
       // exactly one audit
       expect(
         await prisma.auditLog.count({

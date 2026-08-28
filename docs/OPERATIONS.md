@@ -904,3 +904,117 @@ only path that preserves the invariants and the audit trail.
 6. Rollover result recorded correctly if closure came from the rollover
    flow.
 7. No cross-tenant visibility anywhere (foreign terms remain 404).
+
+## 27. Academic records runbook (M18)
+
+Result finalization/amendment/void require `results.finalize` (ADMIN
+via the permission matrix). Report cards and transcripts are read
+through the existing `results.read` scopes: students read only
+themselves (OWN), guardians read linked children (CHILD via an ACTIVE
+GuardianLink, strictly read-only), staff per the existing matrix.
+Everything is scoped to the operator's own college; foreign students,
+terms and records are indistinguishable 404s.
+
+### What FINALIZED means
+
+A FINALIZED `TermResult` is an **immutable snapshot** of one student's
+one-term academic outcome, computed at finalization time from PUBLISHED
+exams' locked marks plus term attendance, with course code/title/
+credits frozen onto its `CourseResult` lines. It is the historical
+source of truth: report cards and transcripts render snapshots — live
+marks are working data, never historical records. Later mark edits,
+catalog edits, GradeBand edits and term reopening **cannot** change an
+existing snapshot.
+
+### Finalizing a term result
+
+Prerequisites: the term is **CLOSED** (`TERM_NOT_CLOSED` otherwise —
+the intended lifecycle is publish exams → close term → finalize) and
+the student has at least one published exam mark in the term
+(`NO_PUBLISHED_RESULTS` otherwise). The operation requires typing the
+exact term label (server-validated). Success emits one
+`results.finalized` audit event (student/term/version ids only).
+Exactly one FINALIZED snapshot can exist per student per term — the
+database enforces it; a concurrent duplicate simply receives
+`ALREADY_FINALIZED` and creates nothing.
+
+### Batch finalization
+
+`finalize-batch` runs the SAME single-student engine once per student,
+each in its own atomic transaction, and returns per-student outcomes.
+Partial success is normal: inspect the `outcomes` array —
+`ALREADY_FINALIZED` and `NO_PUBLISHED_RESULTS` entries are expected
+conditions, not failures to escalate. Re-running a batch is safe.
+
+### Amendments (corrections)
+
+To correct a finalized result: fix the underlying marks (reopen the
+term if needed — reopening never touches snapshots), then **amend** the
+active record. Amendment recomputes from current data and creates
+version N+1; the previous version becomes SUPERSEDED — preserved
+forever, still queryable, chained to its replacement. The ACTIVE
+version is always the single FINALIZED row for that student/term.
+Superseded versions can never be amended again or voided. **Never
+delete historical versions to "clean up" — the chain is the audit
+trail.** Each amendment emits `results.amended`.
+
+### VOID
+
+VOID administratively invalidates the ACTIVE finalized version (typed
+confirmation + reason; `results.voided` audited). It removes the record
+from transcripts and frees the slot for a fresh finalization — but the
+row and its course lines remain in the database permanently. VOID does
+NOT touch marks, exams, the term, or any other version. Re-voiding and
+voiding SUPERSEDED history are refused.
+
+### GPA / CGPA reality
+
+Grade points come from `GradeBand.gradePoint` **at finalization time**
+and are frozen into the snapshot. The shipped seed defines NO grade
+points — until the institution configures its official scale, GPA,
+CGPA, credits-earned and pass/fail are honestly `null` and the UI shows
+"Not configured". **Never fabricate or manually enter GPA values.**
+Once configured, new finalizations compute the credit-weighted GPA;
+historical snapshots keep the points they were frozen with, even if the
+scale is later edited. CGPA appears only when every finalized course
+line carries a point.
+
+### Guardian access
+
+An ACTIVE GuardianLink grants CHILD read access to the linked student's
+report card and transcript — read-only, no exceptions. Unlinked
+guardians receive the standard 404. Revoking the link removes access
+immediately.
+
+### Never do this
+
+- Never manually mutate `TermResult`/`CourseResult` rows in production.
+- Never delete historical result rows to "correct" a grade — amend.
+- Never hand-edit GPA/grade values.
+- Before any operational intervention: check the audit history
+  (`results.finalized/amended/voided`) and verify the college/student
+  identity you are acting on.
+
+### Error semantics
+
+| Code | Meaning | Action |
+|---|---|---|
+| `NOT_FINALIZED` (404) | no active snapshot for that term | finalize first (or nothing to show — expected) |
+| `TERM_NOT_CLOSED` (409) | finalize attempted on an ACTIVE term | close the term (OPERATIONS §26), retry |
+| `ALREADY_FINALIZED` (409) | active snapshot exists (incl. concurrency losers) | amend instead of re-finalizing |
+| `NO_PUBLISHED_RESULTS` (400) | student has no published marks in the term | publish exams first, or skip the student |
+| `INVALID_TRANSITION` (409) | amend/void on a non-active version | act on the ACTIVE version only |
+| `CONFIRMATION_MISMATCH` (400) | typed label wrong | type the exact term label |
+| 403 / 404 | authorization / foreign or missing target | verify permission, college, ids |
+| GPA shows "Not configured" | grade-point scale undefined | configure `GradeBand.gradePoint` institutionally; do not improvise |
+
+### Post-finalization verification checklist
+
+1. TermResult exists, status FINALIZED, expected version.
+2. CourseResult lines match the published marks at finalization time.
+3. `results.finalized` audit row present.
+4. Report card and transcript render the snapshot (spot-check one
+   value against the frozen row, not live marks).
+5. Guardian/student visibility follows the scopes.
+6. After an amendment: old version SUPERSEDED and chained, new version
+   ACTIVE, transcript shows only the new one.
