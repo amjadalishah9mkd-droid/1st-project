@@ -312,6 +312,9 @@ describe('M16-W2 — refunds', () => {
     await prisma.refundAttempt.deleteMany({
       where: { OR: [{ invoiceId: { in: madeInvoiceIds } }, { collegeId: rivalCollegeId }] },
     });
+    // M20-W1: issued documents Restrict money-row deletion — clear them first.
+    await prisma.financeDocument.deleteMany({ where: { invoiceId: { in: madeInvoiceIds } } });
+    await prisma.financeDocument.deleteMany({ where: { payment: { id: rivalPaymentId } } });
     await prisma.refund.deleteMany({ where: { invoiceId: { in: madeInvoiceIds } } });
     await prisma.refund.deleteMany({ where: { payment: { id: rivalPaymentId } } });
     await prisma.paymentAttempt.deleteMany({

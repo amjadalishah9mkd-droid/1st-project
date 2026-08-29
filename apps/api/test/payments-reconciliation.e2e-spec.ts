@@ -227,6 +227,8 @@ describe('M14-W5 — admin reconciliation', () => {
     await prisma.paymentAttempt.deleteMany({
       where: { OR: [{ invoiceId: { in: madeInvoiceIds } }, { collegeId: rivalCollegeId }] },
     });
+    // M20-W1: issued documents Restrict money-row deletion — clear them first.
+    await prisma.financeDocument.deleteMany({ where: { invoiceId: { in: madeInvoiceIds } } });
     await prisma.payment.deleteMany({ where: { invoiceId: { in: madeInvoiceIds } } });
     await prisma.invoice.deleteMany({
       where: { OR: [{ id: { in: madeInvoiceIds } }, { collegeId: rivalCollegeId }] },

@@ -317,6 +317,7 @@ model College {
   identityClaims    StudentIdentityClaim[]
   evidenceFiles     EvidenceFile[]
   storedFiles       StoredFile[]
+  financeDocuments  FinanceDocument[]
   guardianLinks     GuardianLink[]
   paymentAttempts   PaymentAttempt[]
   refundAttempts    RefundAttempt[]
@@ -364,6 +365,8 @@ model User {
   evidenceFiles          EvidenceFile[]
   storedFilesOwned       StoredFile[]           @relation("StoredFileOwner")
   storedFilesCreated     StoredFile[]           @relation("StoredFileCreator")
+  financeDocsIssued      FinanceDocument[]      @relation("FinanceDocumentIssuer")
+  financeDocsVoided      FinanceDocument[]      @relation("FinanceDocumentVoider")
   guardianLinks          GuardianLink[]         @relation("GuardianLinks")
   guardianLinksCreated   GuardianLink[]         @relation("GuardianLinkCreator")
 
@@ -1127,6 +1130,7 @@ model Invoice {
   attempts       PaymentAttempt[]
   refunds        Refund[]
   refundAttempts RefundAttempt[]
+  documents      FinanceDocument[]
 
   @@unique([collegeId, invoiceNo])
   @@index([studentId, status])
@@ -1148,6 +1152,7 @@ model Payment {
   attempt        PaymentAttempt?
   refunds        Refund[]
   refundAttempts RefundAttempt[]
+  receipt        FinanceDocument? @relation("PaymentReceipt")
 
   @@index([invoiceId])
 }
@@ -1287,7 +1292,82 @@ model Refund {
 
   attempt RefundAttempt?
 
+  document FinanceDocument? @relation("RefundDocument")
+
   @@index([paymentId])
+  @@index([invoiceId])
+}
+
+// M20-W1 — immutable finance documents (Option B, docs/M20_FINANCE_DOCUMENTS_DESIGN.md).
+// One PAYMENT_RECEIPT per settled Payment, one REFUND_DOCUMENT per Refund
+// (paymentId/refundId unique = DB idempotency). Rows are historical
+// snapshots: every display/financial value below is FROZEN at issuance and
+// never reconstructed from mutable live data (M18 principle). The only
+// lifecycle transition is ACTIVE → VOID (CAS, audited, reason required);
+// numbers are per-college unique and never reused. Deletion is not an
+// application operation (Restrict FKs on money rows; documents outlive
+// staff accounts via SetNull).
+enum FinanceDocumentKind {
+  PAYMENT_RECEIPT
+  REFUND_DOCUMENT
+}
+
+enum FinanceDocumentStatus {
+  ACTIVE
+  VOID
+}
+
+model FinanceDocument {
+  id        String                @id @default(cuid())
+  collegeId String
+  kind      FinanceDocumentKind
+  status    FinanceDocumentStatus @default(ACTIVE)
+
+  // Immutable per-college number: RCP-/RFD-<year>-<seq5>.
+  receiptNo String
+  year      Int
+  sequence  Int
+
+  // Source money rows (exactly one of paymentId/refundId per kind).
+  paymentId String? @unique
+  refundId  String? @unique
+  invoiceId String
+
+  // Frozen issuance-time snapshot (NEVER re-read from live rows).
+  studentName     String
+  admissionNo     String
+  rollNo          String
+  invoiceNo       String
+  structureName   String
+  collegeName     String
+  collegeCode     String
+  amount          Decimal  @db.Decimal(10, 2)
+  method          String
+  referenceMasked String?
+  paidAt          DateTime
+  invoiceAmount   Decimal  @db.Decimal(10, 2)
+  balanceAfter    Decimal  @db.Decimal(10, 2)
+  receivedByName  String?
+  parentReceiptNo String?
+
+  issuedById String?
+  issuedAt   DateTime @default(now())
+  voidedById String?
+  voidedAt   DateTime?
+  voidReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  college  College  @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  payment  Payment? @relation("PaymentReceipt", fields: [paymentId], references: [id], onDelete: Restrict)
+  refund   Refund?  @relation("RefundDocument", fields: [refundId], references: [id], onDelete: Restrict)
+  invoice  Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  issuedBy User?    @relation("FinanceDocumentIssuer", fields: [issuedById], references: [id], onDelete: SetNull)
+  voidedBy User?    @relation("FinanceDocumentVoider", fields: [voidedById], references: [id], onDelete: SetNull)
+
+  @@unique([collegeId, receiptNo])
+  @@index([collegeId, kind])
   @@index([invoiceId])
 }
 

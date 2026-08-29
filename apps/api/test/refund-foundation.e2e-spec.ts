@@ -104,6 +104,8 @@ describe('M16-W1 — refund foundation', () => {
 
   afterAll(async () => {
     await prisma.refundAttempt.deleteMany({ where: { paymentId } });
+    // M20-W1: issued documents Restrict money-row deletion — clear them first.
+    await prisma.financeDocument.deleteMany({ where: { invoiceId } });
     await prisma.refund.deleteMany({ where: { paymentId } });
     await prisma.payment.deleteMany({ where: { invoiceId } });
     await prisma.invoice.deleteMany({ where: { id: invoiceId } });

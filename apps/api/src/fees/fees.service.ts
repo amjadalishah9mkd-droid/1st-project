@@ -26,6 +26,7 @@ import { EventsService } from '../events/events.module';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 import { TermLifecycleService } from '../academics/term-lifecycle.service';
 import { netPaid } from './money';
+import { FinanceDocumentsService } from './finance-documents.service';
 import { pageArgs, pageMeta } from '../common/pagination/pagination';
 
 function forbidden(): ForbiddenException {
@@ -81,6 +82,7 @@ export class FeesService {
     private readonly policy: PolicyService,
     private readonly audit: AuditService,
     private readonly events: EventsService,
+    private readonly documents: FinanceDocumentsService,
   ) {}
 
   // ── Structures ─────────────────────────────────────────────
@@ -555,7 +557,7 @@ export class FeesService {
 
       const newPaid = paidAmount(row) + input.amount;
       const newStatus = newPaid >= Number(row.amount) ? 'PAID' : 'PARTIAL';
-      await tx.payment.create({
+      const payment = await tx.payment.create({
         data: {
           invoiceId,
           amount: input.amount,
@@ -568,6 +570,12 @@ export class FeesService {
       await tx.invoice.update({
         where: { id: invoiceId },
         data: { status: newStatus },
+      });
+      // M20-W1: the immutable receipt is issued in the SAME transaction as
+      // the money event (snapshot at issuance — O-1/O-4).
+      await this.documents.issueReceiptInTx(tx, {
+        paymentId: payment.id,
+        actorId: user.id,
       });
     });
     await this.audit.log({

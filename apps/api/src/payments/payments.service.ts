@@ -15,6 +15,7 @@ import type {
 } from '@campusos/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { netPaid } from '../fees/money';
+import { FinanceDocumentsService } from '../fees/finance-documents.service';
 import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
 import { EventsService } from '../events/events.module';
@@ -72,6 +73,7 @@ export class PaymentsService {
     private readonly audit: AuditService,
     private readonly events: EventsService,
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGatewayAdapter,
+    private readonly documents: FinanceDocumentsService,
   ) {}
 
   /**
@@ -489,6 +491,12 @@ export class PaymentsService {
       const settled = await tx.paymentAttempt.update({
         where: { id: attemptId },
         data: { paymentId: payment.id, overpaid },
+      });
+      // M20-W1: immutable receipt in the same settlement transaction
+      // (gateway settlement — no staff actor).
+      await this.documents.issueReceiptInTx(tx, {
+        paymentId: payment.id,
+        actorId: null,
       });
       const result = { ...settled, justSettled: true };
 

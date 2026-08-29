@@ -153,7 +153,8 @@ Principles applied consistently from M0 onward:
 | M19-W2 | Input & guardian-privacy hardening (mail escaping, callback limiter, O-2) | `9b19017` |
 | M19-W3 | Operational reliability: backup automation, restore drill, /health/ops | `d726952` |
 | M19-W4 | Final security audit, runbook close-out — **M19 CLOSED** | `cd7b10c` |
-| M20-W0 | Finance documents discovery + design (`docs/M20_FINANCE_DOCUMENTS_DESIGN.md`) | *(this commit)* |
+| M20-W0 | Finance documents discovery + design (`docs/M20_FINANCE_DOCUMENTS_DESIGN.md`) | `c491c00` |
+| M20-W1 | Finance document foundation (migration #14, issuance engine) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2353,7 +2354,56 @@ immutable rows). Implementation was NOT started: no schema, migration,
 source, UI, test, seed, or package changes — this workstream is
 documentation only.
 
-*Last updated after M20-W0 (design only — M20 NOT implemented).*
+## M20-W1 — Finance document foundation
+
+O-1…O-15 approved as designed. Migration #14 (`m20_finance_documents`)
+adds `FinanceDocument` + `FinanceDocumentKind`/`FinanceDocumentStatus`:
+per-college unique `receiptNo` (`RCP-/RFD-<year>-<seq5>`, stored
+`year`/`sequence`), `paymentId`/`refundId` UNIQUE (one document per money
+row — DB-enforced idempotency), Restrict FKs on college/invoice/payment/
+refund (documents are undeletable historical evidence), SetNull on
+issuer/voider, and the full frozen snapshot (studentName, admissionNo,
+rollNo, invoiceNo, structureName, collegeName/code, amount, method,
+masked reference, paidAt, invoiceAmount, balanceAfter, receivedByName,
+parentReceiptNo).
+
+`FinanceDocumentsService` (fees module): documents are issued INSIDE the
+same transaction as every money event — manual `recordPayment`, gateway
+`settleAttempt`, and both refund-success paths (PROVIDER + RECORDED) —
+snapshotting at issuance under the existing invoice `FOR UPDATE` lock.
+Numbering is `max(sequence)+1` under a per-(college, kind, year)
+`pg_advisory_xact_lock` (never count-based), taken strictly AFTER the
+invoice lock; the unique index is the backstop and the standalone paths
+retry on P2002 with a bumped sequence. Historical (pre-M20) rows get
+on-demand issuance: POST `fees/payments/:id/receipt` and
+`fees/refunds/:id/document` (`fees.manage`), replays 409 ALREADY_ISSUED.
+Void: POST `fees/documents/:id/void` (`fees.manage`, reason ≥5 chars,
+CAS ACTIVE→VOID only, number consumed forever, `fees.receipt_voided`
+audit in-tx). Issuance audits `fees.receipt_issued` in-tx. Refund
+documents reference the parent receiptNo and NEVER touch the payment
+receipt (O-5); the internal refund reason never enters a document.
+No new permissions, zero role conditionals, collegeId always
+server-derived, no client-controlled number/status/audit identity.
+
+New suite `test/finance-documents.e2e-spec.ts` (14 tests, real Postgres):
+migration structures; auto-issuance on manual recording with full frozen
+payload + masked reference; historical issuance + concurrent duplicate
+(one 201/one 409, one row, one audit); 4-way REAL concurrent issuance
+(distinct numbers); per-college numbering independence; deterministic
+retry-on-P2002 via an out-of-band colliding number; cross-college 404
+indistinguishable from missing; authz matrix (401/403/teacher/student);
+RECORDED refund auto-document linked to parent receipt with receipt
+untouched; historical refund document + 409; full-snapshot immutability
+under renames/later money (byte-identical row); void CAS race +
+INVALID_TRANSITION + exactly-one audit + number consumption; financial
+isolation (Payment/Invoice byte-identical after issue+void); failed
+issuance emits no audit + hostile-body override attempt ignored.
+Existing finance suites' cleanups updated to delete documents before
+money rows (FK Restrict) — assertions untouched. 588/588 tests
+(44 suites), typecheck 0, 14 migrations, prod builds green, stack
+healthy, demo logins verified. W2 (read API) NOT started.
+
+*Last updated after M20-W1 (W2 read API NOT started).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2366,8 +2416,7 @@ documentation only.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M20 status**: DESIGN/DISCOVERY COMPLETE only — see M20-W0 entry;
-  awaiting O-1…O-15 approvals before W1.
+- **M20 status**: W0 design + W1 foundation complete (migration #14, issuance engine). W2 read API / W3 print UI / W4 close-out pending.
 - **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:
   immutable finalized term results, versioned amendments, VOID,
   transcripts with frozen credit-weighted GPA (null until the

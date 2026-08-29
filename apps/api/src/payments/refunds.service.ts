@@ -16,6 +16,7 @@ import type {
 } from '@campusos/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { netPaid } from '../fees/money';
+import { FinanceDocumentsService } from '../fees/finance-documents.service';
 import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
 import { EventsService } from '../events/events.module';
@@ -77,6 +78,7 @@ export class RefundsService {
     private readonly audit: AuditService,
     private readonly events: EventsService,
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGatewayAdapter,
+    private readonly documents: FinanceDocumentsService,
   ) {}
 
   // ── shared helpers ───────────────────────────────────────────
@@ -407,6 +409,11 @@ export class RefundsService {
         include: { invoice: { select: { invoiceNo: true } } },
       });
       await this.recomputeInvoiceStatus(tx, attempt.invoiceId);
+      // M20-W1: immutable refund document in the same transaction.
+      await this.documents.issueRefundDocumentInTx(tx, {
+        refundId: refund.id,
+        actorId: user.id,
+      });
 
       await this.audit.log({
         collegeId: attempt.collegeId,
@@ -596,6 +603,11 @@ export class RefundsService {
         include: { invoice: { select: { invoiceNo: true } } },
       });
       await this.recomputeInvoiceStatus(tx, attempt.invoiceId);
+      // M20-W1: immutable refund document in the same transaction.
+      await this.documents.issueRefundDocumentInTx(tx, {
+        refundId: refund.id,
+        actorId: user.id,
+      });
       await this.audit.log({
         collegeId: attempt.collegeId,
         actorId: user.id,

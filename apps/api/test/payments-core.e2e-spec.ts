@@ -197,6 +197,8 @@ describe('M14-W1 — payments settlement core', () => {
     const invoiceIds = [...madeInvoiceIds, rivalInvoiceId];
     await prisma.gatewayEvent.deleteMany({});
     await prisma.paymentAttempt.deleteMany({ where: { invoiceId: { in: invoiceIds } } });
+    // M20-W1: issued documents Restrict money-row deletion — clear them first.
+    await prisma.financeDocument.deleteMany({ where: { invoiceId: { in: invoiceIds } } });
     await prisma.payment.deleteMany({ where: { invoiceId: { in: invoiceIds } } });
     await prisma.invoice.deleteMany({ where: { id: { in: invoiceIds } } });
     await prisma.guardianLink.deleteMany({ where: { guardianUserId: { in: madeUserIds } } });

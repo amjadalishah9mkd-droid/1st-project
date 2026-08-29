@@ -126,6 +126,8 @@ describe('M14-W6 — settlement concurrency hardening', () => {
     await prisma.paymentAttempt.deleteMany({
       where: { invoiceId: { in: madeInvoiceIds } },
     });
+    // M20-W1: issued documents Restrict money-row deletion — clear them first.
+    await prisma.financeDocument.deleteMany({ where: { invoiceId: { in: madeInvoiceIds } } });
     await prisma.payment.deleteMany({ where: { invoiceId: { in: madeInvoiceIds } } });
     await prisma.notification.deleteMany({
       where: { type: { in: ['payment.succeeded', 'payment.failed'] } },

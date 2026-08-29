@@ -49,6 +49,10 @@ describe('M6 — Fees', () => {
     demoStudentUserId = studentProfile.userId;
 
     cleanups.push(async () => {
+      // M20-W1: issued documents Restrict money-row deletion — clear first.
+      await prisma.financeDocument.deleteMany({
+        where: { invoice: { structure: { name: { contains: suffix } } } },
+      });
       await prisma.payment.deleteMany({
         where: { invoice: { structure: { name: { contains: suffix } } } },
       });

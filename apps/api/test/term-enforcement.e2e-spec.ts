@@ -234,6 +234,8 @@ describe('M17-W2 — closed-term enforcement & net accounting', () => {
 
   afterAll(async () => {
     await prisma.refundAttempt.deleteMany({ where: { invoiceId } });
+    // M20-W1: issued documents Restrict money-row deletion — clear them first.
+    await prisma.financeDocument.deleteMany({ where: { invoiceId } });
     await prisma.refund.deleteMany({ where: { invoiceId } });
     await prisma.payment.deleteMany({ where: { invoiceId } });
     await prisma.invoice.deleteMany({ where: { structureId } });
