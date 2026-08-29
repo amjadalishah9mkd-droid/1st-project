@@ -150,7 +150,8 @@ Principles applied consistently from M0 onward:
 | M18-W4 | M18 close-out: security audit, academic-records runbook | `3ca22e1` |
 | M19-W0 | Platform hardening discovery + design (`docs/M19_PLATFORM_HARDENING_DESIGN.md`) | `fb6c474` |
 | M19-W1 | Stored-file ownership authorization (P2-IDOR-1, migration #13) | `7fdec0e` |
-| M19-W2 | Input & guardian-privacy hardening (mail escaping, callback limiter, O-2) | *(this commit)* |
+| M19-W2 | Input & guardian-privacy hardening (mail escaping, callback limiter, O-2) | `9b19017` |
+| M19-W3 | Operational reliability: backup automation, restore drill, /health/ops | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2253,7 +2254,41 @@ minimization, matching contact email grants no guardian access, unlink
 leaves no residual access). 568/568 tests (42 suites), typecheck 0, 13
 migrations, prod builds green, stack healthy.
 
-*Last updated after M19-W2 (W3 backup/observability NOT started).*
+## M19-W3 — Operational reliability (O-3/O-4)
+
+**Backup automation (O-3).** New `backup` sidecar in
+docker-compose.alloy.yaml (postgres:16 image → matching pg_dump) runs
+`scripts/backup/backup-loop.sh`: custom-format dump on start + every 24h
+into the `pgbackups` named volume (`/var/backups/campusos`), 14-day
+pattern-scoped rotation. Dumps are written as `.partial`, TOC-verified with
+`pg_restore --list`, then renamed — a crashed dump never counts as a
+backup. `.gitignore` blocks `*.dump`/`backups/`. Destination = local named
+volume per O-3; off-host copies stay a §6 deployment concern.
+
+**Restore drill.** `scripts/backup/restore-verify.sh` restores the newest
+dump into the hard-coded disposable `campusos_restore_verify` database,
+asserts representative data (colleges, users, ≥13 finished migrations, all
+four demo accounts), drops the scratch DB. Executed for real in the
+sandbox: PASS; live demo DB verified byte-identical before/after
+(row counts + user-email md5 checksum), all four demo logins 200.
+
+**Deep health (O-4 internal V1).** `GET /health/ops` gated by existing
+`settings.manage` (PolicyService; public `/health` unchanged): database
+up/down, migrations applied/unfinished (from `_prisma_migrations`), backup
+freshness from the api container's read-only pgbackups mount
+(configured/count/latestAgeSeconds/stale vs 26h threshold, `.partial`
+ignored), uploadsWritable, uptime; overall `degraded` on any failure
+signal. Response carries no credentials, DSNs, paths or filenames
+(test-asserted). New shared `OpsHealthStatus` type. OPERATIONS.md §28
+runbook (procedures, failure table, never-do list, V1 limitations).
+
+New suite `test/ops-health.e2e-spec.ts` (6 tests): 401/403 gates, healthy
+report shape, fresh-backup reporting, stale-backup degradation,
+missing-directory degradation, no-sensitive-output assertion. 574/574
+tests (43 suites), typecheck 0, 13 migrations, prod builds green, all four
+containers up (api/web/postgres healthy + backup sidecar).
+
+*Last updated after M19-W3 (W4 close-out NOT started).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security

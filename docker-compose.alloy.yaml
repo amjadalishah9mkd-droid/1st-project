@@ -17,6 +17,31 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  # M19-W3 — automated pg_dump backups (O-3): custom-format dump on start
+  # and every 24h into the pgbackups named volume, 14-day rotation. The same
+  # postgres image guarantees a matching pg_dump version. Restore drill:
+  # scripts/backup/restore-verify.sh (see docs/OPERATIONS.md §28).
+  backup:
+    image: postgres:16-bookworm
+    network_mode: host
+    environment:
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: campusos
+      PGPASSWORD: campusos
+      PGDATABASE: campusos
+      BACKUP_DIR: /var/backups/campusos
+      RETENTION_DAYS: "14"
+      BACKUP_INTERVAL_SECONDS: "86400"
+    volumes:
+      - ./scripts/backup:/scripts:ro
+      - pgbackups:/var/backups/campusos
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: bash /scripts/backup-loop.sh
+    restart: unless-stopped
+
   api:
     image: node:22-bookworm
     working_dir: /workspace
@@ -24,10 +49,13 @@ services:
     volumes:
       - .:/workspace
       - api_node_modules_cache:/workspace/.docker-cache
+      # Read-only view of backups for /health/ops freshness reporting.
+      - pgbackups:/var/backups/campusos:ro
     environment:
       DATABASE_URL: postgresql://campusos:campusos@127.0.0.1:5432/campusos
       API_PORT: "4000"
       SEED_DEMO: "true"
+      BACKUP_DIR: /var/backups/campusos
       IS_ALLOY: ${IS_ALLOY:-false}
       NPM_CONFIG_FUND: "false"
       NPM_CONFIG_AUDIT: "false"
@@ -93,4 +121,5 @@ services:
 
 volumes:
   pgdata:
+  pgbackups:
   api_node_modules_cache:

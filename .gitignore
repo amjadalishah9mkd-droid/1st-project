@@ -22,3 +22,5 @@ coverage/
 
 # db (local volumes are docker-managed; guard against accidental dumps)
 *.sqlite
+*.dump
+backups/

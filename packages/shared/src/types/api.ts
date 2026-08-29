@@ -88,3 +88,29 @@ export interface HealthStatus {
   database: 'up' | 'down';
   timestamp: string;
 }
+
+/**
+ * M19-W3 — deep operational health (GET /health/ops, settings.manage only).
+ * Internal-only V1: no external monitoring integration. Never contains
+ * credentials, connection strings or filesystem paths.
+ */
+export interface OpsHealthStatus {
+  status: 'ok' | 'degraded';
+  database: 'up' | 'down';
+  migrations: {
+    applied: number;
+    /** Rows with no finish or a rollback — must be 0 on a healthy system. */
+    unfinished: number;
+  };
+  backups: {
+    /** False when no backup directory is mounted (e.g. local test runs). */
+    configured: boolean;
+    count: number;
+    latestAgeSeconds: number | null;
+    /** True when the newest backup is older than the freshness threshold. */
+    stale: boolean;
+  };
+  uploadsWritable: boolean;
+  uptimeSeconds: number;
+  timestamp: string;
+}

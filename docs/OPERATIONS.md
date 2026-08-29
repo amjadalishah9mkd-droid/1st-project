@@ -1018,3 +1018,82 @@ immediately.
 5. Guardian/student visibility follows the scopes.
 6. After an amendment: old version SUPERSEDED and chained, new version
    ACTIVE, transcript shows only the new one.
+
+## 28. Backup automation & operational health runbook (M19-W3)
+
+### What runs automatically
+
+The `backup` sidecar (docker-compose.alloy.yaml) runs
+`scripts/backup/backup-loop.sh`: one `pg_dump --format=custom` immediately
+on start and one every 24h (`BACKUP_INTERVAL_SECONDS`), written to the
+`pgbackups` named volume at `/var/backups/campusos` as
+`campusos-<UTC-stamp>.dump`. Each dump is written as a `.partial` file,
+TOC-verified with `pg_restore --list`, and only then renamed — a crashed
+dump can never masquerade as a valid backup. Retention is bounded:
+`campusos-*.dump` older than `RETENTION_DAYS` (default 14) are pruned; the
+prune pattern is fixed and can never delete anything else. A failed cycle
+logs and retries next interval; it never crashes the sidecar.
+
+The volume lives outside the source tree; `.gitignore` additionally blocks
+`*.dump` and `backups/` so an artifact can never be committed. Off-host
+copies remain a deployment concern (§6) — this V1 destination is the local
+named volume by decision O-3.
+
+### Restore procedure (real incident)
+
+Follow §7 exactly (stop api/web → drop/create → `pg_restore --no-owner` →
+`prisma migrate status` → start). Dumps produced by the sidecar are the
+same custom format §7 expects.
+
+### Restore drill (quarterly, and after any Postgres change)
+
+```sh
+docker compose -f docker-compose.alloy.yaml exec -T backup \
+  bash /scripts/restore-verify.sh
+```
+
+The drill restores the NEWEST dump into a disposable database
+(`campusos_restore_verify`, name fixed in the script), asserts
+representative data (colleges > 0, users > 3, ≥13 finished migrations, all
+four demo accounts), then drops the scratch DB. It never writes to the live
+`campusos` database. PASS output ends with
+`restore-verify: PASS — scratch database dropped, live database untouched`.
+
+### Operational health: GET /api/v1/health/ops
+
+Requires `settings.manage` (ADMIN). Public `GET /health` is unchanged.
+Reports: `database` up/down; `migrations.applied` / `migrations.unfinished`
+(unfinished must be 0); `backups` {configured, count, latestAgeSeconds,
+stale} read from the api container's read-only `pgbackups` mount
+(`BACKUP_DIR`); `uploadsWritable`; `uptimeSeconds`. `status` becomes
+`degraded` when the db is down, any migration is unfinished, uploads are
+unwritable, or backups are configured but stale (older than
+`BACKUP_MAX_AGE_SECONDS`, default 26h — one missed daily cycle). The
+response never contains credentials, DSNs, paths or filenames.
+
+### Failure interpretation
+
+| Signal | Meaning | Action |
+|---|---|---|
+| `backups.stale: true` | newest dump older than threshold | `docker logs <backup container>`; check disk; restart sidecar |
+| `backups.configured: false` | no BACKUP_DIR mounted | expected in bare test runs; in compose, check the api volumes |
+| `backups.count: 0` with configured | volume empty/unreadable | sidecar never succeeded — inspect logs |
+| `migrations.unfinished > 0` | crashed/rolled-back migration | investigate `_prisma_migrations`; never edit rows manually |
+| `uploadsWritable: false` | uploads dir missing/read-only | fix volume/permissions; file uploads are failing |
+| drill FAIL | dump unreadable or data checks failed | treat newest dump as bad; check earlier dumps; escalate |
+
+### Operators must NEVER
+
+- run `restore-verify.sh` pointed at the live database (the scratch name is
+  hard-coded — do not "adapt" it);
+- delete files from the backup volume by hand (retention is automated);
+- run `pg_restore` against `campusos` outside the §7 procedure;
+- expose `/health/ops` publicly or relax its permission gate;
+- commit any `*.dump` file.
+
+### V1 limitations (deliberate, O-3/O-4)
+
+Local-volume destination only (no off-host copy automation); no
+point-in-time recovery (daily granularity); process-local health (no
+external monitoring/SaaS — deferred); uploads volume backup remains the §6
+manual procedure.
