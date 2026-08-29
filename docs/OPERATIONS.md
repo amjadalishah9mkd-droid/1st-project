@@ -1097,3 +1097,19 @@ Local-volume destination only (no off-host copy automation); no
 point-in-time recovery (daily granularity); process-local health (no
 external monitoring/SaaS — deferred); uploads volume backup remains the §6
 manual procedure.
+
+### M19 security close-out notes (W4)
+
+- File downloads are signed capability URLs (5-min TTL). Authorization
+  happens at signing: owner or same-college for recorded keys, stricter
+  uploader/reviewer rule for evidence, legacy behavior for pre-M19 keys
+  with no ownership record. Do not share signed URLs; request fresh ones.
+- Outgoing mail HTML is entity-escaped at the single template chokepoint;
+  only `https?://` values ever render as links. Report any HTML-looking
+  artifact in received mail as a defect — do not "fix" it by editing data.
+- `/auth/google/callback` is rate limited per IP (60/min, process-local).
+  A burst of 429s there indicates abuse or a proxy collapsing client IPs —
+  check `trust proxy`/ingress before raising limits.
+- Emergency-contact fields on students (`guardian*` columns) are contact
+  data only: they never grant guardian access (GuardianLink is the sole
+  channel) and are visible only to full-scope staff and the student.

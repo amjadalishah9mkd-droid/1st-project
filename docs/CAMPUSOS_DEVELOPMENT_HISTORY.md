@@ -151,7 +151,8 @@ Principles applied consistently from M0 onward:
 | M19-W0 | Platform hardening discovery + design (`docs/M19_PLATFORM_HARDENING_DESIGN.md`) | `fb6c474` |
 | M19-W1 | Stored-file ownership authorization (P2-IDOR-1, migration #13) | `7fdec0e` |
 | M19-W2 | Input & guardian-privacy hardening (mail escaping, callback limiter, O-2) | `9b19017` |
-| M19-W3 | Operational reliability: backup automation, restore drill, /health/ops | *(this commit)* |
+| M19-W3 | Operational reliability: backup automation, restore drill, /health/ops | `d726952` |
+| M19-W4 | Final security audit, runbook close-out — **M19 CLOSED** | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2169,14 +2170,14 @@ milestone (see roadmap).
 | Rate limits are per API instance (no shared store) | Blueprint §14 deliberately avoids Redis | documented ceiling = policy × instances | revisit if horizontally scaled |
 | Student `/verify` UI + admin verification UI | backend-first ordering | API complete (W3) | M11-W5/W6 |
 | Prisma major-version upgrade available | upgrade advisory only | pinned to 5.22 | maintenance window |
-| Backups are documented cron scripts, not shipped automation | doc-only scope of M10-W5 | OPERATIONS.md §6 | future ops work |
+| Backups are documented cron scripts, not shipped automation | — | **Resolved in M19-W3** (compose `backup` sidecar, 14-day rotation, restore-verify drill, OPERATIONS §28); off-host copies/PITR still deferred | off-host copies: future ops |
 | GPA/transcripts | out of MVP scope | dormant hooks (grade bands, marks) | roadmap |
 | F2 rate-limiter bucket pruning | — | **Resolved in M13-W5** (lazy in-band sweep) | done |
 | F3 `results.csv` includes unpublished marks | intentional: admin ALL-scope marks export; published-only surface is `/results` | documented (OPERATIONS §19/§21) | accepted behavior |
 | Guardian link revoke/list endpoints unlimited | admin-only, state-guarded (409 on repeat), consistent with other admin mutations | reviewed M13-W5, no limit needed | revisit only on abuse evidence |
 | Login limiter unbounded memory | — | **Resolved in M14-W0** (lazy sweep, mirrors F2) | done |
 | Guardian section-timetable over-read (P2-GUARD-1) | — | **Resolved in M14-W0** (academics.read scope gate) | done |
-| Ordinary-file signing has no ownership record (P2-IDOR-1) | capability-URL design (random keys); evidence files fully authorized | untouched by design through M14 | when files are next touched |
+| Ordinary-file signing has no ownership record (P2-IDOR-1) | — | **Resolved in M19-W1** (`StoredFile` ownership + sign-time tenant/owner authz, migration #13; underivable legacy keys grandfathered by design) | done |
 | Real Safepay sandbox verification | — | **Substantially resolved (M14-SBX)**: real payment, decline, paisa, verify-recovery all LIVE-VERIFIED; genuine webhook delivery/replay still pending dashboard endpoint registration | register webhook endpoint |
 | Single global webhook secret (env-only) | V1 decision #7: single-tenant start | per-college gateway config table when a second college onboards | multi-college payments |
 | `GET /grade-bands` readable by guardians | college-wide grading config, no PII; grades already visible on results | reviewed M13-W5, acceptable | none |
@@ -2288,7 +2289,48 @@ missing-directory degradation, no-sensitive-output assertion. 574/574
 tests (43 suites), typecheck 0, 13 migrations, prod builds green, all four
 containers up (api/web/postgres healthy + backup sidecar).
 
-*Last updated after M19-W3 (W4 close-out NOT started).*
+## M19-W4 — Final audit & close-out — **M19 CLOSED**
+
+Full-surface security re-audit (W1–W3 plus general greps) found **zero new
+defects**; no code changes were required and no tests were manufactured.
+Verified: stored-file tenant/owner/evidence-precedence/grandfathering
+behavior and traversal guards; the single escaped mail chokepoint is the
+only interpolated `href` in the API; callback limiter executes before any
+state/cookie processing with per-IP keying; guardian privacy scope gates
+and GuardianLink exclusivity; backup scripts' fixed deletion pattern,
+`.partial`/TOC-verify gating and hard-coded scratch DB; `/health/ops`
+permission gate and zero-leak response. Grep sweeps: no raw/unsafe SQL, no
+shell exec, no client-controlled collegeId (the sole `input.collegeId` is
+the server-side StoredFile recorder fed from `user.collegeId`), no
+role-name authorization conditionals (the two `role`-string matches are
+pre-M19 domain checks: guardian account-type integrity and community group
+membership roles), no client-reachable destructive DB commands, no web
+`dangerouslySetInnerHTML`. Documented non-defect observations: a failed
+ownership insert after `storage.save` would orphan an unguessable,
+never-disclosed key (negligible; grandfather class only shrinks), and
+signed URLs remain bearer capabilities for their 5-minute TTL by design.
+
+Backup/restore re-verified live in W4: fresh dump
+(`campusos-20260829T054756Z.dump`, TOC-verified), restore drill PASS into
+the disposable DB, scratch dropped, live demo DB checksum identical
+before/after (`20|1|13|45eff7cf…`), retention rotating (2 dumps), all four
+demo logins 200. OPERATIONS §28 extended with M19 security close-out notes.
+
+**M19 FINAL STATUS: CLOSED.** W0 `fb6c474` (design) → W1 `7fdec0e`
+(StoredFile authorization, migration #13) → W2 `9b19017` (mail escaping,
+callback limiter, emergency-contact privacy) → W3 `d726952` (backup
+automation, restore drill, /health/ops) → W4 (this commit). Final: 574
+tests / 43 suites, typecheck 0, 13 migrations, prod builds green, four
+containers healthy. Debt retired with evidence: P2-IDOR-1, un-escaped mail
+interpolation, callback limiter gap, guardian-PII over-exposure, backup
+non-automation. Deferred verbatim: off-host backup copies, PITR, external
+SaaS monitoring, distributed/shared rate limiter, Safepay webhook
+registration/replay (EXTERNALLY BLOCKED), per-college webhook secrets,
+provider polling, receipts/PDF platform (M20 candidate), maker-checker,
+GPA scale/repeat-course/rank policy, Prisma upgrade, FILE_URL_SECRET
+rotation.
+
+*Last updated after M19-W4 (M19 CLOSED). M20 not started.*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2301,7 +2343,7 @@ containers up (api/web/postgres healthy + backup sidecar).
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **Current milestone**: **M18 COMPLETE (W0–W4)** — academic records:
+- **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:
   immutable finalized term results, versioned amendments, VOID,
   transcripts with frozen credit-weighted GPA (null until the
   institution configures its scale), report-card/transcript UI with
