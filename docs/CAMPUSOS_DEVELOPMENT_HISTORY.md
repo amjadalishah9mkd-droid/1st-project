@@ -152,7 +152,8 @@ Principles applied consistently from M0 onward:
 | M19-W1 | Stored-file ownership authorization (P2-IDOR-1, migration #13) | `7fdec0e` |
 | M19-W2 | Input & guardian-privacy hardening (mail escaping, callback limiter, O-2) | `9b19017` |
 | M19-W3 | Operational reliability: backup automation, restore drill, /health/ops | `d726952` |
-| M19-W4 | Final security audit, runbook close-out — **M19 CLOSED** | *(this commit)* |
+| M19-W4 | Final security audit, runbook close-out — **M19 CLOSED** | `cd7b10c` |
+| M20-W0 | Finance documents discovery + design (`docs/M20_FINANCE_DOCUMENTS_DESIGN.md`) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2330,7 +2331,29 @@ provider polling, receipts/PDF platform (M20 candidate), maker-checker,
 GPA scale/repeat-course/rank policy, Prisma upgrade, FILE_URL_SECRET
 rotation.
 
-*Last updated after M19-W4 (M19 CLOSED). M20 not started.*
+## M20-W0 — Finance documents discovery + design (design only)
+
+Baseline `cd7b10c` re-verified (574/574, 43 suites, typecheck 0, 13
+migrations, builds green, stack healthy). Source-traced discovery
+confirmed: CampusOS has ZERO financial documents (no receipts, receipt
+numbers, printable confirmations, refund documents, or PDFs — "receipt"
+appears only in design docs); money truth is the immutable Payment/Refund
+ledger + `netPaid()`; the proven document pattern is M12/M18 browser print;
+invoiceNo is the only human finance number (per-college unique,
+count-based). `docs/M20_FINANCE_DOCUMENTS_DESIGN.md` (30 sections)
+recommends **Option B: immutable snapshot receipts + refund documents
+(new FinanceDocument table, migration #14), RCP-/RFD- per-college
+numbering with retry-on-unique allocation, ACTIVE|VOID only (no version
+chain — money rows never mutate), browser-print rendering, fees.read
+OWN/CHILD/ALL + fees.manage reuse (no new permission), server-side PDF and
+StoredFile FINANCE_DOCUMENT purpose explicitly deferred**. Open decisions
+O-1…O-15 recorded with recommendations; Safepay webhook status unchanged
+(EXTERNALLY BLOCKED, and not a dependency — documents anchor on verified
+immutable rows). Implementation was NOT started: no schema, migration,
+source, UI, test, seed, or package changes — this workstream is
+documentation only.
+
+*Last updated after M20-W0 (design only — M20 NOT implemented).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2343,6 +2366,8 @@ rotation.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
+- **M20 status**: DESIGN/DISCOVERY COMPLETE only — see M20-W0 entry;
+  awaiting O-1…O-15 approvals before W1.
 - **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:
   immutable finalized term results, versioned amendments, VOID,
   transcripts with frozen credit-weighted GPA (null until the
