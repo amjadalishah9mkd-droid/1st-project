@@ -336,6 +336,13 @@ model User {
   passwordHash       String?
   role               RoleKey
   status             UserStatus       @default(ACTIVE)
+  // M21-W1 (O-2) — lifecycle metadata for the LAST status change. Nullable,
+  // additive, no backfill: pre-M21 accounts simply have no recorded change.
+  // The AuditLog remains the full history; these columns make the current
+  // state explainable on the row itself.
+  statusReason       String?
+  statusChangedAt    DateTime?
+  statusChangedById  String?
   // M11 identity verification lifecycle. LEGACY = pre-M11 trusted accounts
   // (admin-created / invite-accepted); no new gate applies to them.
   verificationStatus UserVerification @default(LEGACY)
@@ -367,6 +374,8 @@ model User {
   storedFilesCreated     StoredFile[]           @relation("StoredFileCreator")
   financeDocsIssued      FinanceDocument[]      @relation("FinanceDocumentIssuer")
   financeDocsVoided      FinanceDocument[]      @relation("FinanceDocumentVoider")
+  statusChangedBy        User?                  @relation("UserStatusChangedBy", fields: [statusChangedById], references: [id], onDelete: SetNull)
+  statusChangesMade      User[]                 @relation("UserStatusChangedBy")
   guardianLinks          GuardianLink[]         @relation("GuardianLinks")
   guardianLinksCreated   GuardianLink[]         @relation("GuardianLinkCreator")
 

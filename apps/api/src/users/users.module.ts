@@ -3,6 +3,7 @@ import { AuthModule } from '../auth/auth.module';
 import { StudentsController } from './students.controller';
 import { TeachersController } from './teachers.controller';
 import { UsersController } from './users.controller';
+import { UserLifecycleService } from './user-lifecycle.service';
 import {
   GuardianSelfController,
   StudentGuardiansController,
@@ -21,7 +22,7 @@ import { TeachersService } from './teachers.service';
     StudentGuardiansController,
     GuardianSelfController,
   ],
-  providers: [
+  providers: [UserLifecycleService, 
     StudentsService,
     StudentsImportService,
     TeachersService,

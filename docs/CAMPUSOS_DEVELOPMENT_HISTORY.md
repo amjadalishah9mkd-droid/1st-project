@@ -158,7 +158,8 @@ Principles applied consistently from M0 onward:
 | M20-W2 | Finance document read API + authorization hardening | `c455031` |
 | M20-W3 | Finance document UI, print experience, receipt mail links | `edd4b8d` |
 | M20-W4 | Finance documents hardening, runbook §29 — **M20 CLOSED** | `12a7eca` |
-| M21-W0 | Platform discovery + M21 design (`docs/M21_PLATFORM_DISCOVERY_DESIGN.md`) | *(this commit)* |
+| M21-W0 | Platform discovery + M21 design (`docs/M21_PLATFORM_DISCOVERY_DESIGN.md`) | `c907026` |
+| M21-W1 | Account lifecycle administration (migration #15, verb endpoints) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2552,7 +2553,46 @@ coupling, guardian visibility). All deferred items preserved verbatim;
 Safepay webhooks remain EXTERNALLY BLOCKED. Implementation was NOT
 started — this workstream is documentation only.
 
-*Last updated after M21-W0 (design only — M21 NOT implemented).*
+## M21-W1 — Account lifecycle administration
+
+O-1…O-4/O-7 implemented as approved. Migration #15
+(`m21_account_lifecycle`, additive/nullable, no backfill): User gains
+`statusReason?`, `statusChangedAt?`, `statusChangedById?` (SetNull
+self-FK). New `UserLifecycleService` + verb endpoints (`users.manage`):
+POST `/users/:id/suspend` (reason ≥5 chars), `/reactivate`, `/archive`
+(reason). Transition matrix: ACTIVE→SUSPENDED, SUSPENDED→ACTIVE,
+ACTIVE|SUSPENDED→ARCHIVED, **ARCHIVED terminal** — all CAS
+(`updateMany` on expected from-status; losers 409 INVALID_TRANSITION)
+under a per-college `pg_advisory_xact_lock` that serializes lifecycle
+transitions and makes the last-admin count race-proof. Protections:
+CANNOT_MODIFY_SELF (server actor identity only); LAST_ADMIN — the
+"usable admin" set is derived from ROLE_PERMISSION_MATRIX data (roles
+granted users.manage), never role-name conditionals. Leaving ACTIVE
+revokes every live refresh token in the SAME transaction (defense in
+depth on top of the existing per-request status re-reads). Audit
+`users.suspended|reactivated|archived` in-tx with reason metadata;
+failed transitions write nothing. Tenancy: foreign/nonexistent targets =
+byte-identical 404; hostile body fields inert. Response = minimal
+{id, status, statusReason, statusChangedAt}. Academic profile status
+untouched (O-7); GuardianLink untouched (O-8); no new permissions.
+
+New suite `test/account-lifecycle.e2e-spec.ts` (11 tests, real Postgres):
+authz matrix + reason validation; full transition matrix with metadata,
+server-derived actor and exactly-once audits; SUSPENDED→ARCHIVED; instant
+lockout with a REAL live token (works → suspend → same token 401; refresh
+family revoked in-tx; reactivation restores login without resurrecting
+revoked refresh tokens); self-protection; last-admin protection incl. a
+REAL mutual-suspension race between the only two admins of a college
+(exactly one wins; ACTIVE-admin count never reaches zero) and a
+suspended-admins-don't-count scenario; tenancy with hostile-body
+smuggling; concurrent duplicate suspension (one 201/one 409/one audit);
+failed-transition zero-residue; login-block regression for SUSPENDED and
+ARCHIVED. Demo accounts never targeted; fixtures FK-safe-removed;
+post-run DB shows 20 users all ACTIVE, 1 college, demo logins 200.
+613/613 tests (47 suites), typecheck 0, 15 migrations, prod builds
+green, stack healthy. W2 (settings) NOT started.
+
+*Last updated after M21-W1 (W2 settings work NOT started).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2565,9 +2605,7 @@ started — this workstream is documentation only.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M21 status**: DESIGN/DISCOVERY COMPLETE only — awaiting O-1…O-8
-  approvals before W1 (recommended: Account Lifecycle & Institutional
-  Administration).
+- **M21 status**: W0 design + W1 lifecycle API complete (migration #15). W2 settings / W3 admin UI / W4 close-out pending.
 - **M20 status**: **M20 COMPLETE (W0–W4) — finance documents CLOSED** (see M20-W4 entry).
 - **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:
   immutable finalized term results, versioned amendments, VOID,
