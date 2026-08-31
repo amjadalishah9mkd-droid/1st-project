@@ -1,12 +1,16 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, type FinanceDocument } from '@prisma/client';
+import type { FinanceDocumentItem, PageMeta, PaginationQuery } from '@campusos/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { PolicyService } from '../access/policy.service';
+import { pageArgs, pageMeta } from '../common/pagination/pagination';
 import { netPaid } from './money';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 
@@ -41,7 +45,103 @@ export class FinanceDocumentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly policy: PolicyService,
   ) {}
+
+  // ── Read API (M20-W2) — fees.read scopes, snapshot-only reads ───────────
+
+  /**
+   * List issued documents. Scope semantics mirror listInvoices exactly:
+   * ALL sees the college (optional studentId filter), OWN sees only the
+   * caller's own documents, CHILD requires an explicit studentId with an
+   * ACTIVE GuardianLink (PolicyService decides). Responses are the frozen
+   * snapshots — nothing is re-read from mutable rows.
+   */
+  async list(
+    user: AuthenticatedUser,
+    query: PaginationQuery & {
+      studentId?: string;
+      kind?: 'PAYMENT_RECEIPT' | 'REFUND_DOCUMENT';
+      invoiceId?: string;
+    },
+  ): Promise<{ data: FinanceDocumentItem[]; meta: PageMeta }> {
+    const scope = await this.policy.scopeFor(user, 'fees.read');
+    if (!scope) throw forbidden();
+    if (scope === 'CHILD') {
+      if (!query.studentId) {
+        throw new BadRequestException({
+          code: 'MISSING_TARGET',
+          message: 'Provide studentId',
+        });
+      }
+      const allowed = await this.policy.can(user, 'fees.read', {
+        studentProfileId: query.studentId,
+      });
+      if (!allowed) throw forbidden();
+    }
+    const where: Prisma.FinanceDocumentWhereInput = {
+      collegeId: user.collegeId, // server-derived — never client input
+      ...(query.kind ? { kind: query.kind } : {}),
+      ...(query.invoiceId ? { invoiceId: query.invoiceId } : {}),
+      ...(query.studentId && (scope === 'ALL' || scope === 'CHILD')
+        ? { invoice: { studentId: query.studentId } }
+        : {}),
+      ...(scope === 'OWN'
+        ? { invoice: { student: { userId: user.id } } }
+        : {}),
+    };
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.financeDocument.findMany({
+        where,
+        orderBy: { issuedAt: 'desc' },
+        ...pageArgs(query),
+      }),
+      this.prisma.financeDocument.count({ where }),
+    ]);
+    return { data: rows.map(toDocumentItem), meta: pageMeta(query, total) };
+  }
+
+  /**
+   * Read one document (ACTIVE or VOID — VOID is history, not deletion).
+   * OWN mismatch and cross-college are both indistinguishable from a
+   * nonexistent document; CHILD re-checks the ACTIVE GuardianLink against
+   * the invoice's student (mirrors invoiceDetail).
+   */
+  async detail(
+    user: AuthenticatedUser,
+    id: string,
+  ): Promise<FinanceDocumentItem> {
+    const scope = await this.policy.scopeFor(user, 'fees.read');
+    if (!scope) throw forbidden();
+    const row = await this.prisma.financeDocument.findFirst({
+      where: {
+        id,
+        collegeId: user.collegeId,
+        ...(scope === 'OWN'
+          ? { invoice: { student: { userId: user.id } } }
+          : {}),
+      },
+      include: { invoice: { select: { studentId: true } } },
+    });
+    if (!row) {
+      throw new NotFoundException({
+        code: 'NOT_FOUND',
+        message: 'Document not found',
+      });
+    }
+    if (scope === 'CHILD') {
+      const allowed = await this.policy.can(user, 'fees.read', {
+        studentProfileId: row.invoice.studentId,
+      });
+      if (!allowed) {
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: 'Document not found',
+        });
+      }
+    }
+    return toDocumentItem(row);
+  }
 
   // ── Embedded issuance (called INSIDE existing money transactions) ───────
 
@@ -146,7 +246,7 @@ export class FinanceDocumentsService {
         return await this.prisma.$transaction(async (tx) => {
           // Same lock ordering as every finance transaction: invoice first.
           await tx.$queryRaw`SELECT id FROM "Invoice" WHERE id = ${invoiceId} FOR UPDATE`;
-          return this.createDocumentInTx(tx, {
+          return toDocumentItem(await this.createDocumentInTx(tx, {
             kind: source.kind,
             paymentId:
               source.kind === 'PAYMENT_RECEIPT' ? source.paymentId : undefined,
@@ -154,7 +254,7 @@ export class FinanceDocumentsService {
               source.kind === 'REFUND_DOCUMENT' ? source.refundId : undefined,
             actorId: user.id,
             sequenceBump: attempt, // skip past out-of-band collisions
-          });
+          }));
         });
       } catch (error) {
         if (
@@ -235,7 +335,9 @@ export class FinanceDocumentsService {
         },
         tx,
       );
-      return tx.financeDocument.findUniqueOrThrow({ where: { id: doc.id } });
+      return toDocumentItem(
+        await tx.financeDocument.findUniqueOrThrow({ where: { id: doc.id } }),
+      );
     });
   }
 
@@ -366,6 +468,46 @@ export class FinanceDocumentsService {
     );
     return document;
   }
+}
+
+function forbidden() {
+  return new ForbiddenException({
+    code: 'FORBIDDEN',
+    message: 'You do not have permission to perform this action',
+  });
+}
+
+/**
+ * Public contract mapper (data minimization): ONLY the frozen snapshot +
+ * lifecycle metadata. Internal cuids (payment/refund/invoice/college/staff),
+ * numbering internals and timestamps beyond issuance/void never leave the
+ * API.
+ */
+function toDocumentItem(row: FinanceDocument): FinanceDocumentItem {
+  return {
+    id: row.id,
+    kind: row.kind,
+    status: row.status,
+    receiptNo: row.receiptNo,
+    studentName: row.studentName,
+    admissionNo: row.admissionNo,
+    rollNo: row.rollNo,
+    invoiceNo: row.invoiceNo,
+    structureName: row.structureName,
+    collegeName: row.collegeName,
+    collegeCode: row.collegeCode,
+    amount: row.amount.toString(),
+    method: row.method,
+    referenceMasked: row.referenceMasked,
+    paidAt: row.paidAt.toISOString(),
+    invoiceAmount: row.invoiceAmount.toString(),
+    balanceAfter: row.balanceAfter.toString(),
+    receivedByName: row.receivedByName,
+    parentReceiptNo: row.parentReceiptNo,
+    issuedAt: row.issuedAt.toISOString(),
+    voidedAt: row.voidedAt?.toISOString() ?? null,
+    voidReason: row.voidReason,
+  };
 }
 
 /** Provider tokens/references are capability-adjacent — keep last 6 only. */

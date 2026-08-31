@@ -347,7 +347,11 @@ describe('M20-W1 — finance documents', () => {
       .set(auth(rivalAdminToken));
     expect(res.status).toBe(201);
     expect(res.body.data.receiptNo).toBe(`RCP-${YEAR}-00001`);
-    expect(res.body.data.collegeId).toBe(rivalCollegeId);
+    // W2 contract excludes internal ids — prove tenancy from the DB row.
+    const rivalRow = await prisma.financeDocument.findUniqueOrThrow({
+      where: { paymentId: rivalPaymentId },
+    });
+    expect(rivalRow.collegeId).toBe(rivalCollegeId);
     // Demo college numbering unaffected: next demo doc is NOT 00001.
     const invoiceId = await makeInvoice('10.00');
     const p = await makeLegacyPayment(invoiceId, '10.00');
@@ -401,7 +405,10 @@ describe('M20-W1 — finance documents', () => {
     expect(res.body.data.receiptNo).not.toBe(
       `RCP-${YEAR}-${String(nextSeq).padStart(5, '0')}`,
     );
-    expect(res.body.data.sequence).toBeGreaterThan(nextSeq);
+    const issuedRow = await prisma.financeDocument.findUniqueOrThrow({
+      where: { paymentId: p.id },
+    });
+    expect(issuedRow.sequence).toBeGreaterThan(nextSeq);
   });
 
   it('tenancy: cross-college payment/refund/document → 404, no existence leak', async () => {
@@ -718,7 +725,10 @@ describe('M20-W1 — finance documents', () => {
     expect(res.status).toBe(201);
     expect(res.body.data.receiptNo).not.toBe('RCP-9999-99999');
     expect(res.body.data.status).toBe('ACTIVE');
-    expect(res.body.data.collegeId).toBe(collegeId);
     expect(Number(res.body.data.amount)).toBe(25);
+    const createdRow = await prisma.financeDocument.findUniqueOrThrow({
+      where: { paymentId: p.id },
+    });
+    expect(createdRow.collegeId).toBe(collegeId); // server-derived, DB-proven
   });
 });

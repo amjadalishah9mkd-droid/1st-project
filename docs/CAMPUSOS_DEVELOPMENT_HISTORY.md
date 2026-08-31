@@ -154,7 +154,8 @@ Principles applied consistently from M0 onward:
 | M19-W3 | Operational reliability: backup automation, restore drill, /health/ops | `d726952` |
 | M19-W4 | Final security audit, runbook close-out — **M19 CLOSED** | `cd7b10c` |
 | M20-W0 | Finance documents discovery + design (`docs/M20_FINANCE_DOCUMENTS_DESIGN.md`) | `c491c00` |
-| M20-W1 | Finance document foundation (migration #14, issuance engine) | *(this commit)* |
+| M20-W1 | Finance document foundation (migration #14, issuance engine) | `857d680` |
+| M20-W2 | Finance document read API + authorization hardening | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2403,7 +2404,40 @@ money rows (FK Restrict) — assertions untouched. 588/588 tests
 (44 suites), typecheck 0, 14 migrations, prod builds green, stack
 healthy, demo logins verified. W2 (read API) NOT started.
 
-*Last updated after M20-W1 (W2 read API NOT started).*
+## M20-W2 — Finance document read API + authorization hardening
+
+Read surface (no schema change — migrations stay at 14): GET
+`fees/documents` (paginated list; filters kind/invoiceId/studentId) and
+GET `fees/documents/:id`, both `fees.read` with the EXACT invoice scope
+semantics — ALL (admin/accountant, optional studentId filter), OWN
+(student, server-filtered via `invoice.student.userId`; mismatches 404
+indistinguishable from missing), CHILD (guardian: explicit studentId +
+ACTIVE GuardianLink via PolicyService, 400 MISSING_TARGET without a
+target, 403/404 without a link, revocation removes access). VOID
+documents remain readable history (never hidden/deleted); reads never
+mutate. New shared `FinanceDocumentItem` contract = exactly the frozen
+snapshot + lifecycle: internal cuids (college/payment/refund/invoice/
+staff), numbering internals and unmasked references never leave the API —
+the W1 mutation endpoints now return the same minimized contract (W1
+tests updated to prove tenancy/sequence from DB rows instead).
+
+New suite `test/finance-documents-read.e2e-spec.ts` (11 tests, real
+Postgres): anon 401 / teacher 403; ALL reads + studentId filter; OWN
+isolation with byte-identical 404s for foreign/missing; tampered
+studentId/collegeId query params ignored under OWN + invalid kind 400;
+full CHILD matrix incl. revoked-link denial; cross-college 404 + empty
+list; strict payload key-allowlist + masked reference + no internal-id
+leakage; read-path immutability under renames + a later RECORDED refund
+(byte-identical payload, refund document independently readable with
+frozen parentReceiptNo, internal refund reason absent, receipt stays
+ACTIVE); VOID read semantics (lifecycle fields only change — frozen
+fields proven equal); repeated reads leave the row byte-identical;
+legacy money without documents reads as absent (nothing fabricated).
+599/599 tests (45 suites), typecheck 0, 14 migrations, prod builds
+green, stack healthy, demo logins verified. W3 (print UI, mail links)
+NOT started.
+
+*Last updated after M20-W2 (W3 print UI NOT started).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2416,7 +2450,7 @@ healthy, demo logins verified. W2 (read API) NOT started.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M20 status**: W0 design + W1 foundation complete (migration #14, issuance engine). W2 read API / W3 print UI / W4 close-out pending.
+- **M20 status**: W0 design + W1 foundation + W2 read API complete. W3 print UI / W4 close-out pending.
 - **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:
   immutable finalized term results, versioned amendments, VOID,
   transcripts with frozen credit-weighted GPA (null until the

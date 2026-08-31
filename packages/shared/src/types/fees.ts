@@ -151,3 +151,39 @@ export interface PaymentRefundSummary {
   refunds: RefundItem[];
   attempts: RefundAttemptItem[];
 }
+
+// ── M20 finance documents ───────────────────────────────────────
+
+export type FinanceDocumentKind = 'PAYMENT_RECEIPT' | 'REFUND_DOCUMENT';
+export type FinanceDocumentStatus = 'ACTIVE' | 'VOID';
+
+/**
+ * M20-W2 — the public finance-document contract: EXACTLY the frozen
+ * issuance snapshot plus lifecycle metadata. Deliberately excludes internal
+ * ids (payment/refund/invoice/college cuids), sequence internals, staff
+ * contact data and unmasked references — the document IS the payload.
+ */
+export interface FinanceDocumentItem {
+  id: string;
+  kind: FinanceDocumentKind;
+  status: FinanceDocumentStatus;
+  receiptNo: string;
+  studentName: string;
+  admissionNo: string;
+  rollNo: string;
+  invoiceNo: string;
+  structureName: string;
+  collegeName: string;
+  collegeCode: string;
+  amount: string;
+  method: string;
+  referenceMasked: string | null;
+  paidAt: string;
+  invoiceAmount: string;
+  balanceAfter: string;
+  receivedByName: string | null;
+  parentReceiptNo: string | null;
+  issuedAt: string;
+  voidedAt: string | null;
+  voidReason: string | null;
+}
