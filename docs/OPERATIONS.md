@@ -1216,3 +1216,96 @@ branding fields (address/logo); `receipts.csv` export; mail attachments.
    200; as a rival college admin → 404. 3. Void with reason → VOID
    watermark on the page, second void 409. 4. Full suite:
    `npm test -w @campusos/api`.
+
+## 30. Account lifecycle & offboarding runbook (M21)
+
+### States & transitions
+
+`UserStatus`: ACTIVE, SUSPENDED, ARCHIVED — enforced at EVERY boundary
+(password login, JWT guard per-request, refresh, Google flows, credential
+tokens, PolicyService). Transitions (`users.manage` only, verb endpoints):
+
+| From | Verb | To | Reason |
+|---|---|---|---|
+| ACTIVE | `POST /users/:id/suspend` | SUSPENDED | required (≥5 chars) |
+| SUSPENDED | `POST /users/:id/reactivate` | ACTIVE | — |
+| ACTIVE / SUSPENDED | `POST /users/:id/archive` | ARCHIVED | required |
+
+**ARCHIVED IS TERMINAL** — no verb accepts an archived account (409
+`INVALID_TRANSITION`). Anything else (stale/duplicate transitions) also
+409s. There is deliberately NO delete: records, documents, GuardianLinks
+and audit history issued to the user are retained forever.
+
+### What suspension/archival does
+
+Immediately, in one transaction: CAS status change, `statusReason` /
+`statusChangedAt` / `statusChangedById` recorded on the row, ALL live
+refresh tokens revoked, `users.suspended|archived` audit written. The
+next request with any existing access token is rejected (the guard
+re-reads status per request). Reactivation restores LOGIN only — revoked
+refresh tokens stay revoked; the user signs in fresh.
+`users.reactivated` is audited. Academic profile status
+(ENROLLED/GRADUATED/…) is a separate concern and is never touched.
+
+### Protections
+
+- **Self**: nobody can suspend/archive their own account
+  (`CANNOT_MODIFY_SELF`).
+- **Last admin**: an operation that would leave the college with zero
+  ACTIVE accounts holding `users.manage` (derived from the permission
+  matrix, not role names) fails with 409 `LAST_ADMIN`. The check runs
+  under a per-college advisory transaction lock, so concurrent
+  admin-vs-admin removals cannot race the college to zero.
+- **Tenancy**: foreign-college and nonexistent targets return the same
+  404. Request bodies carry only the reason — actor and college are
+  always server-derived.
+
+### Authorization / visibility
+
+Mutations: `users.manage` (ADMIN). UI controls appear on student/teacher
+detail pages for holders of that permission; directories badge
+SUSPENDED/ARCHIVED accounts. `statusReason`/`statusChangedAt` appear only
+to full `users.read` scope (never to ASSIGNED teachers or the user).
+Suspended students' guardians keep their CHILD reads (records remain;
+the access is the guardian's).
+
+### Break-glass: locked-out college
+
+If the last admin is unusable for an out-of-band reason (lost
+credentials): use `POST /users/:id/reset-link` from another admin. If NO
+admin can sign in at all, this is a deliberate operator-level recovery:
+re-run the seed in a dev environment, or in production set the admin's
+status/password hash via reviewed SQL with a written change record —
+never casually, never for routine offboarding.
+
+### Related M21 settings
+
+`attendanceWarningThreshold` (Settings page, 0–100, default 75) flags
+below-threshold students on attendance views — display only; it never
+changes records or sends notifications. `locale` is a RESERVED settings
+key with no behavior (preserved verbatim; i18n is future work).
+
+### Operators must NEVER
+
+- edit `User.status` or lifecycle metadata via SQL for routine
+  offboarding — use the endpoints (audited, race-safe, revoking);
+- delete user rows — archival is the terminal state; deletion breaks the
+  financial/academic evidence chain;
+- suspend/archive the four demo accounts in demo environments;
+- treat SUSPENDED as punishment-by-default — record a real reason; it is
+  shown to administrators and kept in the audit trail.
+
+### Verification checklist
+
+1. Suspend a fixture account → login fails, existing session dies on the
+   next request, `users.suspended` audit row exists.
+2. Reactivate → fresh login works; old refresh tokens remain revoked.
+3. Archive → every further verb returns 409.
+4. Attempt self-suspend → 400; attempt to remove the last admin → 409.
+5. Full suite: `npm test -w @campusos/api`.
+
+### Deferred limitations
+
+No account deletion; no bulk offboarding; no scheduled auto-archival; no
+notification to the affected user (deliberate V1); leave workflow,
+notification preferences, i18n and multi-college remain future work.

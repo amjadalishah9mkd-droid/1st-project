@@ -161,7 +161,8 @@ Principles applied consistently from M0 onward:
 | M21-W0 | Platform discovery + M21 design (`docs/M21_PLATFORM_DISCOVERY_DESIGN.md`) | `c907026` |
 | M21-W1 | Account lifecycle administration (migration #15, verb endpoints) | `0f613f1` |
 | M21-W2 | Settings completion, threshold surfacing, locale disposition | `492b8f9` |
-| M21-W3 | Account lifecycle admin UI + browser verification | *(this commit)* |
+| M21-W3 | Account lifecycle admin UI + browser verification | `2da1d03` |
+| M21-W4 | Lifecycle hardening re-audit, runbook §30 — **M21 CLOSED** | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2653,7 +2654,46 @@ badge. Fixture removed FK-safe (incl. credential/refresh tokens + audit
 rows); post-run DB: 20 users all ACTIVE, 13 profiles, demo logins 200.
 W4 close-out NOT started.
 
-*Last updated after M21-W3 (W4 close-out NOT started).*
+## M21-W4 — Hardening re-audit & close-out — **M21 CLOSED**
+
+Full M21-surface re-audit found **zero defects; no code changes were
+needed** (docs-only workstream). Verified by the green 620-test suite and
+targeted source review: complete transition matrix + ARCHIVED
+terminality; self/last-admin protections (matrix-data-derived admin set,
+advisory-lock-serialized count — no role names, no read-then-write
+races); CAS exactly-one-winner semantics; in-transaction refresh-token
+revocation with live-token death re-proven; exactly-once audits and
+failed-transition zero-residue; byte-identical 404s for foreign/missing
+targets with hostile-body fields inert; scope-gated status metadata
+projection; settings threshold validation/tenancy and inert reserved
+locale; no deletion paths, raw/unsafe SQL, shell/eval,
+dangerouslySetInnerHTML, new dependencies, or new permissions anywhere in
+the M21 diff chain (the sole `role !==` hit remains the documented
+pre-M19 guardian account-type integrity check). Live browser
+re-verification with a disposable fixture: SUSPENDED display (reason +
+timestamp + correct Reactivate/Archive actions) — fixture then removed
+FK-safe; final DB state 20 users all ACTIVE / 13 profiles / 1 college;
+all four demo logins 200. OPERATIONS.md gained §30 (states, transition
+table, suspension/archival semantics, protections, break-glass recovery,
+never-do list, verification checklist, deferred limitations).
+
+**M21 FINAL STATUS: CLOSED.** W0 `c907026` (discovery/design) → W1
+`0f613f1` (migration #15 + lifecycle API) → W2 `492b8f9` (settings
+completion + threshold surfacing + locale reservation) → W3 `2da1d03`
+(admin UI) → W4 (this commit). Final: 620 tests / 48 suites, typecheck 0,
+15 migrations, prod builds green, stack healthy. Debt retired with
+evidence: the enforced-but-inoperable UserStatus lifecycle (offboarding
+no longer requires SQL), the dead attendanceWarningThreshold config, and
+the Google-auth-only settings UI. Deferred verbatim: account deletion,
+leave workflow, notification preferences/digest, global search,
+observability completion (error counters/request IDs), reporting, server
+PDF, StoredFile FINANCE_DOCUMENT, receipts.csv, mail attachments, Safepay
+webhooks (EXTERNALLY BLOCKED), per-college secrets, provider polling,
+maker-checker, off-host backups, PITR, external monitoring, distributed
+limiter, i18n, multi-college, GPA/repeat/rank policy, Prisma upgrade,
+FILE_URL_SECRET rotation.
+
+*Last updated after M21-W4 (M21 CLOSED). M22 not started.*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2666,7 +2706,7 @@ W4 close-out NOT started.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M21 status**: W0 design + W1 lifecycle API + W2 settings + W3 admin UI complete. W4 close-out pending.
+- **M21 status**: **M21 COMPLETE (W0–W4) — account lifecycle & institutional administration CLOSED** (see M21-W4 entry).
 - **M20 status**: **M20 COMPLETE (W0–W4) — finance documents CLOSED** (see M20-W4 entry).
 - **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:
   immutable finalized term results, versioned amendments, VOID,
