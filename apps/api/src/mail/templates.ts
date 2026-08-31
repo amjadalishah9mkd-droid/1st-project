@@ -57,6 +57,8 @@ export type MailTemplate =
       amount: string;
       invoiceNo: string;
       url: string;
+      /** M20-W3: link to the issued receipt page (backend re-authorizes). */
+      receiptUrl?: string;
     }
   | {
       kind: 'payment_failed';
@@ -72,6 +74,8 @@ export type MailTemplate =
       amount: string;
       invoiceNo: string;
       url: string;
+      /** M20-W3: link to the refund document page (backend re-authorizes). */
+      receiptUrl?: string;
     }
   | {
       kind: 'refund_failed';
@@ -219,6 +223,11 @@ export function renderMail(template: MailTemplate): RenderedMail {
           `Hi ${template.firstName},`,
           `Your online payment of ${template.amount} for invoice ${template.invoiceNo} was received. Thank you.`,
           template.url,
+          // M20-W3: possession of this link is NOT authorization — the
+          // document page re-authorizes through the API.
+          ...(template.receiptUrl
+            ? ['Your official receipt:', template.receiptUrl]
+            : []),
         ]),
       };
     case 'payment_failed':
@@ -237,6 +246,9 @@ export function renderMail(template: MailTemplate): RenderedMail {
           `Hi ${template.firstName},`,
           `A refund of ${template.amount} for invoice ${template.invoiceNo} has been returned to you.`,
           template.url,
+          ...(template.receiptUrl
+            ? ['Your refund document:', template.receiptUrl]
+            : []),
         ]),
       };
     case 'refund_failed':

@@ -155,7 +155,8 @@ Principles applied consistently from M0 onward:
 | M19-W4 | Final security audit, runbook close-out — **M19 CLOSED** | `cd7b10c` |
 | M20-W0 | Finance documents discovery + design (`docs/M20_FINANCE_DOCUMENTS_DESIGN.md`) | `c491c00` |
 | M20-W1 | Finance document foundation (migration #14, issuance engine) | `857d680` |
-| M20-W2 | Finance document read API + authorization hardening | *(this commit)* |
+| M20-W2 | Finance document read API + authorization hardening | `c455031` |
+| M20-W3 | Finance document UI, print experience, receipt mail links | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2437,7 +2438,45 @@ legacy money without documents reads as absent (nothing fabricated).
 green, stack healthy, demo logins verified. W3 (print UI, mail links)
 NOT started.
 
-*Last updated after M20-W2 (W3 print UI NOT started).*
+## M20-W3 — Finance document UI, print & mail links
+
+**UI** (pure presentation over the W2 API — zero frontend finance
+arithmetic, zero reconstruction from live tables): `/fees/documents`
+(scoped list; students reach it via a "My receipts" action, staff via a
+"Documents" action on the fees page; guardians pass ?studentId= for a
+linked child) and `/fees/documents/[id]` — official-style print view in
+the M12/M18 pattern (`window.print()`, `.print-hide`, print CSS), showing
+only the frozen `FinanceDocumentItem` contract: number, kind, ACTIVE/VOID
+badge, VOID watermark + void date/reason banner, frozen student/invoice/
+college/amount/masked-reference snapshot, "balance at issuance" labeling.
+Invoice detail gained a "Documents" section (GET
+/fees/documents?invoiceId=) linking each issued receipt/refund document;
+legacy money without documents renders nothing (no fabrication).
+
+**Mail**: `payment_succeeded`/`refund_succeeded` templates accept an
+optional `receiptUrl` rendered through the existing M19-escaped `layout()`
+chokepoint (no new template kinds, no attachments, CR/LF handling
+untouched); the fees listener resolves the document by the settled
+attempt's paymentId / refundId and appends the `/fees/documents/<id>` link
+only when a document exists. The link is presentation only — the page
+re-authorizes via the API (asserted: anon fetch of the linked API resource
+is 401); internal refund reasons never appear in mail.
+
+New suite `test/finance-documents-mail.e2e-spec.ts` (3 tests, real events
+through EventsService + capturing transport): payment-success mail carries
+the correct escaped receipt anchor; refund-success mail carries the refund
+document link and never the internal reason; legacy settlements without
+documents send the unchanged mail. Live browser verification through the
+preview (student login): OWN-scoped list (another student's receipt
+invisible), ACTIVE receipt detail (masked reference `…000222`, frozen
+figures), VOID document (watermark + reason, still readable/printable),
+invoice-detail Documents section links. Verification fixtures fully
+removed; demo invoice restored byte-level (balance 800, single seeded
+payment, PARTIAL); all four demo logins 200. 602/602 tests (46 suites; one
+known first-run webhook flake re-ran clean), typecheck 0, 14 migrations
+(unchanged), prod builds green, stack healthy. W4 close-out NOT started.
+
+*Last updated after M20-W3 (W4 close-out NOT started).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2450,7 +2489,7 @@ NOT started.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M20 status**: W0 design + W1 foundation + W2 read API complete. W3 print UI / W4 close-out pending.
+- **M20 status**: W0 design + W1 foundation + W2 read API + W3 UI/print/mail complete. W4 close-out pending.
 - **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:
   immutable finalized term results, versioned amendments, VOID,
   transcripts with frozen credit-weighted GPA (null until the

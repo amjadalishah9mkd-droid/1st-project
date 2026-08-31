@@ -70,12 +70,19 @@ export class FeesListener {
         select: { collegeId: true },
       });
       if (!invoice) return;
+      // M20-W3: refund-success mail links the issued refund document (the
+      // page re-authorizes via the API; the link is never an authorization).
+      const documentUrl =
+        kind === 'refund_succeeded'
+          ? await this.refundDocumentUrl(event.attemptId)
+          : null;
       await this.mailer.sendToUsers(invoice.collegeId, [userId], ({ firstName }) => ({
         kind,
         firstName,
         amount: event.amount,
         invoiceNo: event.invoiceNo,
         url: this.mailer.absoluteUrl(template.linkPath ?? '/fees'),
+        ...(documentUrl ? { receiptUrl: documentUrl } : {}),
       }));
     } catch (error) {
       this.logger.error(
@@ -116,6 +123,11 @@ export class FeesListener {
         select: { collegeId: true },
       });
       if (!invoice) return;
+      // M20-W3: payment-success mail links the issued receipt.
+      const documentUrl =
+        kind === 'payment_succeeded'
+          ? await this.paymentDocumentUrl(event.attemptId)
+          : null;
       await this.mailer.sendToUsers(
         invoice.collegeId,
         [event.studentUserId],
@@ -127,6 +139,7 @@ export class FeesListener {
           url: this.mailer.absoluteUrl(
             template.linkPath ?? '/fees',
           ),
+          ...(documentUrl ? { receiptUrl: documentUrl } : {}),
         }),
       );
     } catch (error) {
@@ -134,6 +147,34 @@ export class FeesListener {
         `payment notification failed: ${(error as Error).constructor.name}`,
       );
     }
+  }
+
+  /** Resolve the settled payment's receipt page URL (null for legacy). */
+  private async paymentDocumentUrl(attemptId: string): Promise<string | null> {
+    const attempt = await this.prisma.paymentAttempt.findUnique({
+      where: { id: attemptId },
+      select: { paymentId: true },
+    });
+    if (!attempt?.paymentId) return null;
+    const doc = await this.prisma.financeDocument.findUnique({
+      where: { paymentId: attempt.paymentId },
+      select: { id: true },
+    });
+    return doc ? this.mailer.absoluteUrl(`/fees/documents/${doc.id}`) : null;
+  }
+
+  /** Resolve the refund's document page URL (null for legacy). */
+  private async refundDocumentUrl(attemptId: string): Promise<string | null> {
+    const attempt = await this.prisma.refundAttempt.findUnique({
+      where: { id: attemptId },
+      select: { refundId: true },
+    });
+    if (!attempt?.refundId) return null;
+    const doc = await this.prisma.financeDocument.findUnique({
+      where: { refundId: attempt.refundId },
+      select: { id: true },
+    });
+    return doc ? this.mailer.absoluteUrl(`/fees/documents/${doc.id}`) : null;
   }
 
   private async create(

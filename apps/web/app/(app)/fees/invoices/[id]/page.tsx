@@ -2,8 +2,10 @@
 
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import {
   recordPaymentSchema,
+  type FinanceDocumentItem,
   type InvoiceDetail,
   type PaymentAttemptItem,
 } from '@campusos/shared';
@@ -186,6 +188,9 @@ export default function InvoiceDetailPage() {
           )}
         </section>
       </div>
+
+      {/* M20-W3: issued receipts / refund documents for this invoice. */}
+      <InvoiceDocumentsSection invoiceId={invoice.id} />
 
       {/* M16-W4: refund history + finance.refund-gated actions. */}
       <InvoiceRefundsSection
@@ -376,4 +381,53 @@ function attemptDescription(attempt: PaymentAttemptItem): string {
     default:
       return 'Awaiting confirmation from the payment provider.';
   }
+}
+
+
+/**
+ * M20-W3 — frozen finance documents attached to this invoice. Pure
+ * presentation over GET /fees/documents?invoiceId= (backend-authorized);
+ * legacy payments without documents simply produce an empty section.
+ */
+function InvoiceDocumentsSection({ invoiceId }: { invoiceId: string }) {
+  const [docs, setDocs] = useState<FinanceDocumentItem[]>([]);
+  useEffect(() => {
+    apiFetch<FinanceDocumentItem[]>(
+      `/fees/documents?invoiceId=${encodeURIComponent(invoiceId)}`,
+    )
+      .then((response) => setDocs(response.data))
+      .catch(() => setDocs([]));
+  }, [invoiceId]);
+  if (docs.length === 0) return null;
+  return (
+    <section className="mt-4 rounded-card border border-line bg-surface-raised shadow-card">
+      <h2 className="border-b border-line px-5 py-3 text-sm font-semibold">
+        Documents ({docs.length})
+      </h2>
+      <ul className="divide-y divide-line text-sm">
+        {docs.map((doc) => (
+          <li key={doc.id} className="flex items-center justify-between px-5 py-3">
+            <div>
+              <Link
+                href={`/fees/documents/${doc.id}`}
+                className="font-mono text-xs font-semibold text-brand hover:underline"
+              >
+                {doc.receiptNo}
+              </Link>
+              <p className="text-xs text-ink-muted">
+                {doc.kind === 'PAYMENT_RECEIPT' ? 'Payment receipt' : 'Refund document'} ·{' '}
+                {formatDateTime(doc.issuedAt)}
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="font-medium">{formatAmount(doc.amount)}</span>
+              <Badge tone={doc.status === 'VOID' ? 'danger' : 'success'}>
+                {doc.status}
+              </Badge>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
 }

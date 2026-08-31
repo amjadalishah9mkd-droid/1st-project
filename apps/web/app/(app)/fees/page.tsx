@@ -46,6 +46,11 @@ function StudentFeesView() {
       <PageHeader
         title="My fees"
         description="Your invoices and payment status."
+        actions={
+          <Button variant="secondary" onClick={() => router.push('/fees/documents')}>
+            My receipts
+          </Button>
+        }
       />
       <DataTable
         rowKey={(row) => row.id}
@@ -106,6 +111,9 @@ function AdminFeesView() {
         description="Fee structures, invoices and manually recorded payments."
         actions={
           <>
+            <Button variant="secondary" onClick={() => router.push('/fees/documents')}>
+              Documents
+            </Button>
             <ExportCsvButton
               permission="fees.read"
               path="/exports/fees.csv"
