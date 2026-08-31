@@ -111,7 +111,14 @@ export default function StudentsPage() {
             key: 'status',
             header: 'Status',
             render: (row) => (
-              <Badge tone={statusTone(row.status)}>{row.status}</Badge>
+              <span className="flex gap-1">
+                <Badge tone={statusTone(row.status)}>{row.status}</Badge>
+                {row.userStatus !== 'ACTIVE' ? (
+                  <Badge tone={row.userStatus === 'SUSPENDED' ? 'warning' : 'danger'}>
+                    {row.userStatus}
+                  </Badge>
+                ) : null}
+              </span>
             ),
           },
         ]}

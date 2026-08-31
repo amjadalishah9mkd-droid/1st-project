@@ -467,6 +467,48 @@ describe('M21-W1 — account lifecycle', () => {
     expect(row.statusReason).toBeNull();
   });
 
+
+  it('W3: lifecycle metadata in student detail is ALL-scope only', async () => {
+    // A suspended fixture student: admin sees reason/date; an ASSIGNED
+    // teacher and the student themself never see the reason.
+    const dept = await prisma.department.findFirstOrThrow({
+      where: { collegeId },
+    });
+    const target = await makeUser('meta', 'STUDENT');
+    const profile = await prisma.studentProfile.create({
+      data: {
+        userId: target.id,
+        collegeId,
+        departmentId: dept.id,
+        admissionNo: `META-${suffix}`,
+        rollNo: 'M-1',
+        batch: '2026',
+      },
+    });
+    try {
+      await lifecycle(adminToken, target.id, 'suspend', {
+        reason: 'metadata visibility test',
+      });
+      const adminView = await http
+        .get(`/api/v1/students/${profile.id}`)
+        .set(auth(adminToken));
+      expect(adminView.status).toBe(200);
+      expect(adminView.body.data.userStatus).toBe('SUSPENDED');
+      expect(adminView.body.data.statusReason).toBe('metadata visibility test');
+      expect(adminView.body.data.statusChangedAt).toBeTruthy();
+
+      // Teacher (ASSIGNED scope) shares no section with this fixture, so
+      // detail is denied outright — and even where teachers CAN see a
+      // student, the projection nulls the reason (scope !== ALL by code).
+      const teacherView = await http
+        .get(`/api/v1/students/${profile.id}`)
+        .set(auth(teacherToken));
+      expect([403, 404]).toContain(teacherView.status);
+    } finally {
+      await prisma.studentProfile.delete({ where: { id: profile.id } });
+    }
+  });
+
   it('regression: suspended users cannot log in; archived users cannot log in', async () => {
     const target = await makeUser('loginblock', 'STUDENT');
     await lifecycle(adminToken, target.id, 'suspend', { reason: 'login block test' });

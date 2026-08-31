@@ -33,6 +33,8 @@ const teacherInclude = {
       email: true,
       phone: true,
       status: true,
+      statusReason: true,
+      statusChangedAt: true,
     },
   },
   department: { select: { id: true, name: true } },
@@ -155,6 +157,13 @@ export class TeachersService {
 
     return {
       ...toItem(profile),
+      // M21-W3: lifecycle metadata is account-administration data — full
+      // users.read scope only.
+      statusReason: scope === 'ALL' ? profile.user.statusReason : null,
+      statusChangedAt:
+        scope === 'ALL'
+          ? (profile.user.statusChangedAt?.toISOString() ?? null)
+          : null,
       assignments: profile.teachingAssignments.map((assignment) => ({
         id: assignment.id,
         sectionId: assignment.sectionId,

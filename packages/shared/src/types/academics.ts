@@ -78,6 +78,9 @@ export interface StudentItem {
 }
 
 export interface StudentDetail extends StudentItem {
+  // M21-W3: lifecycle metadata (users.read ALL scope only; null otherwise).
+  statusReason: string | null;
+  statusChangedAt: string | null;
   dateOfBirth: string | null;
   // Emergency-contact fields (M19-W2/O-2): historical "guardian*" names are
   // kept for API compatibility, but these values are contact info only and
@@ -117,6 +120,9 @@ export interface TeacherItem {
 }
 
 export interface TeacherDetail extends TeacherItem {
+  // M21-W3: lifecycle metadata (users.read ALL scope only; null otherwise).
+  statusReason: string | null;
+  statusChangedAt: string | null;
   assignments: Array<{
     id: string;
     sectionId: string;

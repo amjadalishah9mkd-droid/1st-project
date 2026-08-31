@@ -14,6 +14,7 @@ import { useToast } from '@/components/providers/toast-provider';
 import { useSession } from '@/components/providers/session-provider';
 import { PageHeader } from '@/components/layout/page-header';
 import { DataTable } from '@/components/data/data-table';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -68,8 +69,13 @@ export default function TeachersPage() {
             header: 'Name',
             render: (row) => (
               <div>
-                <p className="font-medium">
+                <p className="flex items-center gap-2 font-medium">
                   {row.firstName} {row.lastName}
+                  {row.userStatus !== 'ACTIVE' ? (
+                    <Badge tone={row.userStatus === 'SUSPENDED' ? 'warning' : 'danger'}>
+                      {row.userStatus}
+                    </Badge>
+                  ) : null}
                 </p>
                 <p className="text-xs text-ink-muted">{row.email}</p>
               </div>

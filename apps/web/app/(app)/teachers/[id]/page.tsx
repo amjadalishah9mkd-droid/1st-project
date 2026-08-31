@@ -21,6 +21,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { ResetLinkButton } from '@/components/invite-link-dialog';
+import { AccountLifecycleCard } from '@/components/account-lifecycle-card';
 
 export default function TeacherDetailPage() {
   const params = useParams<{ id: string }>();
@@ -119,6 +120,15 @@ export default function TeacherDetailPage() {
           )}
         </section>
       </div>
+
+      {/* M21-W3: account lifecycle (users.manage; backend authoritative). */}
+      <AccountLifecycleCard
+        userId={teacher.userId}
+        userStatus={teacher.userStatus}
+        statusReason={teacher.statusReason}
+        statusChangedAt={teacher.statusChangedAt}
+        onChanged={load}
+      />
 
       {canManage ? (
         <EditTeacherDialog

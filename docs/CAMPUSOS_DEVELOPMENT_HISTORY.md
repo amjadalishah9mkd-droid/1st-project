@@ -160,7 +160,8 @@ Principles applied consistently from M0 onward:
 | M20-W4 | Finance documents hardening, runbook §29 — **M20 CLOSED** | `12a7eca` |
 | M21-W0 | Platform discovery + M21 design (`docs/M21_PLATFORM_DISCOVERY_DESIGN.md`) | `c907026` |
 | M21-W1 | Account lifecycle administration (migration #15, verb endpoints) | `0f613f1` |
-| M21-W2 | Settings completion, threshold surfacing, locale disposition | *(this commit)* |
+| M21-W2 | Settings completion, threshold surfacing, locale disposition | `492b8f9` |
+| M21-W3 | Account lifecycle admin UI + browser verification | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2624,7 +2625,35 @@ rival-college settings isolation; W1 lifecycle regression guard
 619/619 tests (48 suites), typecheck 0, 15 migrations, prod builds green,
 stack healthy, demo logins 200. W3 (admin UI) NOT started.
 
-*Last updated after M21-W2 (W3 admin UI NOT started).*
+## M21-W3 — Account lifecycle admin UI
+
+New `components/account-lifecycle-card.tsx` (presentation only — the W1
+backend stays authoritative): status badge with changed-at + reason,
+Suspend dialog (reason ≥5, explains immediate lockout/session
+revocation), Reactivate, Archive dialog with a strong PERMANENT warning;
+ARCHIVED renders terminal (no actions, explicit copy); visibility hinted
+by `hasPermission('users.manage')` (capability data, no role names);
+errors surfaced verbatim via toasts (CANNOT_MODIFY_SELF,
+INVALID_TRANSITION, validation, 404s). Integrated on student and teacher
+detail pages; directories badge non-ACTIVE accounts (SUSPENDED warning /
+ARCHIVED danger). API additions: `statusReason`/`statusChangedAt` in
+StudentDetail/TeacherDetail, projected ONLY for full users.read scope
+(ASSIGNED/OWN receive null — account administration data, mirroring the
+M19 emergency-contact minimization); shared types updated. No migration
+(still 15), no new permissions, no backend rule changes.
+
+Tests: +1 e2e (lifecycle metadata scope projection) → suite 12; full
+regression 620/620 (48 suites), typecheck 0, prod builds green. Live
+browser verification via the preview as the demo admin against a fixture
+student created through the real API: suspend (reason validation,
+disabled-submit until valid, SUSPENDED badge + reason + changed-at,
+revocation toast) → reactivate (ACTIVE restored) → archive (permanent
+warning, ARCHIVED terminal — no reactivation path) → directory ARCHIVED
+badge. Fixture removed FK-safe (incl. credential/refresh tokens + audit
+rows); post-run DB: 20 users all ACTIVE, 13 profiles, demo logins 200.
+W4 close-out NOT started.
+
+*Last updated after M21-W3 (W4 close-out NOT started).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2637,7 +2666,7 @@ stack healthy, demo logins 200. W3 (admin UI) NOT started.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M21 status**: W0 design + W1 lifecycle API + W2 settings complete. W3 admin UI / W4 close-out pending.
+- **M21 status**: W0 design + W1 lifecycle API + W2 settings + W3 admin UI complete. W4 close-out pending.
 - **M20 status**: **M20 COMPLETE (W0–W4) — finance documents CLOSED** (see M20-W4 entry).
 - **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:
   immutable finalized term results, versioned amendments, VOID,

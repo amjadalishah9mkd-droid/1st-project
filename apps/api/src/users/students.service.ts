@@ -33,6 +33,8 @@ const studentInclude = {
       email: true,
       phone: true,
       status: true,
+      statusReason: true,
+      statusChangedAt: true,
     },
   },
   department: { select: { id: true, name: true } },
@@ -197,6 +199,13 @@ export class StudentsService {
 
     return {
       ...toItem(profile),
+      // M21-W3: lifecycle metadata is account-administration data — full
+      // users.read scope only (never ASSIGNED teachers or the student).
+      statusReason: scope === 'ALL' ? profile.user.statusReason : null,
+      statusChangedAt:
+        scope === 'ALL'
+          ? (profile.user.statusChangedAt?.toISOString() ?? null)
+          : null,
       dateOfBirth: profile.dateOfBirth?.toISOString().slice(0, 10) ?? null,
       guardianName: includeEmergencyContact ? profile.guardianName : null,
       guardianPhone: includeEmergencyContact ? profile.guardianPhone : null,
