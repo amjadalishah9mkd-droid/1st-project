@@ -157,7 +157,8 @@ Principles applied consistently from M0 onward:
 | M20-W1 | Finance document foundation (migration #14, issuance engine) | `857d680` |
 | M20-W2 | Finance document read API + authorization hardening | `c455031` |
 | M20-W3 | Finance document UI, print experience, receipt mail links | `edd4b8d` |
-| M20-W4 | Finance documents hardening, runbook §29 — **M20 CLOSED** | *(this commit)* |
+| M20-W4 | Finance documents hardening, runbook §29 — **M20 CLOSED** | `12a7eca` |
+| M21-W0 | Platform discovery + M21 design (`docs/M21_PLATFORM_DISCOVERY_DESIGN.md`) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2526,7 +2527,32 @@ provider polling, maker-checker, off-host backups, PITR, external
 monitoring, distributed limiter, GPA scale/repeat/rank policy, Prisma
 upgrade, FILE_URL_SECRET rotation.
 
-*Last updated after M20-W4 (M20 CLOSED). M21 not started.*
+## M21-W0 — Platform discovery + design (design only)
+
+Read-only discovery from baseline `12a7eca` (re-verified 602/602,
+typecheck 0, 14 migrations, builds green, stack healthy before and after).
+`docs/M21_PLATFORM_DISCOVERY_DESIGN.md` (27 sections) audits the full
+platform, reclassifies the debt register with evidence, and investigates
+seven candidates. **Key finding**: `UserStatus`
+(ACTIVE/SUSPENDED/ARCHIVED) is enforced at every auth boundary (guard,
+refresh tokens, Google, credential tokens, PolicyService) and
+`users.manage` is documented as "archive and suspend user accounts" — but
+NO endpoint or UI can change a status; offboarding requires raw SQL. Also
+newly registered: dead `attendanceWarningThreshold`/`locale` settings
+(seed-only, never read), Google-auth-only settings UI, observability-V1
+remainder (no error counters/request IDs). No critical security defect
+found. **Recommended M21: Account Lifecycle & Institutional
+Administration** (suspend/reactivate/archive + instant session revocation
++ admin UI + settings completion + dead-config disposition) — internally
+unblocked, low-risk, prerequisite for real-institution operation and
+future multi-college work. Open decisions O-1…O-8 recorded (API shape,
+status metadata/migration #15, transition matrix, self/last-admin
+protection, locale disposition, threshold surfacing, profile-status
+coupling, guardian visibility). All deferred items preserved verbatim;
+Safepay webhooks remain EXTERNALLY BLOCKED. Implementation was NOT
+started — this workstream is documentation only.
+
+*Last updated after M21-W0 (design only — M21 NOT implemented).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2539,6 +2565,9 @@ upgrade, FILE_URL_SECRET rotation.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
+- **M21 status**: DESIGN/DISCOVERY COMPLETE only — awaiting O-1…O-8
+  approvals before W1 (recommended: Account Lifecycle & Institutional
+  Administration).
 - **M20 status**: **M20 COMPLETE (W0–W4) — finance documents CLOSED** (see M20-W4 entry).
 - **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:
   immutable finalized term results, versioned amendments, VOID,
