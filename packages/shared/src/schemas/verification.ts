@@ -55,8 +55,17 @@ export const collegeSettingsSchema = z
      * the explicit `googleAuth` value.
      */
     googleAuthGraceDays: z.number().int().min(0).max(365).default(30),
+    /**
+     * M21-W2 (O-6) — attendance percentage below which a student is
+     * flagged on read-only attendance surfaces. Display-only V1: it never
+     * changes attendance calculations, records or notifications.
+     */
+    attendanceWarningThreshold: z.number().int().min(0).max(100).default(75),
   })
-  .passthrough(); // College.settings may hold other keys; never drop them.
+  .passthrough(); // College.settings may hold other keys — never drop them.
+// NOTE (M21-W2, O-5): `locale` is a RESERVED settings key. It is preserved
+// verbatim by the passthrough above but deliberately has no schema field,
+// no UI and no runtime behavior — internationalization is future work.
 
 export type CollegeSettings = z.infer<typeof collegeSettingsSchema>;
 

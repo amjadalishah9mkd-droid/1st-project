@@ -159,7 +159,8 @@ Principles applied consistently from M0 onward:
 | M20-W3 | Finance document UI, print experience, receipt mail links | `edd4b8d` |
 | M20-W4 | Finance documents hardening, runbook §29 — **M20 CLOSED** | `12a7eca` |
 | M21-W0 | Platform discovery + M21 design (`docs/M21_PLATFORM_DISCOVERY_DESIGN.md`) | `c907026` |
-| M21-W1 | Account lifecycle administration (migration #15, verb endpoints) | *(this commit)* |
+| M21-W1 | Account lifecycle administration (migration #15, verb endpoints) | `0f613f1` |
+| M21-W2 | Settings completion, threshold surfacing, locale disposition | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2592,7 +2593,38 @@ post-run DB shows 20 users all ACTIVE, 1 college, demo logins 200.
 613/613 tests (47 suites), typecheck 0, 15 migrations, prod builds
 green, stack healthy. W2 (settings) NOT started.
 
-*Last updated after M21-W1 (W2 settings work NOT started).*
+## M21-W2 — Settings completion & threshold surfacing
+
+**Settings (no schema/migration — College.settings JSON only, migrations
+stay at 15).** `collegeSettingsSchema` gains `attendanceWarningThreshold`
+(int 0–100, default 75); the strict PATCH schema accepts it (bounds
+validated, unknown keys rejected); merges keep preserving unknown keys via
+passthrough; changes audited as before. Settings UI gains the editable
+threshold field with display-only copy.
+
+**O-5 locale**: RESERVED as approved — documented in the schema file,
+preserved verbatim by passthrough, deliberately not schematized/patchable
+(PATCH {locale} → 400) and with zero runtime behavior; no data changed.
+
+**O-6 threshold surfacing (read-only V1)**: both attendance summaries
+(student + section) now return `warningThreshold` and per-row
+`belowThreshold` computed server-side from college settings; attendance
+calculations/records untouched (record-count proof in test); NO new
+notification/alert. The web student attendance view's HARDCODED `>= 75`
+color rule — the very defect that made the setting dead config — now uses
+the server flag.
+
+New suite `test/m21-w2-settings.e2e-spec.ts` (6 tests, real Postgres):
+GET default + 401/403 gates; PATCH bounds/audit/merge + unknown-key
+rejection; locale + arbitrary future keys survive writes and locale is
+unpatchable; threshold flags proven in both directions (100 → flagged,
+0 → clear) on student AND teacher section views with records untouched;
+rival-college settings isolation; W1 lifecycle regression guard
+(CANNOT_MODIFY_SELF intact). Demo settings snapshot-restored exactly.
+619/619 tests (48 suites), typecheck 0, 15 migrations, prod builds green,
+stack healthy, demo logins 200. W3 (admin UI) NOT started.
+
+*Last updated after M21-W2 (W3 admin UI NOT started).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2605,7 +2637,7 @@ green, stack healthy. W2 (settings) NOT started.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M21 status**: W0 design + W1 lifecycle API complete (migration #15). W2 settings / W3 admin UI / W4 close-out pending.
+- **M21 status**: W0 design + W1 lifecycle API + W2 settings complete. W3 admin UI / W4 close-out pending.
 - **M20 status**: **M20 COMPLETE (W0–W4) — finance documents CLOSED** (see M20-W4 entry).
 - **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:
   immutable finalized term results, versioned amendments, VOID,

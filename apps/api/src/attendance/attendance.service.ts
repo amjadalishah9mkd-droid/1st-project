@@ -1,3 +1,4 @@
+import { readCollegeSettings } from '@campusos/shared';
 import {
   BadRequestException,
   ForbiddenException,
@@ -456,11 +457,24 @@ export class AttendanceService {
     return this.studentSummary(user, studentProfileId, query.termId);
   }
 
+  /**
+   * M21-W2 (O-6) — read-only display threshold from college settings.
+   * Never alters attendance calculations or records.
+   */
+  private async warningThreshold(collegeId: string): Promise<number> {
+    const college = await this.prisma.college.findUniqueOrThrow({
+      where: { id: collegeId },
+      select: { settings: true },
+    });
+    return readCollegeSettings(college.settings).attendanceWarningThreshold;
+  }
+
   private async studentSummary(
     user: AuthenticatedUser,
     studentProfileId: string,
     termId?: string,
   ): Promise<AttendanceSummaryResponse> {
+    const threshold = await this.warningThreshold(user.collegeId);
     const enrollments = await this.prisma.enrollment.findMany({
       where: {
         studentId: studentProfileId,
@@ -497,6 +511,8 @@ export class AttendanceService {
           counts.map((entry) => [entry.status, entry._count]),
         ) as Record<string, number>;
         const present = (byStatus.PRESENT ?? 0) + (byStatus.LATE ?? 0);
+        const percentage =
+          held > 0 ? Math.round((present / held) * 1000) / 10 : null;
         return {
           sectionId: enrollment.sectionId,
           courseCode: enrollment.section.course.code,
@@ -508,11 +524,12 @@ export class AttendanceService {
           absent: byStatus.ABSENT ?? 0,
           late: byStatus.LATE ?? 0,
           excused: byStatus.EXCUSED ?? 0,
-          percentage: held > 0 ? Math.round((present / held) * 1000) / 10 : null,
+          percentage,
+          belowThreshold: percentage !== null && percentage < threshold,
         };
       }),
     );
-    return { kind: 'student', sections };
+    return { kind: 'student', warningThreshold: threshold, sections };
   }
 
   private async sectionSummary(
@@ -544,8 +561,10 @@ export class AttendanceService {
       byStudent.set(entry.studentId, bucket);
     }
 
+    const threshold = await this.warningThreshold(user.collegeId);
     return {
       kind: 'section',
+      warningThreshold: threshold,
       summary: {
         sectionId,
         courseCode: section.course.code,
@@ -555,6 +574,8 @@ export class AttendanceService {
         students: enrollments.map((enrollment) => {
           const bucket = byStudent.get(enrollment.studentId) ?? {};
           const present = (bucket.PRESENT ?? 0) + (bucket.LATE ?? 0);
+          const percentage =
+            held > 0 ? Math.round((present / held) * 1000) / 10 : null;
           return {
             studentId: enrollment.studentId,
             name: `${enrollment.student.user.firstName} ${enrollment.student.user.lastName}`,
@@ -563,8 +584,8 @@ export class AttendanceService {
             absent: bucket.ABSENT ?? 0,
             late: bucket.LATE ?? 0,
             excused: bucket.EXCUSED ?? 0,
-            percentage:
-              held > 0 ? Math.round((present / held) * 1000) / 10 : null,
+            percentage,
+            belowThreshold: percentage !== null && percentage < threshold,
           };
         }),
       },

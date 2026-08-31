@@ -28,6 +28,8 @@ const patchSettingsSchema = z
     googleAuth: z.enum(GOOGLE_AUTH_MODES).optional(),
     allowSelfRegistration: z.boolean().optional(),
     googleAuthGraceDays: z.number().int().min(0).max(365).optional(),
+    // M21-W2 (O-6): display-only attendance warning threshold.
+    attendanceWarningThreshold: z.number().int().min(0).max(100).optional(),
   })
   .strict();
 type PatchSettingsInput = z.infer<typeof patchSettingsSchema>;

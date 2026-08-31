@@ -58,6 +58,8 @@ export interface StudentSectionAttendance {
   late: number;
   excused: number;
   percentage: number | null; // null when no held sessions yet
+  /** M21-W2: percentage < college attendanceWarningThreshold (display only). */
+  belowThreshold: boolean;
 }
 
 export interface SectionAttendanceSummary {
@@ -75,9 +77,19 @@ export interface SectionAttendanceSummary {
     late: number;
     excused: number;
     percentage: number | null;
+    belowThreshold: boolean;
   }>;
 }
 
 export type AttendanceSummaryResponse =
-  | { kind: 'student'; sections: StudentSectionAttendance[] }
-  | { kind: 'section'; summary: SectionAttendanceSummary };
+  | {
+      kind: 'student';
+      /** M21-W2: the college's display threshold (read-only surfacing). */
+      warningThreshold: number;
+      sections: StudentSectionAttendance[];
+    }
+  | {
+      kind: 'section';
+      warningThreshold: number;
+      summary: SectionAttendanceSummary;
+    };

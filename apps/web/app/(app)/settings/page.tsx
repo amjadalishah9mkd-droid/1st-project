@@ -36,6 +36,7 @@ export default function SettingsPage() {
   const [mode, setMode] = useState<GoogleAuthMode>('off');
   const [selfReg, setSelfReg] = useState(false);
   const [graceDays, setGraceDays] = useState('30');
+  const [attendanceThreshold, setAttendanceThreshold] = useState('75');
   const [saving, setSaving] = useState(false);
 
   function load() {
@@ -46,6 +47,9 @@ export default function SettingsPage() {
         setMode(response.data.settings.googleAuth);
         setSelfReg(response.data.settings.allowSelfRegistration);
         setGraceDays(String(response.data.settings.googleAuthGraceDays));
+        setAttendanceThreshold(
+          String(response.data.settings.attendanceWarningThreshold),
+        );
       })
       .catch((err) =>
         setError(err instanceof ApiError ? err.message : 'Failed to load settings'),
@@ -63,6 +67,7 @@ export default function SettingsPage() {
           googleAuth: mode,
           allowSelfRegistration: selfReg,
           googleAuthGraceDays: Number(graceDays),
+          attendanceWarningThreshold: Number(attendanceThreshold),
         }),
       });
       setPayload(response.data);
@@ -81,7 +86,7 @@ export default function SettingsPage() {
     <div className="mx-auto max-w-2xl">
       <PageHeader
         title="Settings"
-        description={`${payload.name} (${payload.code}) — identity & sign-in configuration.`}
+        description={`${payload.name} (${payload.code}) — identity, sign-in & display configuration.`}
       />
 
       <form
@@ -135,6 +140,22 @@ export default function SettingsPage() {
         </div>
 
         <div className="flex justify-end">
+          <div className="flex flex-col gap-1.5">
+            <Input
+              label="Attendance warning threshold (%)"
+              type="number"
+              min={0}
+              max={100}
+              value={attendanceThreshold}
+              onChange={(event) => setAttendanceThreshold(event.target.value)}
+            />
+            <p className="text-xs text-ink-muted">
+              Students whose attendance percentage falls below this value are
+              flagged on attendance views. Display only — it never changes
+              attendance records or sends notifications.
+            </p>
+          </div>
+
           <Button type="submit" disabled={saving}>
             {saving ? 'Saving…' : 'Save settings'}
           </Button>

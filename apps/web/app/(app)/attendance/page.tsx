@@ -451,9 +451,9 @@ function StudentSummaryView() {
                   className={`text-lg font-semibold ${
                     section.percentage === null
                       ? 'text-ink-faint'
-                      : section.percentage >= 75
-                        ? 'text-success-700'
-                        : 'text-danger-700'
+                      : section.belowThreshold
+                        ? 'text-danger-700'
+                        : 'text-success-700'
                   }`}
                 >
                   {section.percentage === null ? '—' : `${section.percentage}%`}
