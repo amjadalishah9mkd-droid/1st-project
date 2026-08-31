@@ -40,6 +40,7 @@ describe('M20-W3 — finance document mail links', () => {
   let structureId: string;
   const invoiceIds: string[] = [];
   const attemptIds: string[] = [];
+  const startedAt = new Date();
 
   const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -101,6 +102,16 @@ describe('M20-W3 — finance document mail links', () => {
   });
 
   afterAll(async () => {
+    // This suite emits real payment/refund events for the DEMO student —
+    // remove the Notification rows those events created so exactly-once
+    // counting suites (payments-webhook) keep a clean baseline.
+    await prisma.notification.deleteMany({
+      where: {
+        userId: studentUserId,
+        type: { in: ['payment.succeeded', 'refund.succeeded'] },
+        createdAt: { gte: startedAt },
+      },
+    });
     await prisma.financeDocument.deleteMany({
       where: { invoiceId: { in: invoiceIds } },
     });

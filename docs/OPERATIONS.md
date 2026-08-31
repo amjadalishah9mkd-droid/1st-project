@@ -1113,3 +1113,106 @@ manual procedure.
 - Emergency-contact fields on students (`guardian*` columns) are contact
   data only: they never grant guardian access (GuardianLink is the sole
   channel) and are visible only to full-scope staff and the student.
+
+## 29. Finance documents runbook (M20)
+
+### What a FinanceDocument is
+
+An **immutable snapshot** acknowledging exactly one settled money row:
+`PAYMENT_RECEIPT` per `Payment`, `REFUND_DOCUMENT` per `Refund`
+(`paymentId`/`refundId` are DB-unique — a second document for the same
+transaction is structurally impossible). Every displayed value (student
+identity, invoiceNo, structure/college names, amount, method, masked
+reference, invoice total, balance **at issuance**, receiver name, parent
+receipt number) is frozen inside the same database transaction as the
+money event. Later renames, payments, refunds or term changes NEVER alter
+an issued document — the fees pages show live balances; the document shows
+history.
+
+### Issuance
+
+- **Automatic**: manual payment recording, verified gateway settlement,
+  and both refund-success paths (PROVIDER + RECORDED) issue the document
+  in-transaction. A failed transaction issues nothing.
+- **Historical (pre-M20 rows)**: `POST /fees/payments/:id/receipt` and
+  `POST /fees/refunds/:id/document` (`fees.manage`). Replays return 409
+  `ALREADY_ISSUED`. Nothing is backfilled automatically — issue on demand.
+- **Numbering**: `RCP-`/`RFD-<year>-<seq5>`, unique per college
+  (`(collegeId, receiptNo)`), allocated as `max(sequence)+1` under a
+  per-(college, kind, year) advisory transaction lock taken AFTER the
+  invoice row lock. Sequences restart each calendar year per kind. Numbers
+  are never reused — a VOID document keeps its number forever. Under
+  concurrency, duplicate-document attempts lose with 409; number
+  collisions from out-of-band rows are retried with a bumped sequence
+  (`NUMBERING_EXHAUSTED` after bounded retries — investigate manual rows).
+
+### Lifecycle: ACTIVE → VOID (only)
+
+Void (`POST /fees/documents/:id/void`, `fees.manage`) requires a reason
+(≥5 chars), is CAS-protected (a concurrent double-void loses with 409
+`INVALID_TRANSITION`), audits `fees.receipt_voided` in-transaction, and
+changes ONLY status/voidedBy/voidedAt/voidReason. There is no
+VOID→ACTIVE, no delete, no snapshot edit — anywhere. Voiding a receipt
+does not move money; if money was wrong, refund/re-record through the
+normal flows (each producing its own documents), then void the orphaned
+receipt with a clear reason.
+
+### Authorization (existing permissions only)
+
+| Actor | Read | Issue (historical) / Void |
+|---|---|---|
+| ADMIN / ACCOUNTANT | fees.read ALL (college) | fees.manage |
+| STUDENT | fees.read OWN (self only) | — |
+| GUARDIAN | fees.read CHILD — explicit `?studentId=` + ACTIVE GuardianLink | — |
+| TEACHER / anonymous | none / 401 | — |
+
+Cross-college and OWN-mismatch reads return a 404 indistinguishable from
+a nonexistent document. Success-mail receipt links are convenience only —
+the document page re-authorizes through the API on every load.
+
+### Reading & printing
+
+UI: `/fees/documents` (list; students see "My receipts"), document page
+`/fees/documents/<id>` with Print / Save as PDF (browser print — there is
+deliberately NO server-side PDF). VOID documents remain readable and print
+with a VOID watermark + reason. The API payload is the exact public
+contract: no internal ids, no unmasked references (last 6 chars only), no
+refund reasons, no attempt history.
+
+### Audit
+
+`fees.receipt_issued` (in the issuing transaction; metadata: receiptNo,
+kind, paymentId|refundId) and `fees.receipt_voided` (receiptNo, kind) —
+exactly once each; reads are not audited.
+
+### Error codes
+
+| Code | Meaning | Action |
+|---|---|---|
+| `ALREADY_ISSUED` (409) | document exists for that payment/refund | open the existing document |
+| `INVALID_TRANSITION` (409) | void on an already-VOID document | nothing — it is already void |
+| `REASON_REQUIRED` (400) | void reason missing/too short | provide a real reason |
+| `NUMBERING_EXHAUSTED` (409) | bounded retry ran out | check for manual FinanceDocument rows; retry |
+| 404 | foreign college / not yours / nonexistent | verify id and permission |
+
+### Operators must NEVER
+
+- edit, delete or re-number FinanceDocument rows in SQL — they are the
+  institution's financial evidence;
+- "fix" a wrong receipt by editing snapshot fields — void it (audited)
+  and let the corrective money flow issue new documents;
+- treat a receipt email link as authorization or forward signed content;
+- expose a receipts endpoint without the fees.read gates.
+
+### Deferred (explicitly NOT implemented in M20)
+
+Server-side PDF rendering; StoredFile `FINANCE_DOCUMENT` purpose; college
+branding fields (address/logo); `receipts.csv` export; mail attachments.
+
+### Verification checklist
+
+1. Record a test payment → `fees.receipt_issued` audit + document visible
+   on the invoice page. 2. `GET /fees/documents/<id>` as the student →
+   200; as a rival college admin → 404. 3. Void with reason → VOID
+   watermark on the page, second void 409. 4. Full suite:
+   `npm test -w @campusos/api`.

@@ -156,7 +156,8 @@ Principles applied consistently from M0 onward:
 | M20-W0 | Finance documents discovery + design (`docs/M20_FINANCE_DOCUMENTS_DESIGN.md`) | `c491c00` |
 | M20-W1 | Finance document foundation (migration #14, issuance engine) | `857d680` |
 | M20-W2 | Finance document read API + authorization hardening | `c455031` |
-| M20-W3 | Finance document UI, print experience, receipt mail links | *(this commit)* |
+| M20-W3 | Finance document UI, print experience, receipt mail links | `edd4b8d` |
+| M20-W4 | Finance documents hardening, runbook §29 — **M20 CLOSED** | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2476,7 +2477,56 @@ payment, PARTIAL); all four demo logins 200. 602/602 tests (46 suites; one
 known first-run webhook flake re-ran clean), typecheck 0, 14 migrations
 (unchanged), prod builds green, stack healthy. W4 close-out NOT started.
 
-*Last updated after M20-W3 (W4 close-out NOT started).*
+## M20-W4 — Hardening, runbook & close-out — **M20 CLOSED**
+
+Full-surface W4 audit (A–J) found **zero product defects**; one genuine
+TEST-ISOLATION defect was discovered and fixed: the W3 mail suite emitted
+real payment/refund events for the demo student without cleaning the
+Notification rows they created, intermittently inflating the
+payments-webhook suite's exactly-once notification count on full runs —
+its afterAll now removes those rows (suite-local cleanup only; zero
+assertions changed; two consecutive clean 602/602 full runs after the
+fix). Every mandated invariant was already covered by the 28 M20 tests
+(14 foundation + 11 read + 3 mail) and re-verified green:
+authorization matrix (fees.read OWN/CHILD/ALL, fees.manage mutations,
+teacher/anon denial), tenancy/IDOR (server-derived collegeId only,
+byte-identical 404s, hostile query/body params inert), immutability
+(byte-identical rows/payloads after renames/refunds/void/reads; the sole
+`updateMany` is the tenant-gated CAS void writing lifecycle fields only;
+no delete path exists), numbering/concurrency (advisory lock after invoice
+lock, P2002 duplicate-vs-collision distinction, bounded retry, per-college
+sequences), financial isolation (money.ts untouched since M17; Payment/
+Invoice rows proven byte-identical across issue+void), audit exactly-once,
+data minimization (22-key allowlist, masked references, no reasons/tokens/
+cuids), mail security (receiptUrl through the M19 chokepoint; escaping
+suite green), UI/print (no frontend arithmetic, no live reconstruction,
+no PDF/storage deps — grep-proven). Grep sweeps clean: no role
+conditionals, client collegeId, raw SQL, shell exec, or
+dangerouslySetInnerHTML in the M20 surface.
+
+Operational re-verification: fresh backup (TOC-verified) + restore drill
+PASS into the scratch DB (live DB checksum identical before/after:
+`20|1|0|14|45eff7cf…`); `/health/ops` 401 anon / admin `ok` (db up, 14/0
+migrations, backups fresh, uploads writable); all four demo logins 200;
+api/web/postgres healthy + backup sidecar. OPERATIONS.md gained §29 —
+the definitive finance-document runbook (semantics, issuance, numbering,
+void policy, authz matrix, error codes, never-do list, deferred items,
+verification checklist).
+
+**M20 FINAL STATUS: CLOSED.** W0 `c491c00` (design) → W1 `857d680`
+(migration #14 + issuance engine) → W2 `c455031` (read API + hardening) →
+W3 `edd4b8d` (UI/print/mail links) → W4 (this commit). Final: 602 tests /
+46 suites, typecheck 0, 14 migrations, prod builds green, stack healthy.
+Debt retired with evidence: the "receipts/PDF platform (M20 candidate)"
+item — immutable numbered receipts + refund documents + browser-print now
+exist. Deferred verbatim: server-side PDF, StoredFile FINANCE_DOCUMENT
+purpose, branding fields, receipts.csv, mail attachments, Safepay webhook
+registration/replay (EXTERNALLY BLOCKED), per-college webhook secrets,
+provider polling, maker-checker, off-host backups, PITR, external
+monitoring, distributed limiter, GPA scale/repeat/rank policy, Prisma
+upgrade, FILE_URL_SECRET rotation.
+
+*Last updated after M20-W4 (M20 CLOSED). M21 not started.*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2489,7 +2539,7 @@ known first-run webhook flake re-ran clean), typecheck 0, 14 migrations
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M20 status**: W0 design + W1 foundation + W2 read API + W3 UI/print/mail complete. W4 close-out pending.
+- **M20 status**: **M20 COMPLETE (W0–W4) — finance documents CLOSED** (see M20-W4 entry).
 - **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:
   immutable finalized term results, versioned amendments, VOID,
   transcripts with frozen credit-weighted GPA (null until the
