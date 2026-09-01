@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { operationalLogger } from './operational-logger';
+import { operationalCounters } from './operational-counters';
 
 export const REQUEST_ID_HEADER = 'x-request-id';
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._-]{1,128}$/;
@@ -50,6 +51,10 @@ export function requestContextMiddleware(
   storage.run({ requestId }, () => {
     res.once('finish', () => {
       const durationMs = Number(process.hrtime.bigint() - started) / 1_000_000;
+      // Exactly one completion hook owns response-category counting. The
+      // exception filter only classifies known vs unexpected 5xx, avoiding
+      // double-counting between the two centralized paths.
+      operationalCounters.recordResponse(res.statusCode);
       // req.route.path is framework-defined after routing. Never fall back to
       // req.path/originalUrl: both may contain attacker-controlled values.
       const route =

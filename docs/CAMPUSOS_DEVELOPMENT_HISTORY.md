@@ -164,7 +164,8 @@ Principles applied consistently from M0 onward:
 | M21-W3 | Account lifecycle admin UI + browser verification | `2da1d03` |
 | M21-W4 | Lifecycle hardening re-audit, runbook §30 — **M21 CLOSED** | `41fc42b` |
 | M22-W0 | Production-readiness discovery + design (`docs/M22_PLATFORM_DISCOVERY_DESIGN.md`) | `b7fcbcc` |
-| M22-W1 | Request correlation + safe structured operational logging | *(this commit)* |
+| M22-W1 | Request correlation + safe structured operational logging | `7f59346` |
+| M22-W2 | Truthful readiness + bounded instance-local counters | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2760,7 +2761,41 @@ containers healthy; live response/header and JSON log verified. W2 truthful
 health/counters, W3 production backup/deployment parity and W4 close-out were
 NOT started.
 
-*Last updated after M22-W1 (W2 health/counters NOT started).*
+## M22-W2 — Truthful readiness & bounded runtime counters
+
+Public health is now operationally truthful: `/health` remains the
+readiness-compatible alias, `/health/ready` is explicit readiness, and both
+return HTTP 503 + `status: degraded` when required PostgreSQL connectivity is
+down; `/health/live` is a separate process-only 200 probe that never touches
+the DB. Healthy response bodies remain compatible and M22-W1 `x-request-id`
+headers remain unchanged. A real container drill stopped PostgreSQL and proved
+live=200/readiness=503, then restored PostgreSQL and readiness=200; DB snapshot
+before/after remained 20 users / 1 college / 15 migrations.
+
+New fixed allowlist `OperationalCounters` (memory only): requestsCompleted,
+responses4xx, responses5xx, known5xx, unexpected5xx, rateLimitRejections.
+The single response-finish hook owns HTTP category increments; the centralized
+filter only classifies known-vs-unexpected 5xx, preventing double counting.
+No generic label API exists, so route/query/user/tenant/IP/policy/token values
+cannot create cardinality. Counters reset on process restart and are exposed
+only inside the existing settings.manage-gated `/health/ops` as
+`scope: instance`, resetAt and aggregate numbers. Migration probe failures now
+return `migrations.status: error` and degrade ops health rather than appearing
+as zero unfinished migrations. No database/AuditLog/Redis/external metrics,
+new permission, migration or Docker change.
+
+New `test/runtime-reliability.e2e-spec.ts` (10 tests) plus ops assertions:
+healthy readiness; modeled DB-down 503; DB-independent liveness; correlated
+public probes; fixed names/start/reset; real 200/401/503 exact counting;
+unexpected-500 classification; 429 fixed bucket/no sensitive labels;
+concurrent increment integrity; protected/minimized ops output. M22 operational
+suites 27/27; full regression 641/641 (50 suites), typecheck 0, Prisma valid,
+15 migrations, production builds green, stack healthy. Webhook activation and
+the latent post-claim failure disposition remain deferred: safe remediation
+may require processing-state design and was not necessary for W2. W3
+production backup/deployment parity and W4 close-out were NOT started.
+
+*Last updated after M22-W2 (W3 production parity NOT started).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2773,8 +2808,8 @@ NOT started.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M22 status**: W0 design + W1 correlation/logging complete. W2 truthful
-  health/counters, W3 production parity and W4 close-out pending.
+- **M22 status**: W0 design + W1 correlation/logging + W2 truthful
+  readiness/counters complete. W3 production parity and W4 close-out pending.
 - **M21 status**: **M21 COMPLETE (W0–W4) — account lifecycle & institutional administration CLOSED** (see M21-W4 entry).
 - **M20 status**: **M20 COMPLETE (W0–W4) — finance documents CLOSED** (see M20-W4 entry).
 - **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:

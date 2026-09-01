@@ -9,6 +9,7 @@ import { Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { currentRequestId } from '../observability/request-context';
 import { operationalLogger } from '../observability/operational-logger';
+import { operationalCounters } from '../observability/operational-counters';
 
 /**
  * Uniform error envelope (Blueprint §7):
@@ -73,6 +74,13 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     // The completion middleware emits the status/duration record separately;
     // this is the single error-classification record for the failure.
     if (status >= 500) {
+      const unexpected =
+        !(exception instanceof HttpException) &&
+        !(
+          exception instanceof Prisma.PrismaClientKnownRequestError &&
+          ['P2002', 'P2003', 'P2025'].includes(exception.code)
+        );
+      operationalCounters.recordServerError(unexpected);
       operationalLogger.write({
         level: 'error',
         event: 'request.failed',

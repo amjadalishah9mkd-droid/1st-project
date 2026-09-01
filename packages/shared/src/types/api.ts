@@ -82,10 +82,17 @@ export interface AuthPayload {
 
 /** Health endpoint payload. */
 export interface HealthStatus {
-  status: 'ok';
+  status: 'ok' | 'degraded';
   service: 'campusos-api';
   version: string;
   database: 'up' | 'down';
+  timestamp: string;
+}
+
+/** Process-only liveness: deliberately independent of external services. */
+export interface LivenessStatus {
+  status: 'ok';
+  service: 'campusos-api';
   timestamp: string;
 }
 
@@ -98,6 +105,7 @@ export interface OpsHealthStatus {
   status: 'ok' | 'degraded';
   database: 'up' | 'down';
   migrations: {
+    status: 'ok' | 'error';
     applied: number;
     /** Rows with no finish or a rollback — must be 0 on a healthy system. */
     unfinished: number;
@@ -112,5 +120,18 @@ export interface OpsHealthStatus {
   };
   uploadsWritable: boolean;
   uptimeSeconds: number;
+  /** Fixed-name, process-local counters; reset whenever this API restarts. */
+  runtime: {
+    scope: 'instance';
+    resetAt: string;
+    counters: {
+      requestsCompleted: number;
+      responses4xx: number;
+      responses5xx: number;
+      known5xx: number;
+      unexpected5xx: number;
+      rateLimitRejections: number;
+    };
+  };
   timestamp: string;
 }

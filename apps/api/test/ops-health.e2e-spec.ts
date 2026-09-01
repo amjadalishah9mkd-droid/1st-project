@@ -62,6 +62,7 @@ describe('M19-W3 — /health/ops', () => {
     expect(res.status).toBe(200);
     const data = res.body.data;
     expect(data.database).toBe('up');
+    expect(data.migrations.status).toBe('ok');
     expect(data.migrations.applied).toBeGreaterThanOrEqual(13);
     expect(data.migrations.unfinished).toBe(0);
     expect(data.backups).toEqual({
@@ -73,6 +74,8 @@ describe('M19-W3 — /health/ops', () => {
     expect(data.uploadsWritable).toBe(true);
     expect(data.status).toBe('ok');
     expect(typeof data.uptimeSeconds).toBe('number');
+    expect(data.runtime.scope).toBe('instance');
+    expect(typeof data.runtime.resetAt).toBe('string');
   });
 
   it('reports fresh backups as healthy', async () => {

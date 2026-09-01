@@ -1061,15 +1061,32 @@ four demo accounts), then drops the scratch DB. It never writes to the live
 
 ### Operational health: GET /api/v1/health/ops
 
-Requires `settings.manage` (ADMIN). Public `GET /health` is unchanged.
-Reports: `database` up/down; `migrations.applied` / `migrations.unfinished`
-(unfinished must be 0); `backups` {configured, count, latestAgeSeconds,
-stale} read from the api container's read-only `pgbackups` mount
+Requires `settings.manage` (ADMIN). M22-W2 defines three public probes:
+
+- `GET /health/live` — process liveness only; never queries PostgreSQL.
+- `GET /health/ready` — readiness; HTTP 200 when PostgreSQL is up, HTTP 503
+  with `status: degraded` when it is down.
+- `GET /health` — readiness alias retained for existing Docker/ingress
+  compatibility; it has the same 200/503 semantics as `/health/ready`.
+
+The protected ops route reports: `database` up/down;
+`migrations.status` (`ok|error`) plus applied/unfinished counts (probe errors
+are degraded, never silently represented as zero); `backups`
+{configured, count, latestAgeSeconds, stale} from the API container's
+read-only `pgbackups` mount
 (`BACKUP_DIR`); `uploadsWritable`; `uptimeSeconds`. `status` becomes
 `degraded` when the db is down, any migration is unfinished, uploads are
 unwritable, or backups are configured but stale (older than
 `BACKUP_MAX_AGE_SECONDS`, default 26h — one missed daily cycle). The
 response never contains credentials, DSNs, paths or filenames.
+
+`runtime` is a fixed-name, **instance-local** counter snapshot with
+`scope: instance` and `resetAt`. Values: `requestsCompleted`,
+`responses4xx`, `responses5xx`, `known5xx`, `unexpected5xx`, and
+`rateLimitRejections`. They reset whenever the API process restarts, are not
+fleet totals, have no labels, and are not stored in Postgres/AuditLog. Use
+them for immediate diagnosis only; durable/distributed metrics remain
+deferred.
 
 ### Failure interpretation
 
@@ -1079,6 +1096,11 @@ response never contains credentials, DSNs, paths or filenames.
 | `backups.configured: false` | no BACKUP_DIR mounted | expected in bare test runs; in compose, check the api volumes |
 | `backups.count: 0` with configured | volume empty/unreadable | sidecar never succeeded — inspect logs |
 | `migrations.unfinished > 0` | crashed/rolled-back migration | investigate `_prisma_migrations`; never edit rows manually |
+| `migrations.status: error` | migration ledger probe failed | verify DB permissions/schema; readiness may still reflect DB connectivity separately |
+| readiness HTTP 503 | required PostgreSQL dependency unavailable | keep traffic away; inspect DB/container; liveness 200 only means the process exists |
+| `unexpected5xx` increases | unclassified server failure occurred on this API instance | correlate with `x-request-id` structured logs; investigate immediately |
+| `known5xx` increases | an explicit service-level 5xx occurred | correlate logs; check configured dependencies/providers |
+| `rateLimitRejections` increases | this instance returned 429 | inspect abuse/proxy topology; counters contain no IP/user labels |
 | `uploadsWritable: false` | uploads dir missing/read-only | fix volume/permissions; file uploads are failing |
 | drill FAIL | dump unreadable or data checks failed | treat newest dump as bad; check earlier dumps; escalate |
 

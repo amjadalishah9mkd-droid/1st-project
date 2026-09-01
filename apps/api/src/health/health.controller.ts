@@ -1,11 +1,17 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Res } from '@nestjs/common';
 import { readdir, stat, access, constants } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { HealthStatus, OpsHealthStatus } from '@campusos/shared';
+import type {
+  HealthStatus,
+  LivenessStatus,
+  OpsHealthStatus,
+} from '@campusos/shared';
+import type { Response } from 'express';
 import { PERMISSIONS } from '@campusos/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { Public } from '../common/decorators/public.decorator';
 import { RequirePermission } from '../access/require-permission.decorator';
+import { operationalCounters } from '../common/observability/operational-counters';
 
 /**
  * M19-W3 — freshness threshold: sidecar dumps every 24h, so anything older
@@ -19,13 +25,38 @@ export class HealthController {
 
   @Public()
   @Get()
-  async health(): Promise<HealthStatus> {
+  health(@Res({ passthrough: true }) response: Response): Promise<HealthStatus> {
+    return this.readiness(response);
+  }
+
+  /**
+   * M22-W2 readiness: required database dependency must be reachable.
+   * `/health` remains an alias so existing Compose probes become truthful
+   * without a configuration change; a DB-down process now returns HTTP 503.
+   */
+  @Public()
+  @Get('ready')
+  async readiness(
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<HealthStatus> {
     const databaseUp = await this.prisma.isHealthy();
+    if (!databaseUp) response.status(503);
     return {
-      status: 'ok',
+      status: databaseUp ? 'ok' : 'degraded',
       service: 'campusos-api',
       version: process.env.npm_package_version ?? '0.1.0',
       database: databaseUp ? 'up' : 'down',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  /** Process liveness only: never touches Postgres, files or backups. */
+  @Public()
+  @Get('live')
+  liveness(): LivenessStatus {
+    return {
+      status: 'ok',
+      service: 'campusos-api',
       timestamp: new Date().toISOString(),
     };
   }
@@ -42,11 +73,13 @@ export class HealthController {
     const databaseUp = await this.prisma.isHealthy();
     const migrations = databaseUp
       ? await this.migrationState()
-      : { applied: 0, unfinished: 0 };
+      : { status: 'error' as const, applied: 0, unfinished: 0 };
     const backups = await this.backupState();
     const uploadsWritable = await this.uploadsWritable();
+    const runtime = operationalCounters.snapshot();
     const degraded =
       !databaseUp ||
+      migrations.status !== 'ok' ||
       migrations.unfinished > 0 ||
       !uploadsWritable ||
       (backups.configured && backups.stale);
@@ -57,11 +90,17 @@ export class HealthController {
       backups,
       uploadsWritable,
       uptimeSeconds: Math.floor(process.uptime()),
+      runtime: {
+        scope: 'instance',
+        resetAt: runtime.resetAt,
+        counters: runtime.values,
+      },
       timestamp: new Date().toISOString(),
     };
   }
 
   private async migrationState(): Promise<{
+    status: 'ok' | 'error';
     applied: number;
     unfinished: number;
   }> {
@@ -73,11 +112,14 @@ export class HealthController {
           count(*) FILTER (WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL) AS unfinished
         FROM "_prisma_migrations"`;
       return {
+        status: 'ok',
         applied: Number(rows[0]?.applied ?? 0),
         unfinished: Number(rows[0]?.unfinished ?? 0),
       };
     } catch {
-      return { applied: 0, unfinished: 0 };
+      // Probe errors are findings, never silently represented as "zero
+      // unfinished migrations" with an overall healthy state.
+      return { status: 'error', applied: 0, unfinished: 0 };
     }
   }
 
