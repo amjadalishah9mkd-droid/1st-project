@@ -4,10 +4,11 @@ import {
   ExceptionFilter,
   HttpException,
   HttpStatus,
-  Logger,
 } from '@nestjs/common';
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
+import { currentRequestId } from '../observability/request-context';
+import { operationalLogger } from '../observability/operational-logger';
 
 /**
  * Uniform error envelope (Blueprint §7):
@@ -17,10 +18,9 @@ import { Prisma } from '@prisma/client';
  */
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
-  private readonly logger = new Logger(GlobalExceptionFilter.name);
-
   catch(exception: unknown, host: ArgumentsHost): void {
     const response = host.switchToHttp().getResponse<Response>();
+    const request = host.switchToHttp().getRequest<Request>();
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let code = 'INTERNAL_ERROR';
@@ -64,13 +64,32 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         status = HttpStatus.CONFLICT;
         code = 'FOREIGN_KEY_CONSTRAINT';
         message = 'The operation violates a data relationship constraint';
-      } else {
-        this.logger.error(`Prisma error ${exception.code}`, exception.stack);
       }
-    } else {
-      const stack =
-        exception instanceof Error ? exception.stack : String(exception);
-      this.logger.error('Unhandled exception', stack);
+    }
+
+    // M22-W1: centralized safe visibility for EVERY 5xx, including known
+    // HttpException 5xx that Nest's logger previously missed. Never serialize
+    // the exception, response/body, stack, URL/query, headers or identities.
+    // The completion middleware emits the status/duration record separately;
+    // this is the single error-classification record for the failure.
+    if (status >= 500) {
+      operationalLogger.write({
+        level: 'error',
+        event: 'request.failed',
+        requestId: currentRequestId(),
+        method: request.method,
+        route:
+          typeof request.route?.path === 'string'
+            ? request.route.path
+            : 'unmatched',
+        statusCode: status,
+        errorCode: code,
+        errorClass:
+          exception instanceof Error
+            ? exception.constructor.name
+            : 'UnknownError',
+        message: 'Server request failed',
+      });
     }
 
     response.status(status).json({

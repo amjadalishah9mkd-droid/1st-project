@@ -7,6 +7,7 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { EnvelopeInterceptor } from './common/interceptors/envelope.interceptor';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
+import { requestContextMiddleware } from './common/observability/request-context';
 import { corsOrigins, validateEnv } from './config/env';
 
 async function bootstrap(): Promise<void> {
@@ -22,6 +23,10 @@ async function bootstrap(): Promise<void> {
 
   // Blueprint §7: all routes served under /api/v1
   app.setGlobalPrefix('api/v1');
+
+  // M22-W1: initialize correlation before every other middleware/guard.
+  // The effective ID is also returned on every response, including errors.
+  app.use(requestContextMiddleware);
 
   // Security headers + fingerprint reduction (M10-W3).
   app.use(

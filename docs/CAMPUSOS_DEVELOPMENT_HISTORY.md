@@ -163,7 +163,8 @@ Principles applied consistently from M0 onward:
 | M21-W2 | Settings completion, threshold surfacing, locale disposition | `492b8f9` |
 | M21-W3 | Account lifecycle admin UI + browser verification | `2da1d03` |
 | M21-W4 | Lifecycle hardening re-audit, runbook §30 — **M21 CLOSED** | `41fc42b` |
-| M22-W0 | Production-readiness discovery + design (`docs/M22_PLATFORM_DISCOVERY_DESIGN.md`) | *(this commit)* |
+| M22-W0 | Production-readiness discovery + design (`docs/M22_PLATFORM_DISCOVERY_DESIGN.md`) | `b7fcbcc` |
+| M22-W1 | Request correlation + safe structured operational logging | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2724,7 +2725,42 @@ backup mode, webhook failure scope, counter scope, request-ID response
 contract, and log identity fields. No M22 implementation, schema, migration,
 test, UI, package, Docker or runtime change was made.
 
-*Last updated after M22-W0 (design only — M22 NOT implemented).*
+## M22-W1 — Request correlation & safe operational logging
+
+O-1/O-3/O-9/O-10 implemented with no migration/dependency/Docker/API-body
+change. Early `requestContextMiddleware` assigns every request an effective
+`x-request-id`: bounded ASCII `[A-Za-z0-9._-]` (1–128) is accepted; missing,
+oversized, whitespace, quote/JSON-breaking, Unicode or control-character IDs
+are replaced by `crypto.randomUUID()`. The effective ID is returned on success
+and error responses and stored in AsyncLocalStorage, so downstream logging
+requires no parameter threading and concurrent requests remain isolated.
+
+`OperationalLogger` emits allowlist-only one-line JSON request completion and
+5xx classification records: timestamp/level/service/environment/event,
+requestId, method, framework route template, status/duration and safe error
+code/class/message. There is deliberately no API for bodies, response data,
+raw paths/query strings, headers/cookies, IP, email/name, tenant/user IDs,
+tokens, payment references, stacks or arbitrary metadata; all strings are
+bounded and JSON-encoded. Successful public health probes are suppressed to
+bound volume. AuditLog is untouched. The centralized exception filter now
+logs every 5xx (including known HttpException 5xx previously invisible) once
+as a fixed classification without exposing exception messages/stacks; client
+envelopes remain byte-compatible. Request-completion and classification
+events are distinct; no error is independently logged elsewhere by W1.
+
+New `test/request-correlation.e2e-spec.ts` (11 tests): generated and accepted
+IDs, hostile replacement (including direct CR/LF/control boundary tests),
+response-header/body compatibility, 30-task AsyncLocalStorage isolation plus
+overlapping HTTP contexts, fixed-schema/redaction sentinels for query/auth/
+cookie/User-Agent, real FEATURE_DISABLED 503 classification, unexpected Error
+500 redaction, 4xx not misclassified, arbitrary-key rejection and bounded
+message JSON validity. 631/631 tests (49 suites), typecheck 0, Prisma valid,
+15 migrations up to date, API/web production builds green, all four
+containers healthy; live response/header and JSON log verified. W2 truthful
+health/counters, W3 production backup/deployment parity and W4 close-out were
+NOT started.
+
+*Last updated after M22-W1 (W2 health/counters NOT started).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2737,9 +2773,8 @@ test, UI, package, Docker or runtime change was made.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M22 status**: DESIGN/DISCOVERY COMPLETE only — awaiting O-1…O-10 and
-  explicit W1 authorization (recommended: Production Runtime Reliability &
-  Incident Visibility).
+- **M22 status**: W0 design + W1 correlation/logging complete. W2 truthful
+  health/counters, W3 production parity and W4 close-out pending.
 - **M21 status**: **M21 COMPLETE (W0–W4) — account lifecycle & institutional administration CLOSED** (see M21-W4 entry).
 - **M20 status**: **M20 COMPLETE (W0–W4) — finance documents CLOSED** (see M20-W4 entry).
 - **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:

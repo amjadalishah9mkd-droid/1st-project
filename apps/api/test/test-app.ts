@@ -6,6 +6,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from '../src/app.module';
 import { EnvelopeInterceptor } from '../src/common/interceptors/envelope.interceptor';
 import { GlobalExceptionFilter } from '../src/common/filters/global-exception.filter';
+import { requestContextMiddleware } from '../src/common/observability/request-context';
 
 /** Boots the API exactly as main.ts does (prefix, envelopes, cookies, headers). */
 export async function createTestApp(
@@ -24,6 +25,7 @@ export async function createTestApp(
     rawBody: true, // M14-W3: webhook HMAC verification over raw bytes
   });
   app.setGlobalPrefix('api/v1');
+  app.use(requestContextMiddleware);
   app.use(
     helmet({
       contentSecurityPolicy: false,
