@@ -1,5 +1,5 @@
 import { Controller, Get, Res } from '@nestjs/common';
-import { readdir, stat, access, constants } from 'node:fs/promises';
+import { readdir, readFile, access, constants } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   HealthStatus,
@@ -138,21 +138,40 @@ export class HealthController {
       return { configured: false, count: 0, latestAgeSeconds: null, stale: false };
     }
     try {
-      const names = (await readdir(dir)).filter(
-        (name) => /^campusos-.*\.dump$/.test(name),
+      const names = await readdir(dir);
+      const dbStamps = new Set(
+        names
+          .map((name) => /^campusos-(\d{8}T\d{6}Z)\.dump$/.exec(name)?.[1])
+          .filter((stamp): stamp is string => Boolean(stamp)),
       );
-      let newestMtime = 0;
-      for (const name of names) {
-        const info = await stat(join(dir, name));
-        if (info.mtimeMs > newestMtime) newestMtime = info.mtimeMs;
+      const uploadStamps = new Set(
+        names
+          .map(
+            (name) =>
+              /^campusos-uploads-(\d{8}T\d{6}Z)\.tar\.gz$/.exec(name)?.[1],
+          )
+          .filter((stamp): stamp is string => Boolean(stamp)),
+      );
+      const count = [...dbStamps].filter((stamp) => uploadStamps.has(stamp)).length;
+      // M22-W3: the sidecar writes this marker only after BOTH artifacts pass
+      // structural validation. A fresh DB dump alone can never look healthy.
+      const markerPath =
+        process.env.BACKUP_HEALTH_FILE ?? join(dir, '.backup-health');
+      const completedAtSeconds = Number((await readFile(markerPath, 'utf8')).trim());
+      if (!Number.isInteger(completedAtSeconds) || completedAtSeconds <= 0) {
+        throw new Error('invalid backup health marker');
       }
-      const latestAgeSeconds =
-        names.length > 0 ? Math.floor((Date.now() - newestMtime) / 1000) : null;
+      const latestAgeSeconds = Math.floor(
+        Date.now() / 1000 - completedAtSeconds,
+      );
       return {
         configured: true,
-        count: names.length,
+        count,
         latestAgeSeconds,
-        stale: latestAgeSeconds === null || latestAgeSeconds > maxAge,
+        stale:
+          count === 0 ||
+          latestAgeSeconds < 0 ||
+          latestAgeSeconds > maxAge,
       };
     } catch {
       // Directory configured but unreadable/missing — that IS a finding.

@@ -1,6 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { mkdtemp, writeFile, utimes, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LoginRateLimiterService } from '../src/auth/login-rate-limiter.service';
@@ -81,6 +81,14 @@ describe('M19-W3 — /health/ops', () => {
   it('reports fresh backups as healthy', async () => {
     process.env.BACKUP_DIR = backupDir;
     await writeFile(join(backupDir, 'campusos-20260828T000000Z.dump'), 'x');
+    await writeFile(
+      join(backupDir, 'campusos-uploads-20260828T000000Z.tar.gz'),
+      'x',
+    );
+    await writeFile(
+      join(backupDir, '.backup-health'),
+      String(Math.floor(Date.now() / 1000)),
+    );
     // In-progress partial files must not count.
     await writeFile(join(backupDir, '.campusos-x.dump.partial'), 'x');
     const res = await ops(adminToken);
@@ -94,8 +102,8 @@ describe('M19-W3 — /health/ops', () => {
 
   it('flags stale backups and degrades overall status', async () => {
     process.env.BACKUP_DIR = backupDir;
-    const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
-    await utimes(join(backupDir, 'campusos-20260828T000000Z.dump'), old, old);
+    const old = Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60;
+    await writeFile(join(backupDir, '.backup-health'), String(old));
     const res = await ops(adminToken);
     expect(res.status).toBe(200);
     expect(res.body.data.backups.stale).toBe(true);
@@ -112,6 +120,30 @@ describe('M19-W3 — /health/ops', () => {
       stale: true,
     });
     expect(res.body.data.status).toBe('degraded');
+  });
+
+  it('does not accept a fresh DB dump without its paired uploads archive', async () => {
+    const incomplete = await mkdtemp(join(tmpdir(), 'campusos-incomplete-'));
+    try {
+      process.env.BACKUP_DIR = incomplete;
+      await writeFile(
+        join(incomplete, 'campusos-20260828T000001Z.dump'),
+        'db-only',
+      );
+      await writeFile(
+        join(incomplete, '.backup-health'),
+        String(Math.floor(Date.now() / 1000)),
+      );
+      const res = await ops(adminToken);
+      expect(res.body.data.backups).toMatchObject({
+        configured: true,
+        count: 0,
+        stale: true,
+      });
+      expect(res.body.data.status).toBe('degraded');
+    } finally {
+      await rm(incomplete, { recursive: true, force: true });
+    }
   });
 
   it('never leaks paths, filenames, DSNs or credentials', async () => {

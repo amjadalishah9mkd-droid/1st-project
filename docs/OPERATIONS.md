@@ -1117,8 +1117,9 @@ deferred.
 
 Local-volume destination only (no off-host copy automation); no
 point-in-time recovery (daily granularity); process-local health (no
-external monitoring/SaaS — deferred); uploads volume backup remains the §6
-manual procedure.
+external monitoring/SaaS — deferred). M22-W3 added paired uploads archives,
+but DB/filesystem consistency is best-effort rather than a transactional
+cross-volume snapshot.
 
 ### M19 security close-out notes (W4)
 
@@ -1135,6 +1136,27 @@ manual procedure.
 - Emergency-contact fields on students (`guardian*` columns) are contact
   data only: they never grant guardian access (GuardianLink is the sole
   channel) and are visible only to full-scope staff and the student.
+
+### M22-W3 production parity contract
+
+- Production and Alloy both use named `pgdata`, `uploads`, and `pgbackups`
+  volumes. A one-shot `uploads-init` service sets the volume to the non-root
+  API UID before API/backup start. API writes uploads; backup sees uploads
+  read-only; API sees backups read-only; web sees neither. PostgreSQL
+  publishes no production host port.
+- API healthcheck uses `/health` (the M22 readiness alias); web checks its
+  login page; backup checks the complete-cycle marker. Liveness remains
+  independent at `/health/live`.
+- All four services use Docker `json-file` logging bounded to 5 × 10 MB files.
+  This rotates stdout/stderr only; it does not create durable/distributed
+  telemetry.
+- `.env.production` is gitignored and loaded into API at runtime so existing
+  Google/SMTP/Safepay options can be configured without Compose edits. The
+  Docker build context excludes every env file, uploads, backups, dumps,
+  logs, node_modules and build artifacts.
+- Backup files are never served by web. Upload binaries remain reachable only
+  through `/api/v1/files/:key` with a valid short-lived signature and existing
+  StoredFile/evidence authorization.
 
 ## 29. Finance documents runbook (M20)
 

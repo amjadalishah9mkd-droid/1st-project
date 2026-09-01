@@ -165,7 +165,8 @@ Principles applied consistently from M0 onward:
 | M21-W4 | Lifecycle hardening re-audit, runbook §30 — **M21 CLOSED** | `41fc42b` |
 | M22-W0 | Production-readiness discovery + design (`docs/M22_PLATFORM_DISCOVERY_DESIGN.md`) | `b7fcbcc` |
 | M22-W1 | Request correlation + safe structured operational logging | `7f59346` |
-| M22-W2 | Truthful readiness + bounded instance-local counters | *(this commit)* |
+| M22-W2 | Truthful readiness + bounded instance-local counters | `373faa0` |
+| M22-W3 | Production backup/deployment parity + operational hardening | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2795,7 +2796,53 @@ the latent post-claim failure disposition remain deferred: safe remediation
 may require processing-state design and was not necessary for W2. W3
 production backup/deployment parity and W4 close-out were NOT started.
 
-*Last updated after M22-W2 (W3 production parity NOT started).*
+## M22-W3 — Production backup/deployment parity
+
+Production and Alloy Compose now share the verified operational contract:
+paired DB/uploads backup sidecar with complete-cycle health marker, 14-day
+rotation and 5-minute failure retry; named uploads/pgbackups volumes with
+least-privilege mounts (backup sees uploads RO, API sees backups RO, web sees
+neither); backup and web healthchecks; readiness-driven API health; bounded
+Docker json-file logs (5 × 10 MB) for all services. Production API loads the
+untracked `.env.production`, and its example now covers PostgreSQL plus all
+already-supported Google/SMTP/Safepay variables; `.env.production` is
+gitignored and a new `.dockerignore` excludes env/runtime/secret artifacts
+from build context. No integration was enabled and no secret committed.
+
+Production image validation discovered and fixed two concrete runtime defects:
+Prisma could not detect OpenSSL in `node:22-bookworm-slim` (OpenSSL now exists
+in build + runtime stages; production-image `prisma migrate status` proven),
+and a fresh named uploads volume is root-owned so the non-root API cannot
+write it. A one-shot, root-only `uploads-init` service now chowns only that
+volume before API/backup startup; direct failure and init-then-write success
+were both reproduced. The API itself remains non-root.
+
+Backup scripts: `backup-cycle.sh` publishes freshness only after custom DB
+dump AND same-stamp uploads tar both validate; failed cycles clean exact
+artifacts and leave health stale; retention runs only after a complete pair.
+`backup-healthcheck.sh` rejects absent/malformed/future/stale markers.
+`restore-verify.sh` is now production-safe (source/restored counts + hashed
+internal-ID fingerprint, no demo-account assumption); uploads verifier rejects
+absolute/`..` archive members and extracts to disposable scratch. API backup
+health counts matching pairs and requires the cycle marker — a DB-only dump
+cannot appear healthy.
+
+Real infrastructure evidence: successful complete pair + sidecar health;
+intentional missing-uploads failure produced nonzero exit/no marker/no
+artifacts; old matching artifacts pruned while unrelated file survived;
+database restored to scratch with exact fingerprint and scratch dropped;
+upload probe matched byte-for-byte after scratch extraction; backup path 404,
+direct upload path redirected to login with no file content, and unsigned file
+API 403. Probe and probe pair removed; clean
+final pair created. Live DB fingerprint unchanged (20 users/1 college/15
+migrations). Focused backup/ops/file suites 41/41; full regression 646/646
+(51 suites), typecheck 0, Prisma valid, 15 migrations; production API/web
+images built from their Dockerfiles (host-network validation plumbing), and
+the production API image ran `prisma migrate status` successfully. Off-host
+backup and PITR remain deferred; webhook
+activation unchanged. W4 close-out NOT started.
+
+*Last updated after M22-W3 (W4 close-out NOT started).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2809,7 +2856,7 @@ production backup/deployment parity and W4 close-out were NOT started.
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
 - **M22 status**: W0 design + W1 correlation/logging + W2 truthful
-  readiness/counters complete. W3 production parity and W4 close-out pending.
+  readiness/counters + W3 production parity complete. W4 close-out pending.
 - **M21 status**: **M21 COMPLETE (W0–W4) — account lifecycle & institutional administration CLOSED** (see M21-W4 entry).
 - **M20 status**: **M20 COMPLETE (W0–W4) — finance documents CLOSED** (see M20-W4 entry).
 - **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:
