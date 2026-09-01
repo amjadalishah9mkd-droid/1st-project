@@ -162,7 +162,8 @@ Principles applied consistently from M0 onward:
 | M21-W1 | Account lifecycle administration (migration #15, verb endpoints) | `0f613f1` |
 | M21-W2 | Settings completion, threshold surfacing, locale disposition | `492b8f9` |
 | M21-W3 | Account lifecycle admin UI + browser verification | `2da1d03` |
-| M21-W4 | Lifecycle hardening re-audit, runbook §30 — **M21 CLOSED** | *(this commit)* |
+| M21-W4 | Lifecycle hardening re-audit, runbook §30 — **M21 CLOSED** | `41fc42b` |
+| M22-W0 | Production-readiness discovery + design (`docs/M22_PLATFORM_DISCOVERY_DESIGN.md`) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2693,7 +2694,37 @@ maker-checker, off-host backups, PITR, external monitoring, distributed
 limiter, i18n, multi-college, GPA/repeat/rank policy, Prisma upgrade,
 FILE_URL_SECRET rotation.
 
-*Last updated after M21-W4 (M21 CLOSED). M22 not started.*
+## M22-W0 — Platform discovery + design (design only)
+
+Read-only discovery from `41fc42b`; baseline re-verified before and after
+(620/620, 48 suites, typecheck 0, Prisma valid, 15 migrations, builds green,
+stack healthy). `docs/M22_PLATFORM_DISCOVERY_DESIGN.md` inventories the
+current platform, reclassifies all significant deferred work with source
+evidence, evaluates nine candidate milestones, and recommends **M22 —
+Production Runtime Reliability & Incident Visibility**.
+
+Highest-priority findings: public `/health` can remain HTTP 200/top-level
+`ok` when PostgreSQL is down while Compose checks only HTTP status; automated
+backup exists in Alloy Compose but not production Compose, where unconfigured
+backups are not degraded; production Compose/example env does not carry all
+supported Google/SMTP/Safepay settings; there are no request IDs, structured
+request/error events, error/rate-limit counters, or log rotation. No critical
+exploitable security defect was found. One latent integration-reliability
+finding is registered without implementation: a Safepay event is claimed
+before settlement and a broad catch can convert an unexpected post-claim
+failure to consumed HTTP 200; webhook activation remains EXTERNALLY BLOCKED
+and O-7 decides whether bounded remediation belongs in M22.
+
+Candidate ranking: production runtime reliability first, institutional
+reporting second, GPA/configuration third; notification preferences, leave,
+multi-college, global search, PDF and upgrades remain lower/blocked/deferred.
+Open decisions O-1…O-10 cover request-ID trust, liveness/readiness routes,
+log volume/schema, uploads protection, off-host target boundary, production
+backup mode, webhook failure scope, counter scope, request-ID response
+contract, and log identity fields. No M22 implementation, schema, migration,
+test, UI, package, Docker or runtime change was made.
+
+*Last updated after M22-W0 (design only — M22 NOT implemented).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2706,6 +2737,9 @@ FILE_URL_SECRET rotation.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
+- **M22 status**: DESIGN/DISCOVERY COMPLETE only — awaiting O-1…O-10 and
+  explicit W1 authorization (recommended: Production Runtime Reliability &
+  Incident Visibility).
 - **M21 status**: **M21 COMPLETE (W0–W4) — account lifecycle & institutional administration CLOSED** (see M21-W4 entry).
 - **M20 status**: **M20 COMPLETE (W0–W4) — finance documents CLOSED** (see M20-W4 entry).
 - **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:
