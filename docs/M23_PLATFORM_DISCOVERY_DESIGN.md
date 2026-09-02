@@ -191,6 +191,17 @@ separate authorization. Documented in the W2 suite (serial consistency
 asserted, interleaving described rather than blessed) so it cannot change
 silently. Should be triaged alongside D-1/D-2 in W3.
 
+> **RESOLVED in M23-W3.** Added the established row lock
+> `SELECT id FROM "FeeStructure" WHERE id = ${id} FOR UPDATE` (same
+> pattern as the Invoice locks in payments/refunds), taken after the
+> existing Term `FOR SHARE` so the Term-before-row lock order holds, plus
+> a re-read of the pre-state under that lock so audit before-values are
+> exact. Row-scoped: unrelated structures and other colleges are never
+> serialized, and no advisory or global lock was introduced. Six writers
+> racing one structure over four rounds now always commit
+> `totalAmount == SUM(components)`, and exactly one writer's proposal
+> survives (never a blend).
+
 **S-3 — LOW — teacher attendance summary widens past the shared section.**
 After a single shared-enrollment check, `studentSummary` returns per-section
 attendance for all of the student's active enrollments
@@ -248,6 +259,16 @@ runtime. *Live proof:* `GET /exports/fees.csv?termId=<real term>` → **500**,
 while `?status=PAID` and no-filter both → **200**. The CSV header also has no
 term column, so callers cannot detect the filter never applied.
 
+> **RESOLVED in M23-W3.** The filter now runs through the existing
+> required relationship, `{ structure: { termId } }`.
+> `Invoice.structureId` is non-null and `FeeStructure.termId` is the only
+> term relationship in the finance schema, so an invoice's term is
+> unambiguous — no new relationship and no denormalized column. Live
+> re-check: `?termId=<real>` went 500 → **200** with term-scoped rows; an
+> unknown term is a deterministic empty export; a rival-college term
+> returns nothing and leaks no rival invoice. CSV header and columns are
+> unchanged.
+
 **D-2 — MEDIUM — grade-band update destroys `gradePoint` (newly discovered).**
 `updateGradeBands` runs `deleteMany` then `createMany` with only
 `label/minPercent/maxPercent/sortOrder`
@@ -258,6 +279,24 @@ out-of-band is silently erased by the next edit and is not even observable.
 Consumers already fail-null correctly
 (`results-finalization.service.ts:356-360,663`). Net: GPA is not merely
 unconfigurable — the only configuration surface is a data eraser.
+
+> **RESOLVED in M23-W3.** Replacement semantics are preserved, but
+> `gradePoint` is now carried forward matched by `label` (the existing
+> per-college band identity, `@@unique([collegeId, label])`). A new label
+> gets `null` — no GPA policy is invented. `gradePoint` stays
+> server-managed and is deliberately still absent from
+> `gradeBandsUpdateSchema` and `GradeBandItem`, so the read/write
+> contracts are unchanged and a client cannot set or forge it (proven:
+> a body sending `gradePoint: 99 / -5 / 'abc'` is ignored). The
+> transaction became interactive so the preservation read is atomic with
+> the replacement, and `grade_bands.updated` moved inside it via
+> `logAtomic` with count-only metadata.
+>
+> **STILL OPEN (observation, not fixed):** the band replacement remains a
+> college-wide delete-and-recreate with no row lock, so simultaneous
+> edits can contend; `@@unique([collegeId, label])` makes a blended
+> result fail rather than commit silently, so it was left alone rather
+> than widened into another locking change. Recorded for triage.
 
 **D-3 — LOW — refund segregation of duties.** `requestedById` is recorded but
 never compared against the executor, so maker-checker is a policy decision away

@@ -220,7 +220,30 @@ export class FeesService {
 
     const updated = await this.prisma.$transaction(async (tx) => {
       // M17-W2 (D-1/O-2 family): CLOSED-term structures are read-only.
+      // Term is locked FOR SHARE first, preserving the established
+      // Term-before-row lock order used by every other fee/invoice path.
       await this.lifecycle.assertTermOpen(tx, user.collegeId, existing.termId);
+      // M23-W3 (D-4): serialize concurrent writers on THIS FeeStructure
+      // row. Component replacement is delete + recreate plus a separate
+      // totalAmount write; without a lock two writers interleaved under
+      // READ COMMITTED and committed a blended state where the surviving
+      // components came from one transaction and totalAmount from
+      // another, so totalAmount != SUM(components). Same established
+      // pattern as the Invoice FOR UPDATE locks in payments/refunds:
+      // row-scoped, so unrelated structures and other colleges are never
+      // serialized, and no advisory/global lock is introduced.
+      await tx.$queryRaw`SELECT id FROM "FeeStructure" WHERE id = ${id} FOR UPDATE`;
+      // Re-read the pre-state UNDER the lock. The earlier tenancy-scoped
+      // read happened before the lock and may be stale, which would make
+      // the audit's before-values describe a state that never existed.
+      const locked = await tx.feeStructure.findUniqueOrThrow({
+        where: { id },
+        select: {
+          name: true,
+          totalAmount: true,
+          _count: { select: { components: true, invoices: true } },
+        },
+      });
       if (input.components) {
         await tx.feeComponent.deleteMany({ where: { structureId: id } });
         await tx.feeComponent.createMany({
@@ -247,7 +270,8 @@ export class FeesService {
       // fields changed, how many components were replaced, and the
       // before/after totals that describe the financial effect. No
       // component names, no client payload, no personal data, no ids
-      // beyond the term this structure belongs to.
+      // beyond the term this structure belongs to. Before-values come
+      // from the locked re-read, so they are exact (M23-W3).
       await this.audit.logAtomic(
         {
           collegeId: user.collegeId, // server-derived tenant
@@ -257,15 +281,15 @@ export class FeesService {
           targetId: row.id,
           metadata: {
             termId: existing.termId,
-            changed: changedFields(['name'], existing, { name: input.name }),
+            changed: changedFields(['name'], locked, { name: input.name }),
             componentsReplaced: input.components !== undefined,
-            componentCountBefore: existing._count.components,
+            componentCountBefore: locked._count.components,
             componentCountAfter: row.components.length,
-            totalAmountBefore: existing.totalAmount.toString(),
+            totalAmountBefore: locked.totalAmount.toString(),
             totalAmountAfter: row.totalAmount.toString(),
             // Blast radius: invoices already issued against this
             // structure keep their snapshot amount (M14 semantics).
-            existingInvoiceCount: existing._count.invoices,
+            existingInvoiceCount: locked._count.invoices,
           },
         },
         tx,

@@ -666,35 +666,32 @@ describe('M23-W2 — audit integrity (S-2)', () => {
         const meta = row.metadata as Record<string, unknown>;
         expect(meta.componentsReplaced).toBe(true);
         expect(attempted).toContain(String(meta.totalAmountAfter));
-        // NOTE: componentCountAfter reflects the committed row set the
-        // transaction observed, so under the D-4 interleaving below it can
-        // legitimately exceed this caller's own component count. It is a
-        // faithful reading of committed state, never client-supplied.
-        expect(typeof meta.componentCountAfter).toBe('number');
-        expect(meta.componentCountAfter as number).toBeGreaterThan(0);
+        // M23-W3 (D-4): the FeeStructure row is now locked FOR UPDATE, so
+        // concurrent writers can no longer interleave and the recorded
+        // after-state is exact — one component, matching this caller.
+        expect(meta.componentCountAfter).toBe(1);
         expect(row.actorId).toBe(adminUserId);
         expect(row.collegeId).toBe(collegeId);
       }
     });
 
     /**
-     * D-4 — newly discovered PRE-EXISTING defect, reported not fixed.
+     * D-4 — discovered during M23-W2, RESOLVED in M23-W3.
      *
-     * `updateStructure` replaces components with deleteMany + createMany
-     * and writes `totalAmount` in the same transaction, but takes no lock
-     * on the FeeStructure row. Under READ COMMITTED, concurrent updates
-     * interleave: the surviving component rows can come from one
-     * transaction while `totalAmount` comes from another, leaving the
+     * `updateStructure` replaced components with deleteMany + createMany
+     * and wrote `totalAmount` in the same transaction but took no lock on
+     * the FeeStructure row. Under READ COMMITTED concurrent updates
+     * interleaved, so the surviving component rows could come from one
+     * transaction while `totalAmount` came from another, leaving the
      * stored total different from the sum of the stored components.
      *
-     * This is unchanged M14/M17 behaviour — the code is byte-identical to
-     * HEAD before M23-W2 apart from the appended audit call — and fixing
-     * it means adding row locking to a financial write path, which is
-     * outside W2's authorization. This test therefore DOCUMENTS the
-     * anomaly rather than asserting it is correct, so the behaviour
-     * cannot change silently before it is properly fixed.
+     * M23-W3 added `SELECT id FROM "FeeStructure" ... FOR UPDATE` (the
+     * established Invoice-lock pattern) plus a re-read of the pre-state
+     * under that lock. The single-writer invariant below still holds; the
+     * concurrent case is covered by
+     * `test/m23-w3-data-integrity.e2e-spec.ts`.
      */
-    it('D-4 (documented, not fixed): serial updates DO keep total == component sum', async () => {
+    it('D-4 (fixed in W3): serial updates keep total == component sum', async () => {
       // Serially — the single-writer case, which must always hold.
       for (const amount of [2500, 3600]) {
         const res = await http

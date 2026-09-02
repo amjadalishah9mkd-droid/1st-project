@@ -811,9 +811,31 @@ export class ExamsService {
         });
       }
     }
-    await this.prisma.$transaction([
-      this.prisma.gradeBand.deleteMany({ where: { collegeId: user.collegeId } }),
-      this.prisma.gradeBand.createMany({
+    // M23-W3 (D-2): the replacement semantics are preserved (bands are
+    // still deleted and recreated), but `gradePoint` is now carried
+    // forward instead of being silently dropped. Previously createMany
+    // omitted the column entirely, so EVERY grade-band edit reset the
+    // whole configured GPA scale to null and CGPA silently became
+    // unavailable (results-finalization only computes a GPA when every
+    // course line carries a point — M18 O-4).
+    //
+    // Bands are matched by `label`, which is the existing per-college
+    // identity of a band (`@@unique([collegeId, label])`). A label that
+    // did not exist before gets null: CampusOS never invents a
+    // grade-point scale, and `gradePoint` deliberately stays
+    // server-managed — it is absent from `gradeBandsUpdateSchema`, so a
+    // client cannot set or forge it here. Read/write contracts are
+    // unchanged.
+    await this.prisma.$transaction(async (tx) => {
+      const previous = await tx.gradeBand.findMany({
+        where: { collegeId: user.collegeId },
+        select: { label: true, gradePoint: true },
+      });
+      const pointsByLabel = new Map(
+        previous.map((band) => [band.label, band.gradePoint]),
+      );
+      await tx.gradeBand.deleteMany({ where: { collegeId: user.collegeId } });
+      await tx.gradeBand.createMany({
         data: sorted
           .slice()
           .reverse()
@@ -822,14 +844,29 @@ export class ExamsService {
             label: band.label,
             minPercent: band.minPercent,
             maxPercent: band.maxPercent,
+            gradePoint: pointsByLabel.get(band.label) ?? null,
             sortOrder: index + 1,
           })),
-      }),
-    ]);
-    await this.audit.log({
-      collegeId: user.collegeId,
-      actorId: user.id,
-      action: 'grade_bands.updated',
+      });
+      const preserved = sorted.filter(
+        (band) => (pointsByLabel.get(band.label) ?? null) !== null,
+      ).length;
+      // Audit joins the same transaction (M23-W2 discipline): the record
+      // exists iff the replacement committed. Counts only — no labels,
+      // no thresholds, no client payload.
+      await this.audit.logAtomic(
+        {
+          collegeId: user.collegeId, // server-derived tenant
+          actorId: user.id, // server-derived principal
+          action: 'grade_bands.updated',
+          metadata: {
+            bandCountBefore: previous.length,
+            bandCountAfter: sorted.length,
+            gradePointsPreserved: preserved,
+          },
+        },
+        tx,
+      );
     });
     return this.gradeBands(user);
   }

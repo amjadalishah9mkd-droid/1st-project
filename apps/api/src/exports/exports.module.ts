@@ -199,7 +199,16 @@ export class ExportsService {
       where: {
         collegeId: user.collegeId,
         ...(query.status ? { status: query.status } : {}),
-        ...(query.termId ? { termId: query.termId } : {}),
+        // M23-W3 (D-1): `termId` was spread straight onto Invoice, which
+        // has no such column, so any ?termId= request died with a 500.
+        // An invoice's term is reached through its REQUIRED FeeStructure
+        // (`Invoice.structureId` is non-null and `FeeStructure.termId` is
+        // the only term relationship in the finance schema), so the
+        // filter is relational rather than a new denormalized column.
+        // Tenancy is unaffected: the top-level server-derived collegeId
+        // still bounds the query, so a rival-college termId simply
+        // matches nothing instead of leaking another tenant's invoices.
+        ...(query.termId ? { structure: { termId: query.termId } } : {}),
       },
       include: {
         student: {

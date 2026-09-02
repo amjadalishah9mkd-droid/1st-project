@@ -170,7 +170,8 @@ Principles applied consistently from M0 onward:
 | M22-W4 | Runtime reliability hardening, runbook §31 — **M22 CLOSED** | `116127d` |
 | M23-W0 | Platform discovery + M23 design (`docs/M23_PLATFORM_DISCOVERY_DESIGN.md`) | `ac25eec` |
 | M23-W1 | Enforce ASSIGNED scope for finalized results (S-1, HIGH) | `9c46336` |
-| M23-W2 | Audit integrity for the S-2 mutation surface | *(this commit)* |
+| M23-W2 | Audit integrity for the S-2 mutation surface | `6c1c3fb` |
+| M23-W3 | Data integrity: D-4 fee consistency, D-1 export filter, D-2 gradePoint | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -3109,6 +3110,139 @@ deferred items are preserved unchanged.
 
 *Last updated after M23-W2 (S-2 closed; W3–W4 not started).*
 
+## M23-W3 — data integrity (D-4, D-1, D-2)
+
+Three defect fixes, each proven by a test that failed before the change
+and passes after. No migration, no schema change, no shared-contract
+change, no new permission, no new endpoint, no UI, no `money.ts` change,
+and no change to `results-finalization` (S-1 stays closed). Evidence
+first: the suite was written and run against unfixed code, where **18 of
+25 tests failed**, reproducing all three defects; after the fixes all 25
+pass, stable across four consecutive runs.
+
+### D-4 — fee-structure write consistency
+
+**Root cause.** `updateStructure` replaced components with `deleteMany` +
+`createMany` and wrote `totalAmount` in the same transaction, but took no
+lock on the `FeeStructure` row. Under READ COMMITTED concurrent writers
+interleaved, so the surviving component rows could come from one
+transaction while `totalAmount` came from another, committing a blended
+state where `totalAmount != SUM(components)`.
+
+**Fix.** Added the project's established row-lock, matching the Invoice
+locks in `payments.service` / `refunds.service`:
+`SELECT id FROM "FeeStructure" WHERE id = ${id} FOR UPDATE` — a
+parameterized, row-scoped lock taken *after* the existing
+`assertTermOpen` Term `FOR SHARE`, preserving the established
+Term-before-row lock order. No advisory or global lock, so unrelated
+structures and other colleges are never serialized. The pre-state is now
+re-read **under** the lock, so the audit's before-values describe a state
+that actually existed rather than a stale pre-lock read.
+
+**Evidence.** Six writers race the same structure over four rounds: the
+committed state always satisfies `totalAmount == SUM(components)` and is
+exactly one writer's proposal, never a blend (asserted by matching the
+surviving label set to precisely one proposal). Concurrent writes across
+two structures and a rival tenant stay isolated, with the rival
+untouched and zero rival audit rows. Injected audit failure still rolls
+back both the component rewrite and the audit. Authorization is
+unchanged (teacher/student 403, anonymous 401, accountant 200).
+
+### D-1 — fees CSV `termId` filter
+
+**Root cause.** `exports.fees` spread `{ termId }` directly onto
+`Invoice`, which has no `termId` column, so every `?termId=` request
+raised a Prisma validation error and returned **500**.
+
+**Fix.** Filter through the existing required relationship:
+`{ structure: { termId } }`. `Invoice.structureId` is non-null and
+`FeeStructure.termId` is the only term relationship in the finance
+schema, so an invoice's term is unambiguous — no new relationship, no
+denormalized column, no invoice/payment semantics touched. The
+server-derived top-level `collegeId` still bounds the query.
+
+**Evidence.** Live re-check: `?termId=<real>` went from **500** to **200**
+with correctly term-scoped rows. Tests prove the no-filter export is
+byte-compatible (same header and columns), each term returns only its own
+invoices, an unknown `termId` is a deterministic empty export rather than
+a 500, a **rival-college `termId` returns nothing and leaks no rival
+invoice**, `status` still composes with `termId`, a client-supplied
+`collegeId` cannot widen the export, and authorization is unchanged
+(teacher/student 403, anonymous 401, accountant 200).
+
+### D-2 — grade-band `gradePoint` erasure
+
+**Root cause.** `updateGradeBands` deleted and recreated all bands via
+`createMany` without the `gradePoint` column, so *every* grade-band edit
+silently reset the entire configured GPA scale to null — after which
+`results-finalization` correctly reported CGPA as unavailable, because it
+only computes a GPA when every course line carries a point (M18 O-4).
+
+**Fix.** Replacement semantics are preserved (bands are still deleted and
+recreated), but `gradePoint` is now carried forward, matched by `label` —
+the existing per-college identity of a band (`@@unique([collegeId,
+label])`). A label that did not previously exist gets `null`: **no GPA
+policy is invented**. `gradePoint` deliberately remains server-managed —
+it is absent from `gradeBandsUpdateSchema` and from `GradeBandItem`, so
+the read and write contracts are unchanged and a client cannot set or
+forge it. The transaction became interactive (read → delete → create) so
+the preservation read is atomic with the replacement, and the existing
+`grade_bands.updated` audit moved *into* that transaction via
+`logAtomic`, per W2 discipline, gaining count-only metadata
+(`bandCountBefore`, `bandCountAfter`, `gradePointsPreserved`) — no
+labels, no thresholds, no payload.
+
+**Evidence.** With a scale configured, an ordinary update preserves every
+value (previously all became null); changing percent boundaries preserves
+them too; a new label gets `null` rather than an invented point and a
+removed label drops out; a hostile body sending
+`gradePoint: 99 / -5 / 'abc'` is ignored and the server-side values
+survive, with the read contract still exposing exactly
+`id, label, minPercent, maxPercent, sortOrder`; existing validation
+(`BANDS_OVERLAP`, min-2 bands, 0–100 range) is unchanged and a rejected
+update erases nothing and writes no audit; authorization unchanged
+(teacher/student 403, anonymous 401) and the rival college's bands are
+untouched.
+
+### Verification
+
+728/728 tests (55 suites, +25), typecheck 0, Prisma valid, **15
+migrations** up to date (unchanged), API and web production images build,
+all four containers healthy, live/ready/preview 200, backup healthy, demo
+fingerprint `50424fec…` identical, demo grade bands restored exactly as
+snapshotted (all eight, `gradePoint` still null), 0 leftover fixtures,
+0 restore_verify databases. Security/diff audit clean: no role-name
+conditionals, no client-controlled `collegeId`/`actorId`/scope/status, one
+parameterized `FOR UPDATE` as the only added SQL, no shell/eval, no
+secrets, no financial arithmetic outside existing reducers, `money.ts`
+and the shared contracts untouched, CSV schema unchanged, and no GPA
+policy introduced (`gradePoint` is only ever read from the database).
+
+The stale M23-W2 note describing D-4 as "not fixed" was corrected and its
+deliberately relaxed `componentCountAfter` assertion tightened back to an
+exact value, which the row lock now guarantees.
+
+**Deferred/open items unchanged.** Still open from W0: community mutation
+updates and evidence-upload audit (S-2 remainder), S-3, S-4, S-5, D-3,
+the O-A…O-H operational findings (no CI, no lint, no web test harness,
+retention keep-N floor, off-host backups, PITR, external monitoring,
+distributed metrics/rate limiting), T-1…T-6 test gaps, reporting/analytics
+(M24 candidate), global search, notification preferences/digest, leave
+workflow, server PDF, StoredFile FINANCE_DOCUMENT, receipts.csv, mail
+attachments, Safepay webhook activation (EXTERNALLY BLOCKED), provider
+polling, multi-college, i18n, dependency upgrades and maker-checker.
+Account deletion remains NO-LONGER-RELEVANT (terminal archival is the
+model). No deferred item was silently closed.
+
+**One residual observation, not fixed (out of W3 scope).**
+`updateGradeBands` remains a college-wide delete-and-recreate without a
+row lock, so two simultaneous grade-band edits could still contend; the
+`@@unique([collegeId, label])` constraint makes a blended result fail
+rather than commit silently, which is why it was left alone rather than
+widened into another financial-style locking change. Recorded for triage.
+
+*Last updated after M23-W3 (D-4/D-1/D-2 fixed; W4 not started, M23 NOT closed).*
+
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
   Hardening & Debt Retirement (P2-IDOR-1 file authorization, mail
@@ -3120,10 +3254,9 @@ deferred items are preserved unchanged.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M23 status**: W0 (discovery/design), W1 (S-1 authorization fix) and
-  W2 (S-2 audit integrity) COMPLETE. W3–W4 NOT started — D-1, D-2 and the
-  newly discovered D-4 remain open and require separate authorization.
-  M23 is NOT closed.
+- **M23 status**: W0 (discovery/design), W1 (S-1 authorization fix),
+  W2 (S-2 audit integrity) and W3 (D-4/D-1/D-2 data integrity) COMPLETE.
+  W4 NOT started. **M23 is NOT closed.**
 - **M22 status**: **M22 COMPLETE (W0–W4) — production runtime reliability &
   incident visibility CLOSED** (see M22-W4 entry).
 - **M21 status**: **M21 COMPLETE (W0–W4) — account lifecycle & institutional administration CLOSED** (see M21-W4 entry).
@@ -3135,10 +3268,10 @@ deferred items are preserved unchanged.
   browser-print; M17 term lifecycle, M16 refunds+accountant, M15
   rollover and M14 payments all remain complete (webhook delivery
   still pending provider-dashboard endpoint registration).
-- **Latest commit**: the M23-W2 audit-integrity commit on branch
+- **Latest commit**: the M23-W3 data-integrity commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 15 found, database schema up to date
-- **Tests**: **703/703 passing** (54 suites)
+- **Tests**: **728/728 passing** (55 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -3147,10 +3280,9 @@ deferred items are preserved unchanged.
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13 and
   `docs/M23_PLATFORM_DISCOVERY_DESIGN.md` (current reconciliation)
-- **Next planned milestone**: M23-W3 (D-1 fees CSV `termId`, D-2 grade-band
-  `gradePoint`) is designed and awaiting authorization; newly discovered D-4
-  (unlocked fee-structure component replacement) should be triaged with it.
-  Nothing beyond W2 has been implemented
+- **Next planned milestone**: M23-W4 (re-audit, runbook, close-out) is
+  designed and awaiting authorization. M23 is NOT closed and nothing
+  beyond W3 has been implemented
 
 ## 15. Future Roadmap
 
