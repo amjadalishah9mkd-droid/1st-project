@@ -160,6 +160,37 @@ update (`academics/sections.service.ts:197-246`); timetable slot update
 (`assignments/assignments.service.ts:277-312`); most community mutations;
 evidence upload (`verification/verification.service.ts:95-113`).
 
+> **RESOLVED in M23-W2** for the eight configuration/academic update
+> paths, which now emit `fees.structure_updated`, `exams.updated`,
+> `exams.paper_updated`, `academic_years.updated`, `terms.updated`,
+> `sections.updated`, `timetable.slot_updated` and
+> `assignments.updated` — each written inside the mutation's own
+> transaction via the new `AuditService.logAtomic`, with server-derived
+> actor and tenant and field-name-only metadata. 35 real-Postgres tests
+> in `apps/api/test/m23-w2-audit-integrity.e2e-spec.ts`.
+>
+> **STILL OPEN:** community mutation updates and evidence upload were
+> deliberately left out of W2 to keep the workstream bounded. Community
+> creates are already audited (`community.*_created`) and evidence
+> submission is covered by `verification.claim_submitted`, so neither is
+> a silent-rewrite risk of the fee-structure kind. Both remain recorded
+> here for a later workstream.
+
+**D-4 — MEDIUM — unlocked fee-structure component replacement (newly
+discovered in M23-W2, PRE-EXISTING, not fixed).**
+`updateStructure` replaces components with `deleteMany` + `createMany`
+and writes `totalAmount` in one transaction but takes no lock on the
+`FeeStructure` row. Under READ COMMITTED concurrent updates interleave,
+so surviving component rows can come from one transaction while
+`totalAmount` comes from another, leaving the stored total inconsistent
+with the sum of the stored components (observed: total 4010 vs sum 1004
+under six racing writes). Unchanged M14/M17 behaviour — byte-identical to
+pre-W2 HEAD apart from the appended audit call — so not a regression.
+Fixing it requires row locking on a financial write path and therefore
+separate authorization. Documented in the W2 suite (serial consistency
+asserted, interleaving described rather than blessed) so it cannot change
+silently. Should be triaged alongside D-1/D-2 in W3.
+
 **S-3 — LOW — teacher attendance summary widens past the shared section.**
 After a single shared-enrollment check, `studentSummary` returns per-section
 attendance for all of the student's active enrollments

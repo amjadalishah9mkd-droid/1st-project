@@ -169,7 +169,8 @@ Principles applied consistently from M0 onward:
 | M22-W3 | Production backup/deployment parity + operational hardening | `2a5808d` |
 | M22-W4 | Runtime reliability hardening, runbook §31 — **M22 CLOSED** | `116127d` |
 | M23-W0 | Platform discovery + M23 design (`docs/M23_PLATFORM_DISCOVERY_DESIGN.md`) | `ac25eec` |
-| M23-W1 | Enforce ASSIGNED scope for finalized results (S-1, HIGH) | *(this commit)* |
+| M23-W1 | Enforce ASSIGNED scope for finalized results (S-1, HIGH) | `9c46336` |
+| M23-W2 | Audit integrity for the S-2 mutation surface | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -3015,6 +3016,99 @@ are preserved unchanged.
 
 *Last updated after M23-W1 (S-1 remediated; W2–W4 not started).*
 
+## M23-W2 — audit integrity for the S-2 mutation surface
+
+Closes finding S-2. Audit coverage only: no migration, no schema change,
+no new permission, no new role, no new endpoint, no UI, and no change to
+authorization, tenancy, financial semantics or mutation behaviour beyond
+the audit side effect.
+
+**What was unaudited.** W0's inventory was re-traced and confirmed
+exactly: eight configuration/academic mutation paths whose `create`
+sibling was already audited emitted nothing on update —
+`fees.updateStructure`, `exams.update`, `exams.updatePaper`,
+`calendar.updateYear`, `calendar.updateTerm`, `sections.update`,
+`timetable.updateSlot` and `assignments.update`. The most consequential
+is the fee-structure update, which deletes and recreates every
+`FeeComponent`, silently rewriting what all future invoices will charge
+with no record of who changed it.
+
+**Events added** (existing `<domain>.<entity>_<verb>` convention, all
+riding existing permissions — `fees.manage`, `exams.manage`,
+`academics.manage`, `timetable.manage`, `assignments.manage`):
+`fees.structure_updated`, `exams.updated`, `exams.paper_updated`,
+`academic_years.updated`, `terms.updated`, `sections.updated`,
+`timetable.slot_updated`, `assignments.updated`.
+
+**Metadata is a shape summary, never a payload.** A new pure helper
+`apps/api/src/audit/changed-fields.ts` records the *names* of the fields
+that actually differ from the stored row, computed server-side from the
+validated input and the tenant-scoped row that was read. A no-op PATCH
+yields `changed: []` rather than echoing back every field the client
+sent, and a client cannot widen the list by sending extra keys because
+only an explicit allowlist is ever considered. Free-text content
+(assignment descriptions), component labels, credentials and personal
+data are deliberately excluded. The fee-structure event additionally
+carries the minimum needed to understand the financial effect:
+`termId`, `componentsReplaced`, component counts before/after, totals
+before/after, and the count of already-issued invoices (whose snapshot
+amounts are unaffected, per M14 semantics).
+
+**Atomicity.** `AuditService.log()` is deliberately fire-and-forget: it
+swallows write failures so audit trouble can never fail a business
+operation. That is right for its existing callers but wrong here, where
+a swallowed failure would let a mutation commit silently unaudited. A new
+additive `AuditService.logAtomic(entry, tx)` therefore *requires* a
+transaction client and lets errors propagate, so the caller's transaction
+rolls back and neither the mutation nor the audit row survives. Existing
+`log()` behaviour and every existing caller are untouched. All eight
+mutations now run inside a transaction with the audit write as the final
+statement, so the record exists if and only if the mutation committed.
+
+**Proof.** New suite `apps/api/test/m23-w2-audit-integrity.e2e-spec.ts`
+(35 real-Postgres tests): exactly-once on success with server-derived
+actor and tenant; zero audit rows for anonymous, forged-token,
+under-privileged, cross-college, nonexistent-target and
+failed-validation attempts; a CLOSED-term rejection rolling back the
+component rewrite and the audit together; hostile
+`actorId`/`userId`/`collegeId`/`role`/`scope`/`metadata` body fields
+proven inert against the recorded actor, tenant, target and metadata;
+an injected audit failure proven to roll back the component rewrite with
+no residue, followed by proof the path still works; reads writing
+nothing; racing updates yielding exactly one record per committed
+mutation; all seven remaining paths audited once each and silent when
+denied; a metadata leak scan; and a check that S-1 remains closed.
+Reverting only the fee-structure audit call fails 8 of the 35 tests.
+
+**D-4 — newly discovered PRE-EXISTING defect, reported and NOT fixed.**
+Concurrency testing exposed that `updateStructure` replaces components
+with `deleteMany` + `createMany` and writes `totalAmount` in the same
+transaction but takes no lock on the `FeeStructure` row. Under READ
+COMMITTED, concurrent updates interleave, so the surviving component rows
+can come from one transaction while `totalAmount` comes from another,
+leaving the stored total different from the sum of the stored components
+(observed: total 4010 vs component sum 1004 under six racing writes).
+The code is byte-identical to pre-W2 HEAD apart from the appended audit
+call, so this is unchanged M14/M17 behaviour and not a regression.
+Fixing it means adding row locking to a financial write path, which is
+outside W2's authorization. It is therefore documented in the suite
+(serial single-writer consistency is asserted; the interleaving is
+described, not blessed) so the behaviour cannot change silently, and it
+is recorded here as an open defect awaiting separate authorization.
+
+Verified: 703/703 tests (54 suites, +35), typecheck 0, Prisma valid,
+15 migrations up to date (unchanged), API and web production images
+build, all four containers healthy, preview 200, demo fingerprint
+`50424fec…` identical, 0 leftover fixtures, 0 restore_verify DBs.
+`AuditLog` remains append-only, so test suites leave rows behind as they
+always have; no `AuditLog` row is ever deleted by application code.
+
+M23-W3 was NOT started. D-1 (fees CSV `termId` 500), D-2 (grade-band
+`gradePoint` erasure) and D-4 (above) were NOT implemented. All other
+deferred items are preserved unchanged.
+
+*Last updated after M23-W2 (S-2 closed; W3–W4 not started).*
+
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
   Hardening & Debt Retirement (P2-IDOR-1 file authorization, mail
@@ -3026,9 +3120,10 @@ are preserved unchanged.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M23 status**: W0 (discovery/design) and W1 (S-1 authorization fix)
-  COMPLETE. W2–W4 NOT started — S-2, D-1 and D-2 remain open and require
-  separate authorization.
+- **M23 status**: W0 (discovery/design), W1 (S-1 authorization fix) and
+  W2 (S-2 audit integrity) COMPLETE. W3–W4 NOT started — D-1, D-2 and the
+  newly discovered D-4 remain open and require separate authorization.
+  M23 is NOT closed.
 - **M22 status**: **M22 COMPLETE (W0–W4) — production runtime reliability &
   incident visibility CLOSED** (see M22-W4 entry).
 - **M21 status**: **M21 COMPLETE (W0–W4) — account lifecycle & institutional administration CLOSED** (see M21-W4 entry).
@@ -3040,10 +3135,10 @@ are preserved unchanged.
   browser-print; M17 term lifecycle, M16 refunds+accountant, M15
   rollover and M14 payments all remain complete (webhook delivery
   still pending provider-dashboard endpoint registration).
-- **Latest commit**: the M23-W1 authorization-fix commit on branch
+- **Latest commit**: the M23-W2 audit-integrity commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 15 found, database schema up to date
-- **Tests**: **668/668 passing** (53 suites)
+- **Tests**: **703/703 passing** (54 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -3052,9 +3147,10 @@ are preserved unchanged.
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13 and
   `docs/M23_PLATFORM_DISCOVERY_DESIGN.md` (current reconciliation)
-- **Next planned milestone**: M23-W2 (audit coverage for S-2) is designed
-  and awaiting authorization; D-1 and D-2 are queued for W3. Nothing
-  beyond W1 has been implemented
+- **Next planned milestone**: M23-W3 (D-1 fees CSV `termId`, D-2 grade-band
+  `gradePoint`) is designed and awaiting authorization; newly discovered D-4
+  (unlocked fee-structure component replacement) should be triaged with it.
+  Nothing beyond W2 has been implemented
 
 ## 15. Future Roadmap
 

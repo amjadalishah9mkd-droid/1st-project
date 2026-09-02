@@ -25,6 +25,7 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
+import { changedFields } from '../audit/changed-fields';
 import { EventsService } from '../events/events.module';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 import { TermLifecycleService } from '../academics/term-lifecycle.service';
@@ -251,13 +252,36 @@ export class ExamsService {
         message: 'Published exams cannot be modified',
       });
     }
-    const updated = await this.prisma.exam.update({
-      where: { id },
-      data: { title: input.title, type: input.type, status: input.status },
-      include: {
-        term: { select: { label: true } },
-        _count: { select: { papers: true } },
-      },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.exam.update({
+        where: { id },
+        data: { title: input.title, type: input.type, status: input.status },
+        include: {
+          term: { select: { label: true } },
+          _count: { select: { papers: true } },
+        },
+      });
+      // M23-W2 (S-2): exam definition changes were unaudited while
+      // exams.created was not. Audited in-transaction; names only.
+      await this.audit.logAtomic(
+        {
+          collegeId: user.collegeId,
+          actorId: user.id,
+          action: 'exams.updated',
+          targetType: 'Exam',
+          targetId: id,
+          metadata: {
+            termId: existing.termId,
+            changed: changedFields(['title', 'type', 'status'], existing, {
+              title: input.title,
+              type: input.type,
+              status: input.status,
+            }),
+          },
+        },
+        tx,
+      );
+      return row;
     });
     const markCount = await this.prisma.mark.count({
       where: { examPaper: { examId: id } },
@@ -420,15 +444,43 @@ export class ExamsService {
         });
       }
     }
-    const updated = await this.prisma.examPaper.update({
-      where: { id: paperId },
-      data: {
-        examDate: input.examDate ? new Date(input.examDate) : undefined,
-        maxMarks: input.maxMarks,
-        room: input.room,
-        weight: input.weight,
-      },
-      include: paperInclude,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.examPaper.update({
+        where: { id: paperId },
+        data: {
+          examDate: input.examDate ? new Date(input.examDate) : undefined,
+          maxMarks: input.maxMarks,
+          room: input.room,
+          weight: input.weight,
+        },
+        include: paperInclude,
+      });
+      // M23-W2 (S-2): paper schedule/max-marks changes affect how marks
+      // are interpreted, so the change is now recorded (names only).
+      await this.audit.logAtomic(
+        {
+          collegeId: user.collegeId,
+          actorId: user.id,
+          action: 'exams.paper_updated',
+          targetType: 'ExamPaper',
+          targetId: paperId,
+          metadata: {
+            examId,
+            changed: changedFields(
+              ['examDate', 'maxMarks', 'room', 'weight'],
+              existing,
+              {
+                examDate: input.examDate ? new Date(input.examDate) : undefined,
+                maxMarks: input.maxMarks,
+                room: input.room,
+                weight: input.weight,
+              },
+            ),
+          },
+        },
+        tx,
+      );
+      return row;
     });
     return this.toPaperItem(user, updated);
   }

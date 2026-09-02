@@ -17,6 +17,7 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
+import { changedFields } from '../audit/changed-fields';
 import { StudentsService } from '../users/students.service';
 import { TeachersService } from '../users/teachers.service';
 import type { AuthenticatedUser } from '../access/authenticated-user';
@@ -238,10 +239,34 @@ export class SectionsService {
       }
     }
 
-    const updated = await this.prisma.section.update({
-      where: { id },
-      data: { name: input.name, capacity: input.capacity, room: input.room },
-      include: sectionInclude,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.section.update({
+        where: { id },
+        data: { name: input.name, capacity: input.capacity, room: input.room },
+        include: sectionInclude,
+      });
+      // M23-W2 (S-2): sections.created was audited, updates were not.
+      // Capacity and name changes affect enrollment eligibility.
+      await this.audit.logAtomic(
+        {
+          collegeId: user.collegeId,
+          actorId: user.id,
+          action: 'sections.updated',
+          targetType: 'Section',
+          targetId: id,
+          metadata: {
+            termId: existing.termId,
+            courseId: existing.courseId,
+            changed: changedFields(['name', 'capacity', 'room'], existing, {
+              name: input.name,
+              capacity: input.capacity,
+              room: input.room,
+            }),
+          },
+        },
+        tx,
+      );
+      return row;
     });
     return toItem(updated);
   }

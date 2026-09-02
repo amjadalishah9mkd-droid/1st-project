@@ -78,6 +78,39 @@ export class AuditService {
   }
 
   /**
+   * M23-W2 — STRICT, atomic audit write.
+   *
+   * `log()` above is deliberately fire-and-forget: it swallows write
+   * failures so an audit problem can never fail a business operation.
+   * That is the right trade-off for the paths it already serves, but it
+   * is the wrong one for the S-2 configuration-mutation paths, where the
+   * audit record is the whole point: a swallowed failure would let the
+   * mutation commit unaudited and silently.
+   *
+   * `logAtomic` therefore REQUIRES a transaction client and lets the
+   * error propagate, so the caller's transaction rolls back and neither
+   * the mutation nor the audit row survives. The record exists if and
+   * only if the mutation committed — exactly once, never orphaned.
+   *
+   * Existing `log()` behaviour and every existing caller are untouched.
+   */
+  async logAtomic(
+    entry: AuditEntry,
+    tx: Prisma.TransactionClient,
+  ): Promise<void> {
+    await tx.auditLog.create({
+      data: {
+        collegeId: entry.collegeId,
+        actorId: entry.actorId ?? null,
+        action: entry.action,
+        targetType: entry.targetType,
+        targetId: entry.targetId,
+        metadata: (entry.metadata ?? {}) as object,
+      },
+    });
+  }
+
+  /**
    * M12-W4 — read-only, tenant-scoped audit listing (audit.read).
    * Newest first (rides the [collegeId, createdAt] index). Filters:
    * action prefix, actorId, inclusive from/to date window, and `q`

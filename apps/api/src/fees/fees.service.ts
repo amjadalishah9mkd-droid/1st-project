@@ -22,6 +22,7 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
+import { changedFields } from '../audit/changed-fields';
 import { EventsService } from '../events/events.module';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 import { TermLifecycleService } from '../academics/term-lifecycle.service';
@@ -203,8 +204,12 @@ export class FeesService {
     id: string,
     input: UpdateFeeStructureInput,
   ): Promise<FeeStructureItem> {
+    // Tenancy: the structure is only ever located inside the caller's
+    // own college. A cross-college id is a 404 before anything happens,
+    // so a denied attempt can never reach the mutation or the audit.
     const existing = await this.prisma.feeStructure.findFirst({
       where: { id, collegeId: user.collegeId },
+      include: { _count: { select: { components: true, invoices: true } } },
     });
     if (!existing) {
       throw new NotFoundException({ code: 'NOT_FOUND', message: 'Fee structure not found' });
@@ -222,7 +227,7 @@ export class FeesService {
           data: input.components.map((c) => ({ structureId: id, ...c })),
         });
       }
-      return tx.feeStructure.update({
+      const row = await tx.feeStructure.update({
         where: { id },
         data: { name: input.name, totalAmount },
         include: {
@@ -232,6 +237,40 @@ export class FeesService {
           _count: { select: { invoices: true } },
         },
       });
+      // M23-W2 (S-2): the most consequential unaudited mutation — a
+      // component replacement silently rewrites what every future
+      // invoice will charge. Audited INSIDE the transaction, so the
+      // record exists iff the rewrite committed (a CLOSED-term rejection
+      // or any later failure rolls both away together).
+      //
+      // Metadata is deliberately a shape summary, not the payload: which
+      // fields changed, how many components were replaced, and the
+      // before/after totals that describe the financial effect. No
+      // component names, no client payload, no personal data, no ids
+      // beyond the term this structure belongs to.
+      await this.audit.logAtomic(
+        {
+          collegeId: user.collegeId, // server-derived tenant
+          actorId: user.id, // server-derived principal
+          action: 'fees.structure_updated',
+          targetType: 'FeeStructure',
+          targetId: row.id,
+          metadata: {
+            termId: existing.termId,
+            changed: changedFields(['name'], existing, { name: input.name }),
+            componentsReplaced: input.components !== undefined,
+            componentCountBefore: existing._count.components,
+            componentCountAfter: row.components.length,
+            totalAmountBefore: existing.totalAmount.toString(),
+            totalAmountAfter: row.totalAmount.toString(),
+            // Blast radius: invoices already issued against this
+            // structure keep their snapshot amount (M14 semantics).
+            existingInvoiceCount: existing._count.invoices,
+          },
+        },
+        tx,
+      );
+      return row;
     });
     return this.toStructureItem(updated);
   }

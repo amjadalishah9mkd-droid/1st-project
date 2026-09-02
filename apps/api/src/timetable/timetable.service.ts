@@ -13,6 +13,7 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
+import { changedFields } from '../audit/changed-fields';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 import { TermLifecycleService } from '../academics/term-lifecycle.service';
 
@@ -267,10 +268,33 @@ export class TimetableService {
       excludeSlotId: id,
     });
 
-    const updated = await this.prisma.timetableSlot.update({
-      where: { id },
-      data: next,
-      include: slotInclude,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.timetableSlot.update({
+        where: { id },
+        data: next,
+        include: slotInclude,
+      });
+      // M23-W2 (S-2): timetable.slot_created and slot_deleted were
+      // audited, but an in-place reschedule left no trace at all.
+      await this.audit.logAtomic(
+        {
+          collegeId: user.collegeId,
+          actorId: user.id,
+          action: 'timetable.slot_updated',
+          targetType: 'TimetableSlot',
+          targetId: id,
+          metadata: {
+            sectionId: existing.sectionId,
+            changed: changedFields(
+              ['dayOfWeek', 'startTime', 'endTime', 'room'],
+              existing,
+              next,
+            ),
+          },
+        },
+        tx,
+      );
+      return row;
     });
     return toItem(updated);
   }

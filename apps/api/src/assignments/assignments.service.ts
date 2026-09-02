@@ -19,6 +19,7 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
+import { changedFields } from '../audit/changed-fields';
 import { EventsService } from '../events/events.module';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 import { TermLifecycleService } from '../academics/term-lifecycle.service';
@@ -297,17 +298,49 @@ export class AssignmentsService {
         });
       }
     }
-    const updated = await this.prisma.assignment.update({
-      where: { id: existing.id },
-      data: {
-        title: input.title,
-        description: input.description,
-        attachments: input.attachments,
-        dueAt: input.dueAt ? new Date(input.dueAt) : undefined,
-        maxPoints: input.maxPoints,
-        allowLate: input.allowLate,
-      },
-      include: assignmentInclude,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.assignment.update({
+        where: { id: existing.id },
+        data: {
+          title: input.title,
+          description: input.description,
+          attachments: input.attachments,
+          dueAt: input.dueAt ? new Date(input.dueAt) : undefined,
+          maxPoints: input.maxPoints,
+          allowLate: input.allowLate,
+        },
+        include: assignmentInclude,
+      });
+      // M23-W2 (S-2): assignments.created/published/deleted were
+      // audited, updates were not — yet due dates and maxPoints change
+      // how existing submissions are graded. Field NAMES only: the
+      // description is free-text student-facing content and never
+      // belongs in the audit trail.
+      await this.audit.logAtomic(
+        {
+          collegeId: user.collegeId,
+          actorId: user.id,
+          action: 'assignments.updated',
+          targetType: 'Assignment',
+          targetId: existing.id,
+          metadata: {
+            sectionId: existing.sectionId,
+            changed: changedFields(
+              ['title', 'description', 'dueAt', 'maxPoints', 'allowLate'],
+              existing,
+              {
+                title: input.title,
+                description: input.description,
+                dueAt: input.dueAt ? new Date(input.dueAt) : undefined,
+                maxPoints: input.maxPoints,
+                allowLate: input.allowLate,
+              },
+            ),
+          },
+        },
+        tx,
+      );
+      return row;
     });
     return this.toItem(updated, user);
   }

@@ -17,6 +17,7 @@ import type {
 import { PrismaService } from '../prisma/prisma.service';
 import { TermLifecycleService } from './term-lifecycle.service';
 import { AuditService } from '../audit/audit.service';
+import { changedFields } from '../audit/changed-fields';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 import { pageArgs, pageMeta } from '../common/pagination/pagination';
 
@@ -117,10 +118,32 @@ export class CalendarService {
         message: 'End date must be after the start date',
       });
     }
-    const updated = await this.prisma.academicYear.update({
-      where: { id },
-      data: { label: input.label, startsOn, endsOn },
-      include: { _count: { select: { terms: true } } },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.academicYear.update({
+        where: { id },
+        data: { label: input.label, startsOn, endsOn },
+        include: { _count: { select: { terms: true } } },
+      });
+      // M23-W2 (S-2): academic_years.created was audited, updates were
+      // not. Calendar boundaries gate term lifecycle, so record them.
+      await this.audit.logAtomic(
+        {
+          collegeId: user.collegeId,
+          actorId: user.id,
+          action: 'academic_years.updated',
+          targetType: 'AcademicYear',
+          targetId: id,
+          metadata: {
+            changed: changedFields(['label', 'startsOn', 'endsOn'], existing, {
+              label: input.label,
+              startsOn: input.startsOn ? startsOn : undefined,
+              endsOn: input.endsOn ? endsOn : undefined,
+            }),
+          },
+        },
+        tx,
+      );
+      return row;
     });
     return {
       id: updated.id,
@@ -253,13 +276,36 @@ export class CalendarService {
         message: 'End date must be after the start date',
       });
     }
-    const updated = await this.prisma.term.update({
-      where: { id },
-      data: { label: input.label, startsOn, endsOn },
-      include: {
-        academicYear: { select: { label: true } },
-        _count: { select: { sections: true } },
-      },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.term.update({
+        where: { id },
+        data: { label: input.label, startsOn, endsOn },
+        include: {
+          academicYear: { select: { label: true } },
+          _count: { select: { sections: true } },
+        },
+      });
+      // M23-W2 (S-2): term boundaries drive CLOSED-term enforcement,
+      // invoice eligibility and rollover, so edits are now recorded.
+      await this.audit.logAtomic(
+        {
+          collegeId: user.collegeId,
+          actorId: user.id,
+          action: 'terms.updated',
+          targetType: 'Term',
+          targetId: id,
+          metadata: {
+            academicYearId: existing.academicYearId,
+            changed: changedFields(['label', 'startsOn', 'endsOn'], existing, {
+              label: input.label,
+              startsOn: input.startsOn ? startsOn : undefined,
+              endsOn: input.endsOn ? endsOn : undefined,
+            }),
+          },
+        },
+        tx,
+      );
+      return row;
     });
     return this.toTermItem(updated);
   }
