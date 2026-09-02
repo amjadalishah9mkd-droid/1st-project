@@ -167,7 +167,8 @@ Principles applied consistently from M0 onward:
 | M22-W1 | Request correlation + safe structured operational logging | `7f59346` |
 | M22-W2 | Truthful readiness + bounded instance-local counters | `373faa0` |
 | M22-W3 | Production backup/deployment parity + operational hardening | `2a5808d` |
-| M22-W4 | Runtime reliability hardening, runbook §31 — **M22 CLOSED** | *(this commit)* |
+| M22-W4 | Runtime reliability hardening, runbook §31 — **M22 CLOSED** | `116127d` |
+| M23-W0 | Platform discovery + M23 design (`docs/M23_PLATFORM_DISCOVERY_DESIGN.md`) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2893,7 +2894,56 @@ receipts.csv, mail attachments, Safepay webhook activation and the latent
 post-claim webhook remediation, provider polling, maker-checker, multi-college,
 i18n, Prisma upgrade, FILE_URL_SECRET rotation, account deletion.
 
-*Last updated after M22-W4 (M22 CLOSED). M23 not started.*
+*Last updated after M22-W4 (M22 CLOSED).*
+
+## M23-W0 — Platform discovery + design (design only)
+
+Read-only discovery from `116127d`; baseline re-verified before and after
+(650/650 tests, 52 suites, typecheck 0, Prisma valid, 15 migrations, builds
+green, containers healthy, demo fingerprint `50424fec…` unchanged).
+`docs/M23_PLATFORM_DISCOVERY_DESIGN.md` re-verifies M0–M22, reconciles the
+debt register against source, and re-ranks candidates.
+
+**Highest-priority finding (S-1, HIGH, newly discovered):** the M18
+finalized-records read path silently treats `ASSIGNED` as `ALL`.
+`resolveReadTarget` handles OWN and CHILD only
+(`exams/results-finalization.service.ts:250-285`), so any TEACHER
+(`results.read: ASSIGNED`) can read any same-college student's finalized
+report card and transcript via `?studentId=`. Proven read-only in this
+workstream: transcript for a not-taught student returned **200** with
+identity/credits/CGPA fields, while the correctly narrowed siblings
+`GET /results` and `GET /attendance/summary` both returned **403**. Tenancy
+holds; this is an intra-tenant horizontal over-read.
+
+Also newly found: **D-1** `GET /exports/fees.csv?termId=` returns **500**
+because the filter is spread onto `Invoice`, which has no `termId`
+(`exports/exports.module.ts:198-203`; term lives on `FeeStructure`);
+**D-2** `updateGradeBands` deletes and recreates bands without `gradePoint`
+(`exams/exams.service.ts:762-776`), so the only grade-point configuration
+path erases data and GPA remains unconfigurable; **S-2** several mutating
+paths emit no audit event, most consequentially fee-structure updates that
+recreate all components (`fees/fees.service.ts:201-236`); plus lower-severity
+S-3/S-4/D-3 and operational findings (retention pruning has no keep-N floor,
+no CI, no lint, no web test harness, notification scheduler and bulk student
+import untested).
+
+Verified resolved and removed from the open register: readiness truth,
+production backup parity, uploads backup protection, integration env parity,
+observability V1, log retention, build-context exclusions, account deletion
+(terminal archival), StoredFile finance purpose (not applicable as code). All
+other deferred items were re-verified and preserved verbatim, including
+Safepay webhook activation (EXTERNALLY BLOCKED) and off-host backups/PITR.
+
+**Recommended M23: Authorization Correctness & Audit Integrity** — W1 scope
+remediation (S-1), W2 audit coverage (S-2), W3 data-integrity fixes (D-1,
+D-2), W4 hardening/close-out. No migration expected; reporting/analytics moves
+to M24. Open decisions O-1…O-8 recorded. A stale current-state footer in this
+file (claiming 12 migrations, 543 tests and M15 as latest) was corrected as a
+factual documentation fix. No implementation was performed: no source, schema,
+migration, package, UI, Docker or configuration change, and no security defect
+fixed.
+
+*Last updated after M23-W0 (design only — M23 NOT implemented).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2906,6 +2956,9 @@ i18n, Prisma upgrade, FILE_URL_SECRET rotation, account deletion.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
+- **M23 status**: DESIGN/DISCOVERY COMPLETE only — awaiting O-1…O-8 decisions
+  and explicit W1 authorization (recommended: Authorization Correctness &
+  Audit Integrity; S-1 is a proven HIGH authorization defect).
 - **M22 status**: **M22 COMPLETE (W0–W4) — production runtime reliability &
   incident visibility CLOSED** (see M22-W4 entry).
 - **M21 status**: **M21 COMPLETE (W0–W4) — account lifecycle & institutional administration CLOSED** (see M21-W4 entry).
@@ -2917,20 +2970,21 @@ i18n, Prisma upgrade, FILE_URL_SECRET rotation, account deletion.
   browser-print; M17 term lifecycle, M16 refunds+accountant, M15
   rollover and M14 payments all remain complete (webhook delivery
   still pending provider-dashboard endpoint registration).
-- **Latest commit**: the M15-W4 close-out commit on branch
+- **Latest commit**: the M23-W0 discovery/design commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
-- **Migrations**: 12 found, database schema up to date
-- **Tests**: **543/543 passing** (40 suites)
+- **Migrations**: 15 found, database schema up to date
+- **Tests**: **650/650 passing** (52 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
 - **Alloy preview**: reachable at `http://localhost:8080` (login page 200;
   demo admin/teacher/student logins verified; Google endpoints correctly
   FEATURE_DISABLED without env config)
-- **Known technical debt**: see §13
-- **Next planned milestone**: none scheduled — any next milestone (e.g.
-  M16 refunds/accountant, for which a design doc exists) requires
-  explicit approval
+- **Known technical debt**: see §13 and
+  `docs/M23_PLATFORM_DISCOVERY_DESIGN.md` (current reconciliation)
+- **Next planned milestone**: M23 design complete and awaiting authorization
+  — recommended direction is Authorization Correctness & Audit Integrity
+  (see the M23-W0 entry); no implementation has started
 
 ## 15. Future Roadmap
 
