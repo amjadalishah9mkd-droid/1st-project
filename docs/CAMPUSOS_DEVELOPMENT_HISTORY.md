@@ -166,7 +166,8 @@ Principles applied consistently from M0 onward:
 | M22-W0 | Production-readiness discovery + design (`docs/M22_PLATFORM_DISCOVERY_DESIGN.md`) | `b7fcbcc` |
 | M22-W1 | Request correlation + safe structured operational logging | `7f59346` |
 | M22-W2 | Truthful readiness + bounded instance-local counters | `373faa0` |
-| M22-W3 | Production backup/deployment parity + operational hardening | *(this commit)* |
+| M22-W3 | Production backup/deployment parity + operational hardening | `2a5808d` |
+| M22-W4 | Runtime reliability hardening, runbook §31 — **M22 CLOSED** | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2842,7 +2843,57 @@ the production API image ran `prisma migrate status` successfully. Off-host
 backup and PITR remain deferred; webhook
 activation unchanged. W4 close-out NOT started.
 
-*Last updated after M22-W3 (W4 close-out NOT started).*
+## M22-W4 — Hardening, drills & close-out — **M22 CLOSED**
+
+Full re-audit of the W1–W3 surface (correlation, AsyncLocalStorage context,
+logger, exception filter, counters, health routes, backup scripts, Compose
+boundaries, build context) found **one genuine defect**, fixed here:
+`.dockerignore` excluded only root-level `uploads`/`backups`/dumps, so the
+git-ignored `apps/api/uploads` directory (6,234 test-generated user files) was
+copied into image build contexts. Patterns now cover all nesting levels plus
+archives, and a build-stage inspection proves no env files, uploads, backups,
+dumps or archives reach the image. Everything else verified with no change:
+fixed-schema logger with no arbitrary-key path, six compile-time label-free
+counters with no increment-by-name API and no HTTP reset, request IDs as
+correlation only, readiness/liveness separation, pattern-scoped retention, and
+unchanged authorization/tenancy (no new permission, role conditional, client
+tenancy, dependency, dynamic execution or delete path).
+
+New `test/observability-hardening.e2e-spec.ts` (4 tests) closes the remaining
+mandated gaps: context propagation through nested awaits/timers/fan-out, no
+context leakage into background execution (and background events omit
+`requestId`), exactly one single-line-JSON record per event, and read-only
+counter semantics on ops health (stable `resetAt`, monotonic values).
+
+Live drills: PostgreSQL stopped → liveness 200, readiness and `/health`
+503/degraded, no business mutation; restored → readiness 200, migrations
+truthful, normal API 200. Backup failure in a disposable directory → nonzero
+exit, previous marker and pair preserved, zero partials, health still valid.
+Paired restore → dump TOC valid, fingerprint matched, scratch DB dropped,
+uploads archive extracted in scratch with byte-identical probe. Boundaries →
+backup cannot write uploads, API cannot write backups, web mounts neither,
+traversal archive rejected. Logs → bounded 5 × 10 MB on all services in live
+containers and rendered production config; live request log contained no
+cookie, bearer token, query value or email. Demo state unchanged
+(20 users/1 college/13 profiles/15 migrations, all four logins 200); probe and
+scratch artifacts removed, leaving one clean verified pair.
+
+Documented limitation (no code change, authorization deliberately not
+relaxed): `/health/ops` authenticates against the database, so during a full
+outage it returns a generic 500; `/health/ready` is the outage signal.
+
+**M22 FINAL STATUS: CLOSED.** W0 `b7fcbcc` → W1 `7f59346` → W2 `373faa0` →
+W3 `2a5808d` → W4 (this commit). Final: 650 tests / 52 suites, typecheck 0,
+Prisma valid, 15 migrations, production API/web images built, all containers
+healthy. Deferred verbatim: off-host backups, PITR, external monitoring,
+durable/distributed metrics, Redis/Prometheus/OpenTelemetry, distributed rate
+limiting, reporting/analytics, GPA policy, global search, notification
+preferences/digest, leave workflow, server PDF, StoredFile FINANCE_DOCUMENT,
+receipts.csv, mail attachments, Safepay webhook activation and the latent
+post-claim webhook remediation, provider polling, maker-checker, multi-college,
+i18n, Prisma upgrade, FILE_URL_SECRET rotation, account deletion.
+
+*Last updated after M22-W4 (M22 CLOSED). M23 not started.*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -2855,8 +2906,8 @@ activation unchanged. W4 close-out NOT started.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M22 status**: W0 design + W1 correlation/logging + W2 truthful
-  readiness/counters + W3 production parity complete. W4 close-out pending.
+- **M22 status**: **M22 COMPLETE (W0–W4) — production runtime reliability &
+  incident visibility CLOSED** (see M22-W4 entry).
 - **M21 status**: **M21 COMPLETE (W0–W4) — account lifecycle & institutional administration CLOSED** (see M21-W4 entry).
 - **M20 status**: **M20 COMPLETE (W0–W4) — finance documents CLOSED** (see M20-W4 entry).
 - **Current milestone**: **M19 COMPLETE (W0–W4) — platform security hardening & debt retirement CLOSED** (see M19-W4 entry). Previous: **M18 COMPLETE (W0–W4)** — academic records:

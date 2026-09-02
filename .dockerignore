@@ -10,9 +10,17 @@ node_modules
 **/.env
 **/.env.*
 uploads
+**/uploads
 backups
+**/backups
 *.dump
+**/*.dump
+*.tar.gz
+**/*.tar.gz
 *.log
+**/*.log
 screenshot*.png
+**/screenshot*.png
 .playwright
 coverage
+**/coverage

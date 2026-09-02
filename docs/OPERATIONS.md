@@ -1353,3 +1353,150 @@ key with no behavior (preserved verbatim; i18n is future work).
 No account deletion; no bulk offboarding; no scheduled auto-archival; no
 notification to the affected user (deliberate V1); leave workflow,
 notification preferences, i18n and multi-college remain future work.
+
+## 31. Runtime reliability & incident visibility runbook (M22)
+
+### Request correlation
+
+Every API request gets one effective correlation ID, returned as the
+`x-request-id` response header on success and error responses. A client value
+is honoured only when it matches `[A-Za-z0-9._-]{1,128}`; anything malformed,
+oversized, Unicode, whitespace, control-bearing, empty or repeated is replaced
+with a server-generated UUID. Request IDs are correlation only and are never
+authorization, tenancy or identity inputs.
+
+Troubleshooting a report: ask for the `x-request-id` shown/received, then grep
+container logs for that exact value:
+
+```sh
+docker compose -f docker-compose.prod.yaml logs api | grep '"requestId":"<id>"'
+```
+
+Each request produces one `request.completed` record; failures additionally
+produce one `request.failed` classification record with the same ID.
+
+### Operational log fields (fixed allowlist)
+
+`timestamp`, `level`, `service`, `environment`, `event`, `requestId`,
+`method`, `route` (framework route template), `statusCode`, `durationMs`,
+`errorCode`, `errorClass`, `message` (bounded, system-authored).
+
+Never present, and impossible to add through the logger API: request/response
+bodies, headers, cookies, authorization values, tokens, payment references,
+signed URLs, raw URLs/query strings, IPs, names, emails, phone numbers, user
+or college IDs, stack traces, and arbitrary caller-supplied fields. Records
+are single-line JSON. Successful `/health` probes are suppressed to bound
+volume; failures are always retained. Operational logs are transient
+diagnostics and are separate from `AuditLog`, which remains the durable
+business/security trail.
+
+### Health endpoints
+
+| Endpoint | Auth | Meaning |
+|---|---|---|
+| `GET /health/live` | public | process liveness only; never touches PostgreSQL, files or backups |
+| `GET /health/ready` | public | readiness; 200 when PostgreSQL is reachable, 503 + `status: degraded` when not |
+| `GET /health` | public | readiness alias kept for existing probes; same 200/503 semantics |
+| `GET /health/ops` | `settings.manage` | deep internal state: database, migrations, backups, uploads writability, uptime, instance counters |
+
+Orchestration and load balancers must use readiness. Liveness only proves the
+process exists — a 200 there during an outage is expected, not reassuring.
+
+**Known limitation:** `/health/ops` authenticates against the database, so
+during a full PostgreSQL outage it returns a generic 500 rather than a report.
+That is deliberate: its authorization is never relaxed. Use `/health/ready`
+for dependency state during an outage.
+
+### Runtime counters
+
+`/health/ops` exposes `runtime.scope: instance`, `runtime.resetAt` and exactly
+six fixed counters: `requestsCompleted`, `responses4xx`, `responses5xx`,
+`known5xx`, `unexpected5xx`, `rateLimitRejections`.
+
+They are in-memory, per-process, label-free and reset on every API restart, so
+they are **not** fleet totals and not a metrics history. There is no
+increment-by-name API and no HTTP reset endpoint; reading ops health never
+mutates them. Durable/distributed metrics remain deferred.
+
+### Backups
+
+One sidecar cycle produces a paired custom PostgreSQL dump and same-stamp
+uploads archive, validates both structurally, rotates to 14 days, then writes
+the freshness marker. Failures remove only that cycle's own artifacts, leave
+the previous marker and pair intact, and retry in five minutes. `/health/ops`
+counts only matched DB/uploads pairs, so a lone dump can never look fresh, and
+the sidecar healthcheck fails when no complete cycle finished within 26 hours.
+
+Drills (safe, non-destructive):
+
+```sh
+docker compose -f docker-compose.prod.yaml exec -T backup bash /scripts/backup-cycle.sh
+docker compose -f docker-compose.prod.yaml exec -T backup bash /scripts/backup-healthcheck.sh
+docker compose -f docker-compose.prod.yaml exec -T backup bash /scripts/restore-verify.sh
+docker compose -f docker-compose.prod.yaml exec -T backup bash /scripts/uploads-restore-verify.sh
+```
+
+`restore-verify.sh` restores into the fixed disposable
+`campusos_restore_verify` database, compares a non-PII fingerprint against the
+source and drops the scratch database. `uploads-restore-verify.sh` rejects
+absolute/`..` archive members and extracts only into scratch. Live restores are
+destructive and incident-only (§7).
+
+### Volume boundaries and log retention
+
+API writes uploads and reads backups read-only; the backup sidecar reads
+uploads read-only and owns the backup volume; web mounts neither; production
+PostgreSQL publishes no host port. A one-shot `uploads-init` service sets the
+uploads volume to the non-root API UID before API/backup start. All services
+use Docker `json-file` logging bounded to 5 files × 10 MB, which rotates
+stdout/stderr only and adds no external aggregation.
+
+### Failure diagnosis matrix
+
+| Signal | Meaning | Safe action |
+|---|---|---|
+| readiness 503, liveness 200 | PostgreSQL unreachable | keep traffic away; inspect DB container/credentials; readiness recovers automatically |
+| `/health/ops` 500 during outage | ops authentication needs the DB | use `/health/ready`; do not relax ops auth |
+| `migrations.status: error` | migration ledger probe failed | inspect DB permissions/schema; never edit `_prisma_migrations` by hand |
+| `migrations.unfinished > 0` | crashed/rolled-back migration | investigate before serving traffic |
+| `backups.stale: true` | no complete pair inside the age window | check sidecar logs and disk; run one cycle manually |
+| `backups.count` lower than expected | dumps and uploads archives are unpaired | inspect sidecar logs; a partial cycle never advertises freshness |
+| backup container unhealthy | no complete cycle in 26 hours | same as above; treat as a data-protection incident |
+| `unexpected5xx` rising | unclassified server failure | correlate `x-request-id` in logs immediately |
+| `known5xx` rising | explicit service-level 5xx (e.g. disabled/unreachable provider) | check configuration and dependencies |
+| `rateLimitRejections` rising | 429s on this instance | check abuse and proxy/`trust proxy` topology |
+| `uploadsWritable: false` | uploads volume missing/read-only | verify `uploads-init` ran and volume permissions |
+
+### Incident-response checklist
+
+1. Capture the reporter's `x-request-id`.
+2. Check `/health/live` and `/health/ready` to separate process from
+   dependency failure.
+3. If readiness is healthy, read `/health/ops` for migrations, backups,
+   uploads and counters.
+4. Correlate the request ID in API logs; use `request.failed` for the safe
+   error classification.
+5. Confirm backup freshness before any recovery action that touches data.
+6. Run the restore drill before trusting the newest artifacts.
+7. Record findings; counters reset on restart, so capture values first.
+
+### Operators must NEVER
+
+- treat liveness 200 as service health;
+- relax `/health/ops` authorization or expose it publicly;
+- add request bodies, headers, cookies, tokens, IDs or PII to operational
+  logs, or use attacker-controlled values as log/metric labels;
+- treat instance counters as fleet metrics or durable history;
+- hand-edit, delete or re-point backup artifacts, markers or retention;
+- run `restore-verify.sh` against the live database or "adapt" its scratch
+  name;
+- extract an untrusted uploads archive outside the verifier;
+- commit `.env.production`, dumps, archives or uploads.
+
+### Known limitations (deferred, unchanged by M22)
+
+Local-volume backup destination only; no off-host copies; no point-in-time
+recovery; DB/uploads pairing is best-effort rather than a transactional
+cross-volume snapshot; counters and rate limits are process-local; no external
+monitoring, durable metrics or distributed telemetry; Safepay webhook
+activation remains externally blocked.
