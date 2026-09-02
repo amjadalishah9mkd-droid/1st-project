@@ -244,7 +244,7 @@ export class ResultsFinalizationService {
     return this.toItem(current);
   }
 
-  // ── M18-W2: reads (results.read OWN/CHILD/ALL — exams.results
+  // ── M18-W2: reads (results.read OWN/CHILD/ASSIGNED/ALL — exams.results
   //    precedent; snapshots ONLY, never rebuilt from mutable marks) ─
 
   /** Resolve the target student under the caller's results.read scope. */
@@ -280,6 +280,33 @@ export class ResultsFinalizationService {
         studentProfileId: student.id,
       });
       if (!allowed) throw notFound('Student');
+    }
+    // M23-W1 (S-1): ASSIGNED must narrow to the authoritative teaching
+    // relationship. Before this fix ASSIGNED fell through to the bare
+    // same-college lookup above, so any teacher could read any
+    // same-college student's finalized report card and transcript — an
+    // intra-tenant horizontal over-read. The relationship is the same
+    // server-derived one already enforced for live marks
+    // (exams.service.results) and attendance summaries: an ACTIVE
+    // Enrollment in a Section the caller holds a TeachingAssignment for.
+    // Teacher identity comes from the authenticated session (userId),
+    // never from client input.
+    if (scope === 'ASSIGNED') {
+      const shared = await this.prisma.enrollment.findFirst({
+        where: {
+          studentId: student.id,
+          status: 'ACTIVE',
+          section: {
+            collegeId: user.collegeId,
+            teachingAssignments: { some: { teacher: { userId: user.id } } },
+          },
+        },
+        select: { id: true },
+      });
+      // Same denial shape as CHILD/unknown-student above: an
+      // unassigned student is indistinguishable from a nonexistent one,
+      // so the fix adds no enumeration signal.
+      if (!shared) throw notFound('Student');
     }
     return student.id;
   }

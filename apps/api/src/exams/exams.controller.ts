@@ -233,7 +233,8 @@ export class ExamsController {
     return this.finalization.finalizationList(user, termId);
   }
 
-  // Reads ride the existing results.read scopes (OWN/CHILD/ALL).
+  // Reads ride the existing results.read scopes
+  // (OWN/CHILD/ASSIGNED/ALL — ASSIGNED narrowed in M23-W1).
   @Get('results/report/term/:termId')
   @RequirePermission(PERMISSIONS.RESULTS_READ)
   reportCard(

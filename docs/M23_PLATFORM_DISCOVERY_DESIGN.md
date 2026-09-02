@@ -140,6 +140,15 @@ Tenancy holds (collegeId server-derived); this is an intra-tenant horizontal
 over-read. Today's payload is identity + null GPA because no term is finalized
 in demo data; once any term is finalized it exposes complete academic records.
 
+> **RESOLVED in M23-W1.** `ASSIGNED` now requires an `ACTIVE` `Enrollment`
+> in a `Section` the caller holds a `TeachingAssignment` for — the same
+> server-derived relationship used by `exams.service` and
+> `attendance.service`. Denial reuses the existing `notFound('Student')`
+> shape, so no enumeration oracle is added. Covered by 18 real-Postgres
+> tests in `apps/api/test/m23-w1-results-authz.e2e-spec.ts`; the live
+> request quoted above now returns **404** with an error envelope only.
+> No migration, no permission change, no role-name conditional.
+
 **S-2 — MEDIUM — audit coverage gap on mutating PATCH paths (newly
 discovered).** No audit event is emitted for: fee-structure update, which
 also deletes/recreates every `FeeComponent` and recomputes `totalAmount`

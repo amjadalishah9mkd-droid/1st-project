@@ -168,7 +168,8 @@ Principles applied consistently from M0 onward:
 | M22-W2 | Truthful readiness + bounded instance-local counters | `373faa0` |
 | M22-W3 | Production backup/deployment parity + operational hardening | `2a5808d` |
 | M22-W4 | Runtime reliability hardening, runbook §31 — **M22 CLOSED** | `116127d` |
-| M23-W0 | Platform discovery + M23 design (`docs/M23_PLATFORM_DISCOVERY_DESIGN.md`) | *(this commit)* |
+| M23-W0 | Platform discovery + M23 design (`docs/M23_PLATFORM_DISCOVERY_DESIGN.md`) | `ac25eec` |
+| M23-W1 | Enforce ASSIGNED scope for finalized results (S-1, HIGH) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -2945,6 +2946,75 @@ fixed.
 
 *Last updated after M23-W0 (design only — M23 NOT implemented).*
 
+## M23-W1 — finalized-results ASSIGNED scope enforcement (S-1)
+
+Closes the HIGH-severity intra-tenant horizontal authorization defect
+found in M23-W0. Authorization correctness only: no migration, no schema
+change, no new permission, no new role, no new endpoint, and no change to
+finalization, grading or CGPA behaviour.
+
+**Root cause.** `resolveReadTarget`
+(`apps/api/src/exams/results-finalization.service.ts`) resolved the
+`results.read` scope through PolicyService and then branched on `OWN` and
+`CHILD` only. Every other scope — including `ASSIGNED`, which is the
+TEACHER grant — fell through to a bare same-college `StudentProfile`
+lookup and was returned as an authorized target. The M18 read path was
+written when `results.read` was documented as OWN/CHILD/ALL; the TEACHER
+`ASSIGNED` grant was never given a branch, so the widest fallback applied
+to it. Tenancy was never bypassed (the lookup is `collegeId`-scoped);
+what was missing was the intra-tenant narrowing.
+
+**Rule implemented (approved O-1 semantics).** Under `ASSIGNED`, the
+target student must hold an `ACTIVE` `Enrollment` in a `Section` of the
+caller's own college for which the caller holds a `TeachingAssignment`.
+This is the identical server-derived relationship already enforced for
+live marks (`exams.service.ts`) and attendance summaries
+(`attendance.service.ts`), so the three student-targeted read paths now
+agree. Teacher identity comes from the authenticated session
+(`teacher: { userId: user.id }`); `collegeId` remains server-derived.
+Denial reuses the existing `notFound('Student')` shape already used for
+CHILD and unknown students, so an unassigned student is indistinguishable
+from a nonexistent one and the fix introduces no enumeration oracle.
+
+No new permission, no role-name conditional, and no client-supplied
+value (`scope`, `collegeId`, `teacherId`, `actorId`, `status`) carries any
+authorization weight. `results.read` has exactly two consumers; the other
+was already correct, so the root cause is fully contained — no other
+endpoint required the same fix.
+
+**Proof.** New suite `apps/api/test/m23-w1-results-authz.e2e-spec.ts`
+(18 real-Postgres tests) covers the whole A–O matrix: assigned allowed;
+same-college unassigned denied; another teacher's student denied both
+ways; unassigned teacher reads nobody; DROPPED enrollment is not access;
+OWN/CHILD/ALL preserved; revoked and unrelated guardians denied; rival
+tenant denied in both directions even with a genuine rival-side
+assignment; assignment removal and reassignment flip access immediately;
+unknown/foreign/unassigned ids share one error code; repeated and forged
+requests are deterministic. A data-minimization test asserts the denied
+response carries no identity, CGPA, grade, mark or course payload, with a
+positive control proving the authorized response does. Reverting only the
+service change fails 10 of the 18 tests — the tenancy test still passes,
+matching the discovery finding exactly.
+
+Live re-check of the exact discovery request: the teacher→not-taught
+student transcript that returned **200** with identity and CGPA now
+returns **404** with an error envelope only, while a legitimately taught
+student still returns 200. Ten live checks across two teachers, a
+student and an admin all behaved as specified; all fixtures were removed
+and the demo fingerprint is unchanged.
+
+Verified: 668/668 tests (53 suites, +18), typecheck 0, Prisma valid,
+15 migrations up to date (unchanged), API and web production images
+build, all four containers healthy, preview 200, demo fingerprint
+`50424fec…` identical, 0 leftover fixtures.
+
+M23-W2 was NOT started. S-2 (unaudited mutations), D-1 (fees CSV
+`termId` 500) and D-2 (grade-band `gradePoint` erasure) were NOT
+implemented and remain open exactly as recorded. All other deferred items
+are preserved unchanged.
+
+*Last updated after M23-W1 (S-1 remediated; W2–W4 not started).*
+
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
   Hardening & Debt Retirement (P2-IDOR-1 file authorization, mail
@@ -2956,9 +3026,9 @@ fixed.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M23 status**: DESIGN/DISCOVERY COMPLETE only — awaiting O-1…O-8 decisions
-  and explicit W1 authorization (recommended: Authorization Correctness &
-  Audit Integrity; S-1 is a proven HIGH authorization defect).
+- **M23 status**: W0 (discovery/design) and W1 (S-1 authorization fix)
+  COMPLETE. W2–W4 NOT started — S-2, D-1 and D-2 remain open and require
+  separate authorization.
 - **M22 status**: **M22 COMPLETE (W0–W4) — production runtime reliability &
   incident visibility CLOSED** (see M22-W4 entry).
 - **M21 status**: **M21 COMPLETE (W0–W4) — account lifecycle & institutional administration CLOSED** (see M21-W4 entry).
@@ -2970,10 +3040,10 @@ fixed.
   browser-print; M17 term lifecycle, M16 refunds+accountant, M15
   rollover and M14 payments all remain complete (webhook delivery
   still pending provider-dashboard endpoint registration).
-- **Latest commit**: the M23-W0 discovery/design commit on branch
+- **Latest commit**: the M23-W1 authorization-fix commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 15 found, database schema up to date
-- **Tests**: **650/650 passing** (52 suites)
+- **Tests**: **668/668 passing** (53 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -2982,9 +3052,9 @@ fixed.
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13 and
   `docs/M23_PLATFORM_DISCOVERY_DESIGN.md` (current reconciliation)
-- **Next planned milestone**: M23 design complete and awaiting authorization
-  — recommended direction is Authorization Correctness & Audit Integrity
-  (see the M23-W0 entry); no implementation has started
+- **Next planned milestone**: M23-W2 (audit coverage for S-2) is designed
+  and awaiting authorization; D-1 and D-2 are queued for W3. Nothing
+  beyond W1 has been implemented
 
 ## 15. Future Roadmap
 
