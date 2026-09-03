@@ -171,7 +171,8 @@ Principles applied consistently from M0 onward:
 | M23-W0 | Platform discovery + M23 design (`docs/M23_PLATFORM_DISCOVERY_DESIGN.md`) | `ac25eec` |
 | M23-W1 | Enforce ASSIGNED scope for finalized results (S-1, HIGH) | `9c46336` |
 | M23-W2 | Audit integrity for the S-2 mutation surface | `6c1c3fb` |
-| M23-W3 | Data integrity: D-4 fee consistency, D-1 export filter, D-2 gradePoint | *(this commit)* |
+| M23-W3 | Data integrity: D-4 fee consistency, D-1 export filter, D-2 gradePoint | `c7839bf` |
+| M23-W4 | Final re-audit, regression, close-out — **M23 CLOSED** | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -3243,6 +3244,206 @@ widened into another financial-style locking change. Recorded for triage.
 
 *Last updated after M23-W3 (D-4/D-1/D-2 fixed; W4 not started, M23 NOT closed).*
 
+## M23-W4 — final re-audit, regression and close-out (**M23 CLOSED**)
+
+Close-out workstream: verification and documentation only. **No source
+change was required or made** — the only repository changes are this
+history entry, the design-doc disposition register and a new
+`OPERATIONS.md` §32 runbook. No migration, no schema, no dependency, no
+permission, no role, no infrastructure change.
+
+### Environment note (investigated, benign)
+
+The sandbox database was re-provisioned between W3 and W4: all 15
+migrations applied at `2026-09-03 13:05:39` and all 20 demo users seeded
+at `13:05:40`, whereas W1–W3 ran on 2026-09-02. The demo *user set* is
+identical (same 20 emails and roles, all ACTIVE) and every count matches,
+but the cuids are new, so the W1–W3 user-id md5 `50424fec…` was
+session-specific. The W4 reference fingerprint is
+`users=20 active=20 students=13 colleges=1 migrations=15
+md5=3792769493b0f6b4467c8997cef311b5`, and it was **identical before and
+after** all W4 verification. This was treated as a stop-condition,
+investigated to root cause, and confirmed as environment re-provisioning
+rather than an unexpected mutation.
+
+### Re-audit results
+
+**S-1 authorization (W1) — re-verified CLOSED.** `results.read` still
+resolves solely through `PolicyService.scopeFor`; `ASSIGNED` still
+requires an ACTIVE `Enrollment` in a `Section` of the caller's own
+college for which the caller holds a `TeachingAssignment`, with teacher
+identity from the session. Live: assigned student 200; same-college
+unassigned 404; each teacher denied the other's student in both
+directions; DROPPED enrollment 404; removing the assignment revokes
+access immediately and restoring it restores access immediately; OWN
+still self-only with requested ids ignored; ALL still tenant-bounded;
+nonexistent and unassigned targets return an identical status and error
+code, so existence is not disclosed; denied bodies carry no name,
+rollNo, grade, CGPA or percentage. PolicyService was not refactored and
+scope semantics were not widened.
+
+**S-2 audit integrity (W2) — re-verified.** All eight configuration/
+academic paths remain audited (`fees.structure_updated`, `exams.updated`,
+`exams.paper_updated`, `academic_years.updated`, `terms.updated`,
+`sections.updated`, `timetable.slot_updated`, `assignments.updated`),
+plus `grade_bands.updated` from W3 — nine `logAtomic` call sites. Each
+path performs its tenancy-scoped lookup *before* the mutation
+(`collegeId: user.collegeId`, or `requireExam` / `requireManaged`, the
+latter also routing through `policy.can`), then mutates by validated id.
+Actor, tenant and target are server-derived; metadata is field **names**
+plus structural parent ids and counts. Live: exactly one event per
+committed mutation; hostile
+`actorId`/`collegeId`/`role`/`scope`/`action`/`targetId`/`metadata` body
+fields proven inert; anonymous 401, under-privileged 403 and invalid 400
+all wrote zero rows; reads wrote zero rows; an injected `logAtomic`
+failure rolls the mutation back. `AuditLog` is append-only — the entire
+application source contains exactly two `auditLog.create` sites, both
+inside `AuditService`, and no delete/update/upsert anywhere.
+
+**D-4 fee consistency (W3) — re-verified CLOSED.** The row lock is the
+established parameterized pattern
+(`SELECT id FROM "FeeStructure" WHERE id = $1 FOR UPDATE`), taken after
+the existing Term `FOR SHARE` so the Term-before-row order holds, with
+the pre-state re-read under the lock. Live, three rounds of six racing
+writers: committed `totalAmount` always equalled the committed component
+sum, the surviving component set always matched **exactly one** writer's
+proposal (never a blend), and the audit delta always equalled the number
+of commits. Audit before-values traced to the locked pre-state
+(`10000 → 15000`). Two different structures written concurrently both
+stayed self-consistent and isolated. No locking was widened elsewhere.
+
+**D-1 fees CSV (W3) — re-verified CLOSED.** Filtering goes through
+`{ structure: { termId } }`; no `Invoice.termId` access exists anywhere.
+Live: valid termId 200 with only that term's invoices; the other term
+excluded; unknown termId a deterministic header-only export (never 500);
+`status` still composes; a client-supplied `collegeId` cannot widen
+scope; no-filter header byte-identical. Authorization unchanged —
+anonymous 401, student 403, teacher 403, accountant 200.
+
+**D-2 grade bands (W3) — re-verified CLOSED.** Live: an ordinary update
+preserves every configured `gradePoint`; changing percent boundaries
+preserves them; a new label yields `null` (no invented GPA policy) and a
+removed label drops out; a hostile body sending
+`gradePoint: 99 / -5 / 4 / 'abc'` is ignored and server values survive;
+the read contract still exposes exactly
+`id, label, maxPercent, minPercent, sortOrder`; rejected validation
+leaves data untouched and writes no audit; grade-band audit metadata is
+count-only (`bandCountBefore`, `bandCountAfter`, `gradePointsPreserved`)
+with server-derived actor and tenant; student 403 and anonymous 401.
+
+### Complete M23 finding register — every finding has one disposition
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| S-1 finalized-results ASSIGNED over-read | HIGH | **CLOSED** (W1) |
+| S-2 unaudited configuration/academic mutations (8 paths) | MEDIUM | **CLOSED** (W2) |
+| S-2 remainder — community updates, evidence upload | LOW–MEDIUM | **DEFERRED** (outside the approved W2 scope; creates already audited, evidence covered by `verification.claim_submitted`) |
+| S-3 teacher attendance summary widens past shared section | LOW | **DEFERRED** (attendance service untouched by M23) |
+| S-4 `dashboard.guardian` granted with no server consumer | LOW | **VERIFIED / NO DEFECT** — the key exists only in the shared matrix with no `RequirePermission` consumer, so the grant is inert and cannot be exercised; tidy-up candidate, not a vulnerability |
+| S-5 same-college file signing, grandfathered keys, single webhook secret, no dual-key window, per-instance limits | LOW | **DOCUMENTED LIMITATION** (pre-existing, previously documented) |
+| D-1 `fees.csv?termId=` 500 | MEDIUM-HIGH | **CLOSED** (W3) |
+| D-2 grade-band `gradePoint` erasure | MEDIUM | **CLOSED** (W3) |
+| D-3 refund segregation of duties / maker-checker | LOW | **DEFERRED** |
+| D-4 unlocked fee-structure component replacement | MEDIUM | **CLOSED** (W3) |
+| Grade-band college-wide delete/recreate without row lock | LOW | **DOCUMENTED LIMITATION** — see below |
+| O-A off-host backup / PITR | — | **DEFERRED** |
+| O-B sequential DB/uploads pairing | — | **DEFERRED** |
+| O-C retention prunes by mtime with no keep-N floor | — | **DEFERRED** |
+| O-D `.backup-health` timestamp only | — | **DEFERRED** |
+| O-E `uploads-restore-verify.sh` subshell member check | — | **DEFERRED** |
+| O-F `/health/ops` needs the DB to authenticate | — | **DEFERRED** |
+| O-G single-trusted-proxy deployment assumption | — | **DEFERRED** |
+| O-H no CI and no lint infrastructure | — | **DEFERRED** (explicitly outside M23 scope) |
+| T-1 notification scheduler untested | HIGH | **DEFERRED** |
+| T-2 `POST /students/import` untested | HIGH | **DEFERRED** |
+| T-3 no owning suite for the `users` module | MED-HIGH | **DEFERRED** |
+| T-4 `refunds.csv` content/tenancy unverified | MEDIUM | **DEFERRED** |
+| T-5 thin dashboard/settings coverage | MEDIUM | **DEFERRED** |
+| T-6 essentially no unit layer / no web test harness | STRUCTURAL | **DEFERRED** |
+
+No finding was silently removed or reprioritized.
+
+### Residual limitation (accepted, not fixed)
+
+`updateGradeBands` remains a college-wide delete-and-recreate with no row
+lock, so two simultaneous grade-band edits can contend. This was
+re-examined in W4 and accepted rather than fixed: `@@unique([collegeId,
+label])` means a genuinely interleaved outcome **fails** rather than
+committing silently, the operation is a rare admin configuration action
+rather than a financial write, and introducing a second locking
+architecture purely for a theoretical improvement is explicitly outside
+close-out scope. Recorded as a DOCUMENTED LIMITATION for future triage.
+
+### Security sweep across the whole M23 source diff (`ac25eec..HEAD`)
+
+Eleven source files, 11 audited mutations, one added SQL statement. Zero
+role-name conditionals; zero client-controlled
+`collegeId`/`actorId`/`targetId`/`action`/`scope`/`role`; every mutation
+preceded by a tenancy predicate; the only added SQL is one parameterized
+`FOR UPDATE`; no `queryRawUnsafe`/`executeRawUnsafe`; no shell, `eval` or
+`Function`; no secrets; no request-body or arbitrary metadata logging; no
+PII, credential or payment-reference exposure in audit metadata; no new
+routes or debug endpoints; no deletion paths; no new permissions or roles
+(`permissions.ts` untouched); no schema, migration, dependency or Docker
+change; `money.ts` and the shared contracts untouched; CSV schema
+unchanged; no GPA policy introduced.
+
+Two sweep hits were investigated rather than dismissed. (1)
+`status: input.status` in `exams.update` is pre-existing and unchanged by
+M23, `ExamStatus` is workflow state rather than authorization state, the
+immutability guard reads `existing.status` from the database, and
+`updateExamSchema` deliberately excludes `PUBLISHED`
+(`z.enum(['DRAFT','SCHEDULED','COMPLETED'])`) so PATCH cannot bypass the
+atomic publish path — **no defect**. (2) The grade-band `deleteMany`
+carries the server-derived `collegeId: user.collegeId` tenant predicate —
+**no defect**.
+
+### Test integrity
+
+No test was skipped, deleted, weakened or rewritten. There is no
+`.skip`, `.only`, `xit`, `xdescribe` or `it.todo` anywhere in the API
+suite. No pre-existing (non-M23) test file was modified by M23 at all;
+the single edit to an M23 suite **tightened** an assertion
+(`toBeGreaterThan(0)` → `toBe(1)`) once the D-4 lock made the exact value
+guaranteed. All three M23 suites use the real Nest app, real PostgreSQL
+and real HTTP via supertest; the only mock in all of M23 is one
+narrowly-scoped `mockRejectedValueOnce` on `logAtomic`, restored in a
+`finally`, which is the only way to prove audit-failure rollback.
+Concurrency tests remain real, against real PostgreSQL.
+
+### W4 verification totals
+
+- Focused: M23-W1 **18/18**, M23-W2 **35/35**, M23-W3 **25/25**
+- Related finance/academic/security/guardian/audit suites: **341/341** (28 suites)
+- Complete regression: **728/728, 55 suites**
+- Typecheck **0**; Prisma valid; **15 migrations** up to date
+- API and web production images build green (validation images removed; no `campusos` images left behind)
+- Docker: api/web/postgres/backup all healthy; live/ready 200; preview 200; backup healthcheck passing
+- All four demo logins 200
+- Live verification: **36/36 checks passed, 0 failures**
+- Fixtures: 0 users, 0 structures, 0 terms, 0 invoices, 0 rival colleges, 0 dangling sessions, 0 scratch/restore databases; demo grade bands restored to exactly 8 bands with `gradePoint` NULL
+- Fingerprint identical before and after W4
+
+### M23 W0→W4 chain
+
+| Workstream | Commit | Result |
+|---|---|---|
+| M23-W0 discovery & design | `ac25eec` | design only, 650 tests |
+| M23-W1 S-1 authorization fix | `9c46336` | +18 tests → 668 |
+| M23-W2 S-2 audit integrity | `6c1c3fb` | +35 tests → 703 |
+| M23-W3 D-4/D-1/D-2 data integrity | `c7839bf` | +25 tests → 728 |
+| M23-W4 re-audit & close-out | *(this commit)* | docs only, 728 tests |
+
+Net M23: one HIGH authorization defect closed, nine mutation paths made
+auditable atomically, three data-integrity defects closed, **78 new
+real-Postgres tests**, and **zero migrations** — the schema is unchanged
+at 15 migrations throughout.
+
+**M23 CLOSED.** M24 has NOT been started and requires separate
+authorization; reporting/analytics remains the leading M24 candidate.
+
+*Last updated after M23-W4 — **M23 CLOSED** (W0–W4 complete). M24 not started.*
+
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
   Hardening & Debt Retirement (P2-IDOR-1 file authorization, mail
@@ -3254,9 +3455,10 @@ widened into another financial-style locking change. Recorded for triage.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M23 status**: W0 (discovery/design), W1 (S-1 authorization fix),
-  W2 (S-2 audit integrity) and W3 (D-4/D-1/D-2 data integrity) COMPLETE.
-  W4 NOT started. **M23 is NOT closed.**
+- **M23 status**: **M23 COMPLETE AND CLOSED (W0–W4)** — Authorization
+  Correctness & Audit Integrity. S-1, S-2 (approved scope), D-1, D-2 and
+  D-4 all CLOSED; every remaining finding carries an explicit
+  disposition. Zero migrations across the whole milestone.
 - **M22 status**: **M22 COMPLETE (W0–W4) — production runtime reliability &
   incident visibility CLOSED** (see M22-W4 entry).
 - **M21 status**: **M21 COMPLETE (W0–W4) — account lifecycle & institutional administration CLOSED** (see M21-W4 entry).
@@ -3268,7 +3470,7 @@ widened into another financial-style locking change. Recorded for triage.
   browser-print; M17 term lifecycle, M16 refunds+accountant, M15
   rollover and M14 payments all remain complete (webhook delivery
   still pending provider-dashboard endpoint registration).
-- **Latest commit**: the M23-W3 data-integrity commit on branch
+- **Latest commit**: the M23-W4 close-out commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 15 found, database schema up to date
 - **Tests**: **728/728 passing** (55 suites)
@@ -3280,9 +3482,10 @@ widened into another financial-style locking change. Recorded for triage.
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13 and
   `docs/M23_PLATFORM_DISCOVERY_DESIGN.md` (current reconciliation)
-- **Next planned milestone**: M23-W4 (re-audit, runbook, close-out) is
-  designed and awaiting authorization. M23 is NOT closed and nothing
-  beyond W3 has been implemented
+- **Next planned milestone**: none scheduled. M23 is CLOSED; M24 has NOT
+  been started and requires explicit authorization (reporting/analytics
+  is the leading candidate, with the T-1/T-2 test gaps and O-H CI/lint
+  as competing priorities)
 
 ## 15. Future Roadmap
 

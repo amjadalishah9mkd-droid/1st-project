@@ -520,3 +520,33 @@ documented only and await W1 authorization. Verification was read-only: HTTP
 GETs and read-only SQL; no business or demo data was modified. Safepay webhooks
 and all other externally blocked integrations remain untouched. M23-W1 was NOT
 started.
+
+## 23. Final disposition register (M23-W4 close-out)
+
+Every finding raised in this document ends in exactly one disposition.
+Recorded at close-out; nothing was silently removed or reprioritized.
+
+| Finding | Disposition | Where |
+|---|---|---|
+| S-1 finalized-results ASSIGNED over-read (HIGH) | **CLOSED** | W1 `9c46336` |
+| S-2 unaudited configuration/academic mutations — 8 paths | **CLOSED** | W2 `6c1c3fb` |
+| S-2 remainder — community updates, evidence upload | **DEFERRED** | outside approved W2 scope |
+| S-3 teacher attendance summary widens past shared section | **DEFERRED** | attendance untouched by M23 |
+| S-4 `dashboard.guardian` with no server consumer | **VERIFIED / NO DEFECT** | inert grant, no `RequirePermission` consumer |
+| S-5 file signing / grandfathered keys / webhook secret / limits | **DOCUMENTED LIMITATION** | pre-existing |
+| D-1 `fees.csv?termId=` 500 | **CLOSED** | W3 `c7839bf` |
+| D-2 grade-band `gradePoint` erasure | **CLOSED** | W3 `c7839bf` |
+| D-3 refund segregation of duties | **DEFERRED** | maker-checker out of scope |
+| D-4 unlocked fee-structure component replacement | **CLOSED** | W3 `c7839bf` |
+| Grade-band college-wide delete/recreate without row lock | **DOCUMENTED LIMITATION** | unique constraint fails rather than commits a blend |
+| O-A…O-G operational findings | **DEFERRED** | no infra change in M23 |
+| O-H no CI, no lint | **DEFERRED** | explicitly outside M23 scope |
+| T-1…T-6 test/coverage gaps | **DEFERRED** | M25 verification-infrastructure candidate |
+
+**M23 outcome.** One HIGH authorization defect closed; nine mutation
+paths made atomically auditable; three data-integrity defects closed;
+78 new real-Postgres tests (650 → 728); **zero migrations** — the schema
+stayed at 15 migrations for the entire milestone. No new permission, role,
+endpoint, dependency or infrastructure change was introduced.
+
+**M23 CLOSED** at W4. M24 not started.

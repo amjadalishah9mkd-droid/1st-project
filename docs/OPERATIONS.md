@@ -1500,3 +1500,110 @@ recovery; DB/uploads pairing is best-effort rather than a transactional
 cross-volume snapshot; counters and rate limits are process-local; no external
 monitoring, durable metrics or distributed telemetry; Safepay webhook
 activation remains externally blocked.
+
+## 32. Authorization & audit integrity runbook (M23)
+
+M23 changed no infrastructure, so there is nothing new to deploy or
+configure. It does change what operators will see in the audit viewer
+(§20) and how two admin surfaces behave under contention.
+
+### New audit events
+
+Nine configuration/academic mutations now emit events. They appear in
+`/audit` like any other entry and are filterable by action prefix:
+
+| Action | Target | Metadata |
+|---|---|---|
+| `fees.structure_updated` | FeeStructure | `termId`, `changed`, `componentsReplaced`, component counts before/after, totals before/after, `existingInvoiceCount` |
+| `exams.updated` | Exam | `termId`, `changed` |
+| `exams.paper_updated` | ExamPaper | `examId`, `changed` |
+| `academic_years.updated` | AcademicYear | `changed` |
+| `terms.updated` | Term | `academicYearId`, `changed` |
+| `sections.updated` | Section | `termId`, `courseId`, `changed` |
+| `timetable.slot_updated` | TimetableSlot | `sectionId`, `changed` |
+| `assignments.updated` | Assignment | `sectionId`, `changed` |
+| `grade_bands.updated` | (college-wide) | `bandCountBefore`, `bandCountAfter`, `gradePointsPreserved` |
+
+`changed` lists the **names** of the fields that actually differed from
+the stored row — never the values. A no-op save yields `changed: []`,
+which is expected and means "saved, nothing altered". Free-text content
+(assignment descriptions, fee component labels) is deliberately excluded,
+so the trail answers "who changed what, when" without becoming a copy of
+the request body.
+
+These events are written inside the mutation's own transaction. The
+practical consequence for incident review: **an event exists if and only
+if the change committed.** A missing event means the change did not
+happen; there is no "changed but unlogged" state to reason about. A
+rejected or unauthorized attempt writes nothing at all, so absence of an
+event is not evidence that an attempt was not made — use the request logs
+(§31) for attempt-level forensics.
+
+Audit rows are still never purged (§20).
+
+### Investigating a fee-structure change
+
+`fees.structure_updated` is the event to reach for when someone asks why
+an invoice amount looks wrong. Read it as: `totalAmountBefore` →
+`totalAmountAfter` is the new charge for **future** invoices, and
+`existingInvoiceCount` is how many invoices were already issued against
+that structure. Those existing invoices keep their snapshot amount (M14
+semantics) and are *not* retro-repriced, so a mismatch between an old
+invoice and the current structure total is expected, not a defect.
+
+Fee-structure updates now take a row lock on the structure being edited
+(`SELECT … FOR UPDATE`, after the Term `FOR SHARE`). Two admins saving
+the same fee structure at the same moment are serialized: one wins
+outright, the other applies on top, and the stored `totalAmount` always
+equals the sum of the stored components. Different fee structures — and
+different colleges — are never serialized against each other, so this is
+not a throughput concern. If a save appears to hang briefly under
+simultaneous editing, that is the lock doing its job; it resolves in
+milliseconds.
+
+### Grade bands and the GPA scale
+
+Editing grade bands at `/grade-bands` replaces the whole set, but any
+configured `gradePoint` is now carried forward per band, matched by
+label. Operational rules:
+
+- Renaming a band label is **not** a rename — the old label's grade point
+  is dropped and the new label starts with no grade point.
+- A brand-new band always starts with a null grade point. CampusOS never
+  invents a grade-point scale.
+- `gradePoint` is not settable through the API; it remains a
+  server-managed column. Values sent by a client are ignored.
+- CGPA is reported only when *every* finalized course line carries a
+  grade point (M18 §O-4, §27). A single null band is enough to make
+  transcripts show CGPA as unavailable — check
+  `gradePointsPreserved` in the `grade_bands.updated` event against the
+  band count if CGPA disappears after a grade-band edit.
+
+Known limitation: grade-band replacement is college-wide and takes no row
+lock. Two administrators saving grade bands simultaneously may cause one
+save to fail with a constraint error rather than silently blending. Retry
+the failed save; no partial state is committed.
+
+### Finalized-record access expectations
+
+Teachers can read a student's finalized report card and transcript only
+when that student holds an **active enrollment** in a section the teacher
+is actually assigned to. Support consequences:
+
+- A teacher reporting "student not found" for a student they believe they
+  teach is usually a teaching-assignment or enrollment problem, not a
+  bug. Check for an active `TeachingAssignment` on a section the student
+  is actively enrolled in.
+- Dropping a student's enrollment, or removing a teaching assignment,
+  revokes that teacher's access immediately — no cache to clear, no
+  re-login needed.
+- Unassigned, nonexistent and other-college students all return the same
+  "not found" response by design, so the API does not reveal whether a
+  student exists. Do not treat this as an inconsistency.
+
+### Fees CSV export
+
+`GET /exports/fees.csv` accepts `termId` and `status`, which compose. A
+term with no invoices — including a term belonging to another college —
+returns a header-only CSV rather than an error. The column set is
+unchanged from M12.
