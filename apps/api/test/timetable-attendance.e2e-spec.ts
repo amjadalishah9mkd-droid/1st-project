@@ -322,14 +322,36 @@ describe('M3 — Timetable & Attendance', () => {
   });
 
   it('cancelled sessions refuse attendance (SESSION_CANCELLED)', async () => {
+    // M24-W3b (N-17): a session that already holds attendance records can
+    // no longer be cancelled (SESSION_HAS_ATTENDANCE) — cancelling would
+    // orphan those records, since every summary filters status HELD.
+    // Earlier tests recorded a sheet against `sessionId`, so this test now
+    // uses a FRESH records-free session on the same section to establish
+    // the precondition it actually needs. Only the SETUP changes: the
+    // assertion — that writing attendance to a CANCELLED session is
+    // refused with SESSION_CANCELLED — is unchanged, cancellation of a
+    // records-free session must still succeed with 200, and `sessionId`
+    // keeps its recorded sheet for the summary tests below.
+    const freshSlot = await prisma.timetableSlot.create({
+      data: { sectionId, dayOfWeek: 6, startTime: '14:00', endTime: '15:00' },
+    });
+    const freshSession = await prisma.classSession.create({
+      data: {
+        slotId: freshSlot.id,
+        sectionId,
+        date: new Date('2026-11-07'),
+        status: 'SCHEDULED',
+      },
+    });
+
     const cancel = await http
-      .patch(`/api/v1/sessions/${sessionId}`)
+      .patch(`/api/v1/sessions/${freshSession.id}`)
       .set(auth(teacherToken))
       .send({ status: 'CANCELLED' });
     expect(cancel.status).toBe(200);
 
     const res = await http
-      .put(`/api/v1/sessions/${sessionId}/attendance`)
+      .put(`/api/v1/sessions/${freshSession.id}/attendance`)
       .set(auth(teacherToken))
       .send({
         records: [{ studentId: demoStudentProfileId, status: 'PRESENT' }],
@@ -337,11 +359,10 @@ describe('M3 — Timetable & Attendance', () => {
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('SESSION_CANCELLED');
 
-    // Restore to HELD so summary tests below still count it.
-    await http
-      .patch(`/api/v1/sessions/${sessionId}`)
-      .set(auth(teacherToken))
-      .send({ status: 'HELD' });
+    // Remove the disposable session/slot so the suite's own teardown and
+    // the summary tests below see exactly the state they expect.
+    await prisma.classSession.delete({ where: { id: freshSession.id } });
+    await prisma.timetableSlot.delete({ where: { id: freshSlot.id } });
   });
 
   // ── Summaries ───────────────────────────────────────────────

@@ -849,10 +849,17 @@ describe('M23-W3 — data integrity (D-4, D-1, D-2)', () => {
       const configured = await prisma.gradeBand.findMany({ where: { collegeId } });
       expect(configured.every((b) => b.gradePoint !== null)).toBe(true);
 
-      // introduce a gap by adding a band with no point
+      // introduce a GPA gap by adding a band with no grade point.
+      // M24-W3b (N-11): `maxPercent` corrected 69.98 -> 69.99 so the band
+      // set is contiguous under the new 0-100 coverage invariant. 69.98
+      // left the percentage 69.99 covered by no band, which the validator
+      // now (correctly) rejects. The correction is incidental to this
+      // test's purpose — it asserts a NEW label receives no invented
+      // gradePoint while existing points survive — and every assertion
+      // below is unchanged.
       const withGap = [
         ...bands,
-        { label: 'D', minPercent: 60, maxPercent: 69.98 },
+        { label: 'D', minPercent: 60, maxPercent: 69.99 },
       ].map((b) => (b.label === 'F' ? { ...b, maxPercent: 59.99 } : b));
       const res = await http
         .put('/api/v1/grade-bands')

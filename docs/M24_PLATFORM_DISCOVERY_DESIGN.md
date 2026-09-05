@@ -485,6 +485,8 @@ New audit-coverage gaps:
   (unlocked read-modify-write on an aggregate), in a different module —
   D-4's fix was correctly scoped to fees and did not generalize.
   NEW DEFECT (W3).
+  > **NOT addressed in W3b** — N-4 is locking/concurrency work and remains
+  > DEFERRED to W3a alongside N-3 and N-16b.
 - **N-11 — MEDIUM — grade bands retroactively re-grade published results;
   gaps unvalidated.** `exams/exams.service.ts:800-872` deletes and recreates
   all bands with **no term guard and no published-results guard**, and grade
@@ -498,6 +500,23 @@ New audit-coverage gaps:
   `bandFor` returns `null` for an uncovered percentage, so results can
   silently lose their grade label; there is no 0–100 coverage assertion.
   NEW DEFECT (W3). *This is adjacent to, but distinct from, M23's D-2.*
+  > **COVERAGE HALF RESOLVED in M24-W3b; RETROACTIVE GUARD DEFERRED to
+  > M25.** Grade bands must now form contiguous coverage of 0–100. The
+  > rule follows the existing representation rather than inventing one:
+  > `Decimal(5,2)` inclusive bounds mean a 0.01 step, and the pre-existing
+  > overlap rule already forces each band to start strictly above the
+  > previous, so adjacent bands must begin exactly one step after the
+  > previous ends — exactly how the seeded scale is expressed
+  > (`F[0,49.99] … A+[90,100]`). First `min` must be 0 and last `max` 100.
+  > Rejection is `400 BANDS_NOT_CONTIGUOUS` before any mutation, leaving
+  > bands unchanged and writing no `grade_bands.updated` audit event. The
+  > overlap and range rules are untouched and M23-W3's `gradePoint`
+  > preservation still holds.
+  >
+  > **Deliberately NOT implemented:** any guard on editing bands once
+  > results are published, and any freeze-at-publish behaviour. Boundary
+  > changes against published results remain permitted, pinned by a test.
+  > That decision (O-5) stays DEFERRED to M25.
 - **N-2 — MEDIUM — rollover mutates a CLOSED source term.**
   `academics/rollover.service.ts:592-599` performs
   `enrollment.updateMany({ ACTIVE → COMPLETED })` on **source-term** rows,
@@ -510,6 +529,14 @@ New audit-coverage gaps:
   (`:466`), so source enrollments are concluded even for sections the
   operator marked SKIP. Untested — both rollover suites use empty terms.
   NEW DEFECT (W3).
+  > **RESOLVED in M24-W3b.** Two guards now wrap the source-enrollment
+  > conclusion: it is skipped for `action === 'SKIP'` entries (it
+  > previously sat outside the SKIP filter and ran for every entry), and
+  > skipped entirely when the source term is CLOSED, whose history is
+  > read-only. The M17 O-3 contract is preserved — a CLOSED term remains a
+  > valid rollover SOURCE and the destination is still created; only
+  > mutation of the source is prohibited. Source status is read inside the
+  > existing transaction; no new lock is taken (locking is W3a scope).
 - **N-3 — MEDIUM — `assertTermOpen`'s `FOR SHARE` is void at 25 of 33 call
   sites.** `academics/term-lifecycle.service.ts:53-73` documents that the
   guard runs "inside the caller's transaction where one exists, taking FOR
@@ -538,22 +565,42 @@ New audit-coverage gaps:
   computed once at submit (`assignments.service.ts:526`) and never
   recomputed, so moving `dueAt` leaves submissions permanently
   mis-flagged. NEW DEFECT (W3).
+  > **RESOLVED in M24-W3b.** `dueAt` stays mutable (the existing
+  > contract), but the derived `Submission.isLate` flag is recomputed
+  > against the new due date inside the same transaction, using the same
+  > strictly-greater-than comparison `submit` applies — so a submission
+  > exactly at the due date is on time. An assignment and its submissions
+  > can no longer disagree.
 - **N-15 — LOW —** rollover executes a **stale plan**: the plan is read at
   `:418` *before* the `FOR UPDATE` at `:438`, and `updatePlan` CAS-writes
   without that lock, so v1 can be applied while `preview()` renders v2.
   `execute` also never re-runs `validatePlanShape` or re-checks
   `TARGET_TERM_NOT_EMPTY`. NEW DEFECT (W3).
+  > **RESOLVED in M24-W3b.** The `TermRollover` row is re-read inside the
+  > transaction immediately after the `FOR UPDATE`, and that value drives
+  > the writes, so the plan is protected by the same lock as the mutation.
+  > Proven with a narrowly-scoped interleave committing a new plan in the
+  > pre-lock window: execution now applies it (2 sections) where it
+  > previously applied the stale plan (1).
 - **N-17 — LOW —** `attendance.updateSession` accepts `CANCELLED` with no
   check on recorded records, so a session with a full sheet can be
   cancelled; every summary and the finalization attendance percentage
   filter `status: 'HELD'` and silently drop those records (orphaned, not
   deleted). NEW DEFECT (W3).
+  > **RESOLVED in M24-W3b.** A transition to `CANCELLED` is refused with
+  > `409 SESSION_HAS_ATTENDANCE` when the session already holds attendance
+  > records, checked before any mutation. Cancelling a records-free
+  > session still succeeds and every other transition is unaffected.
 - **N-18 — LOW —** the finalization worklist filters
   `enrollments: { some: { section: { termId } } }` with **no status
   filter** (`results-finalization.service.ts:421`), while every other
   cross-module enrollment predicate pins `ACTIVE`, so DROPPED/COMPLETED
   students appear on the finalize worklist. Harmless to `finalize` itself.
   NEW DEFECT (W3).
+  > **RESOLVED in M24-W3b.** The worklist predicate now pins
+  > `status: 'ACTIVE'`, matching every other cross-module enrollment
+  > predicate. The listing narrows only; finalization itself is
+  > unchanged.
 - **Money representation — VERIFIED / NO DEFECT.** All money columns are
   `Decimal`; no float arithmetic; `netPaid` remains the single reducer;
   invoice amounts remain snapshots (re-verified: structure totals changed
@@ -641,6 +688,16 @@ N-2, N-3, N-4, N-11, N-13, N-14, N-15, N-17, N-18 above, plus:
   (b) `assertNoConflicts` → `create` is non-transactional, so two
   concurrent creates can both pass. Room conflict is also scoped to a single
   term while terms may overlap. NEW DEFECT (a) (W3); (b) LOW.
+
+  > **(a) RESOLVED in M24-W3b.** The conflict check now compares the
+  > EFFECTIVE room on both sides — `slot.room ?? section.room` — the same
+  > resolution attendance and display already use, so two sections
+  > sharing a section-level room with no slot room now correctly raise
+  > `ROOM_CONFLICT`. No room policy changed: an explicit slot room still
+  > overrides its section, and two sections with no room anywhere still do
+  > not conflict on room. **(b) remains DEFERRED to W3a** — the
+  > non-transactional `assertNoConflicts` → `create` sequence is
+  > concurrency work (N-16b).
 - **Verified NO DEFECT:** term ACTIVE⇄CLOSED transitions (tenancy 404 →
   server-authoritative typed confirmation → `FOR UPDATE` → authoritative
   re-read → `isCurrent` check → `updateMany` CAS → in-transaction audit);
@@ -1199,3 +1256,74 @@ No Prisma schema, migration, dependency, Docker, `.alloy`, `money.ts`,
 or new role change. Migrations remain 15. `OTHER`-purpose behaviour is
 pinned unchanged by a dedicated regression test, so W2 provably did not
 break existing file access.
+
+---
+
+## 28. M24-W3b outcome (lifecycle-correctness slice)
+
+Implemented at commit `fix(m24): harden academic lifecycle and grade-band integrity`.
+
+### Dispositions
+
+| Finding | Disposition |
+|---|---|
+| N-2 rollover mutates CLOSED source + ignores SKIP | **CLOSED** |
+| N-11 grade-band 0–100 coverage validation | **CLOSED** (coverage half only) |
+| N-11 retroactive-regrading guard / freeze-at-publish | **DEFERRED to M25** (decision O-5) |
+| N-14 stale `Submission.isLate` after `dueAt` change | **CLOSED** |
+| N-15 rollover executes a stale plan | **CLOSED** |
+| N-16a room-conflict vs room-resolution mismatch | **CLOSED** |
+| N-16b non-transactional slot create | **DEFERRED to W3a** |
+| N-17 cancelling a session with attendance records | **CLOSED** |
+| N-18 finalization worklist ignores enrollment status | **CLOSED** |
+| N-3, N-4, N-12 | **DEFERRED to W3a / W3c** |
+
+### Sanctioned existing-test corrections (three, each explicitly authorized)
+
+These were **corrections of setup/expectation, not weakenings** — every
+substantive assertion is preserved and each test still exercises the
+scenario it was written for.
+
+1. **`m23-w3-data-integrity.e2e-spec.ts` — `withGap` fixture
+   `maxPercent: 69.98 → 69.99`.** With a 0.01 step, `69.98` left the
+   percentage `69.99` covered by no band, which the new validator
+   correctly rejects. That value was incidental: the test's purpose is
+   that a NEW band label receives no invented `gradePoint` while existing
+   points survive. All assertions unchanged.
+2. **`timetable-attendance.e2e-spec.ts` — cancellation setup.** The test
+   cancelled a session that earlier tests had already filled with
+   attendance, purely as setup, which N-17 now refuses. It now cancels a
+   **fresh records-free session** on the same section and removes it
+   afterwards. The assertion — writing attendance to a CANCELLED session
+   is refused with `SESSION_CANCELLED` — is unchanged, and the original
+   session keeps its recorded sheet so the later summary tests are
+   unaffected. (A first attempt that cleared the sheet was rejected
+   because it broke two downstream summary tests; the fresh-session form
+   has no side effects.)
+3. **`term-rollover.e2e-spec.ts` — SKIP expectation.** The M15-W2 D1–D8
+   test asserted that **all seven** source enrollments become `COMPLETED`,
+   which encoded the N-2 defect (the SKIP section's enrollments were
+   concluded too). It now asserts the carried sections' enrollments become
+   `COMPLETED` **while the SKIP section's remain `ACTIVE`**. The SKIP
+   section is retained, the total population is still asserted, and every
+   other assertion is untouched.
+
+### Verification
+
+Focused suite **31/31**, passing **three consecutive times**. Mutation
+verification: reverting each fix fails its own regression (N-11 → 3,
+N-2/N-15 → 3, N-14 → 2, N-17 → 2, N-16a → 1, N-18 → 1). Prior milestones
+green: M24-W1, M24-W2, M23-W1/W2/W3 = **119/119**. Full regression
+**800/800 across 58 suites**; typecheck 0; Prisma valid; **15 migrations**
+unchanged; API and web production images build; all four containers
+healthy; live/ready/preview 200; backup healthy; four demo logins 200;
+demo integrity unchanged (`users=20 active=20 students=13 colleges=1
+gradebands=8 null_gp=8`, identity `ae1f7d62…`) with zero fixture residue.
+
+### Scope discipline
+
+No Prisma schema, migration, dependency, Docker, `.alloy`, `money.ts`,
+`permissions.ts`, `src/access`/PolicyService, `apps/web`, new route, new
+permission or role change. **No `assertTermOpen` call site was modified**,
+confirming the N-3 26-site transaction conversion was not started. No
+retroactive-regrading guard and no freeze-at-publish behaviour.

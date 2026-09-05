@@ -824,6 +824,47 @@ export class ExamsService {
         });
       }
     }
+    // M24-W3b (N-11, coverage half): the overlap rule above rejected
+    // double-covered percentages but permitted GAPS, so a percentage
+    // could fall into no band at all and `bandFor` would return null —
+    // a result silently losing its grade label.
+    //
+    // The contiguity rule follows the EXISTING representation rather than
+    // inventing a convention: minPercent/maxPercent are Decimal(5,2)
+    // inclusive bounds, so the smallest representable step is 0.01, and
+    // the overlap rule already forces each band to start strictly above
+    // the previous one. Adjacent bands must therefore begin exactly one
+    // step after the previous band ends — precisely how the seeded scale
+    // is expressed (F[0,49.99] D[50,59.99] … A+[90,100]). Coverage must
+    // also span the whole domain, 0 through 100.
+    //
+    // SCOPE: this validates the SHAPE of the configuration only. Whether
+    // a band edit should be permitted at all once results are published
+    // is a separate product decision and remains DEFERRED to M25 —
+    // boundary changes against published results stay allowed here.
+    const STEP = 0.01;
+    const round2 = (value: number) => Math.round(value * 100) / 100;
+    const notContiguous = (message: string): never => {
+      throw new BadRequestException({ code: 'BANDS_NOT_CONTIGUOUS', message });
+    };
+    if (round2(sorted[0].minPercent) !== 0) {
+      notContiguous(
+        `Grade bands must start at 0% — the lowest band "${sorted[0].label}" starts at ${sorted[0].minPercent}%`,
+      );
+    }
+    const highest = sorted[sorted.length - 1];
+    if (round2(highest.maxPercent) !== 100) {
+      notContiguous(
+        `Grade bands must reach 100% — the highest band "${highest.label}" ends at ${highest.maxPercent}%`,
+      );
+    }
+    for (let i = 1; i < sorted.length; i += 1) {
+      if (round2(sorted[i].minPercent) !== round2(sorted[i - 1].maxPercent + STEP)) {
+        notContiguous(
+          `Grade bands leave a gap between "${sorted[i - 1].label}" (ends ${sorted[i - 1].maxPercent}%) and "${sorted[i].label}" (starts ${sorted[i].minPercent}%)`,
+        );
+      }
+    }
     // M23-W3 (D-2): the replacement semantics are preserved (bands are
     // still deleted and recreated), but `gradePoint` is now carried
     // forward instead of being silently dropped. Previously createMany

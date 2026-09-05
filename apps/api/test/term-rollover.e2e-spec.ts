@@ -510,12 +510,23 @@ describe('M15-W2 — term rollover engine', () => {
       });
       expect(grad.status).toBe('GRADUATED');
 
-      // Old ACTIVE enrollments → COMPLETED; history intact.
+      // Old ACTIVE enrollments → COMPLETED for CARRIED sections; history
+      // intact. M24-W3b (N-2): the SKIP section's source enrollments must
+      // remain ACTIVE — a SKIP entry is explicitly not carried, so
+      // concluding its enrollments was a source-term mutation the
+      // rollover contract forbids ("source sections and all historical
+      // data stay untouched"). This expectation is corrected, not
+      // weakened: the SKIP scenario is still exercised and the total
+      // population is still asserted.
       const oldEnrollments = await prisma.enrollment.findMany({
         where: { section: { termId: fromTermId } },
       });
       expect(oldEnrollments).toHaveLength(7);
-      expect(oldEnrollments.every((e) => e.status === 'COMPLETED')).toBe(true);
+      const skipEnrollments = oldEnrollments.filter((e) => e.sectionId === secC);
+      const carriedEnrollments = oldEnrollments.filter((e) => e.sectionId !== secC);
+      expect(skipEnrollments.length).toBeGreaterThan(0);
+      expect(skipEnrollments.every((e) => e.status === 'ACTIVE')).toBe(true);
+      expect(carriedEnrollments.every((e) => e.status === 'COMPLETED')).toBe(true);
       // Source sections untouched (still in the source term, same names).
       expect(
         await prisma.section.count({ where: { termId: fromTermId } }),

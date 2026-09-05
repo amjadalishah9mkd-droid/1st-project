@@ -1,6 +1,7 @@
 import { readCollegeSettings } from '@campusos/shared';
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -207,6 +208,25 @@ export class AttendanceService {
       user.collegeId,
       session.sectionId,
     );
+    // M24-W3b (N-17): cancelling a session that already has attendance
+    // records orphaned them. `saveAttendance` refuses to write to a
+    // CANCELLED session, but the reverse order was unguarded — and every
+    // summary plus the finalization attendance percentage filters
+    // `status: 'HELD'`, so those records silently stopped counting while
+    // remaining in the table. Refuse the transition BEFORE any mutation,
+    // so a recorded sheet must be cleared deliberately rather than
+    // invalidated as a side effect. Other transitions are unaffected.
+    if (input.status === 'CANCELLED') {
+      const recorded = await this.prisma.attendanceRecord.count({
+        where: { sessionId },
+      });
+      if (recorded > 0) {
+        throw new ConflictException({
+          code: 'SESSION_HAS_ATTENDANCE',
+          message: `This session already has ${recorded} attendance record(s) and cannot be cancelled`,
+        });
+      }
+    }
     const updated = await this.prisma.classSession.update({
       where: { id: sessionId },
       data: { status: input.status, note: input.note },

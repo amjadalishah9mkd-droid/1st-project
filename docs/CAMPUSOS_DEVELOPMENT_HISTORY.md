@@ -175,7 +175,8 @@ Principles applied consistently from M0 onward:
 | M23-W4 | Final re-audit, regression, close-out — **M23 CLOSED** | `52e817f` |
 | M24-W0 | Platform discovery + M24 design (`docs/M24_PLATFORM_DISCOVERY_DESIGN.md`) | `5abdbeb` |
 | M24-W1 | Input validation & tenancy hardening (N-1 HIGH, N-5, N-13, N-25) | `2785c78` |
-| M24-W2 | File authorization, session integrity, export PII (N-6, N-23 ordering, N-24) | *(this commit)* |
+| M24-W2 | File authorization, session integrity, export PII (N-6, N-23 ordering, N-24) | `62cc734` |
+| M24-W3b | Academic lifecycle & grade-band integrity (N-2, N-11 coverage, N-14, N-15, N-16a, N-17, N-18) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -3752,6 +3753,123 @@ explicitly preserved as deferred.
 *Last updated after M24-W2 (partial — N-6/N-23-ordering/N-24 closed; N-7,
 N-10, N-22, N-8, N-9, Res-1 deferred; M24 OPEN).*
 
+## M24-W3b — academic lifecycle & grade-band integrity
+
+The lifecycle-correctness slice of W3, executed after W3 was split: W3a
+(locking/concurrency: N-3, N-4, N-16b) and W3c (N-12) remain unstarted.
+Seven findings closed, each reproduced test-first and mutation-verified.
+
+**N-2 — rollover no longer mutates the source term.** `execute()` guarded
+only the destination, so pass 2 concluded SOURCE-term enrollments
+(ACTIVE → COMPLETED) even for a CLOSED source — contradicting the file's
+own invariants ("source sections and all historical data stay untouched";
+"a CLOSED SOURCE remains valid — reads only") — and the `updateMany` sat
+outside the SKIP filter, so it ran for sections the operator marked SKIP.
+Both are now guarded. The M17 O-3 contract is preserved: a CLOSED term is
+still a valid rollover source and the destination is still created; only
+mutation of the source is prohibited. Source status is read inside the
+existing transaction with no new lock, keeping locking strictly in W3a.
+
+**N-11 — grade-band coverage validation (coverage half only).** The
+overlap rule rejected double-covered percentages but permitted GAPS, so a
+percentage could fall in no band and silently lose its grade label. Bands
+must now form contiguous coverage of 0–100. The rule derives from the
+existing representation rather than inventing one: `Decimal(5,2)`
+inclusive bounds give a 0.01 step, and the pre-existing overlap rule
+already forces each band to start strictly above the previous, so adjacent
+bands must begin exactly one step after the previous ends — precisely how
+the seeded scale is expressed (`F[0,49.99] … A+[90,100]`). Rejection is
+`400 BANDS_NOT_CONTIGUOUS` before any mutation, leaving bands unchanged
+and writing no `grade_bands.updated` audit event. **The retroactive
+question is untouched:** editing boundaries against already-published
+results remains permitted (pinned by a test), and no freeze-at-publish
+behaviour was added — decision O-5 stays **DEFERRED to M25**.
+
+**N-14 — `isLate` follows the due date.** `Submission.isLate` was
+persisted once at submit and never recomputed, so moving `dueAt` left
+submissions mis-flagged forever. The due date stays mutable (existing
+contract); the derived flag is now recomputed against the new date inside
+the same transaction, using the same strictly-greater-than comparison
+`submit` uses, so a submission exactly at the due date is on time.
+
+**N-15 — rollover executes the plan as of the lock.** The plan was read
+before the `FOR UPDATE`, so a concurrent `updatePlan` in that window was
+lost. The row is now re-read under the lock and that value drives the
+writes. Proven with a narrowly-scoped interleave that commits a new plan
+in the pre-lock window: execution applies it (2 sections) where it
+previously applied the stale plan (1).
+
+**N-16a — effective room in conflict detection.** The room check required
+BOTH slots to carry an explicit room while every other surface resolves
+`slot.room ?? section.room`, so two sections sharing a section-level room
+were double-booked silently. Both sides now compare the effective room.
+No policy change: an explicit slot room still overrides its section, and
+two roomless sections still do not conflict. N-16b (the non-transactional
+create) remains deferred to W3a.
+
+**N-17 — cancelling a session with attendance.** A session holding
+attendance records could be flipped to CANCELLED, orphaning them, since
+summaries and the finalization percentage filter `status: 'HELD'`. The
+transition is now refused with `409 SESSION_HAS_ATTENDANCE` before any
+mutation; records-free cancellation and all other transitions are
+unaffected.
+
+**N-18 — finalization worklist.** The predicate matched enrollments with
+no status filter, so DROPPED/COMPLETED students appeared on the worklist.
+It now pins `status: 'ACTIVE'`, matching every other cross-module
+enrollment predicate. The listing narrows only; finalization itself is
+unchanged.
+
+**Three sanctioned existing-test corrections** — each explicitly
+authorized, and each a setup/expectation correction rather than a
+weakening, with every substantive assertion preserved:
+
+1. `m23-w3-data-integrity` `withGap` fixture `maxPercent: 69.98 → 69.99`.
+   With a 0.01 step, `69.98` left `69.99` uncovered, which the new
+   validator correctly rejects; the value was incidental to that test,
+   whose purpose is that a new band label gets no invented `gradePoint`.
+2. `timetable-attendance` cancellation **setup**: it cancelled a session
+   earlier tests had already filled with attendance, which N-17 now
+   refuses. It now cancels a **fresh records-free session** on the same
+   section and removes it afterwards; the `SESSION_CANCELLED` assertion is
+   unchanged and the original session keeps its sheet. A first attempt
+   that cleared the sheet was rejected because it broke two downstream
+   summary tests — the fresh-session form has no side effects.
+3. `term-rollover` D1–D8 **expectation**: it asserted all seven source
+   enrollments become `COMPLETED`, which encoded the N-2 defect. It now
+   asserts the carried sections' enrollments become `COMPLETED` while the
+   SKIP section's remain `ACTIVE`; the SKIP section is retained and every
+   other assertion untouched.
+
+Verified: focused suite **31/31 passing three consecutive times**;
+mutation verification per fix (reverting each fails its own regression —
+N-11 → 3, N-2/N-15 → 3, N-14 → 2, N-17 → 2, N-16a → 1, N-18 → 1);
+M24-W1/M24-W2/M23-W1/W2/W3 **119/119**; full regression **800/800 across
+58 suites** (+31); typecheck 0; Prisma valid; **15 migrations** unchanged;
+API and web production images build; all four containers healthy;
+live/ready/preview 200; backup healthy; four demo logins 200; demo
+integrity unchanged (`users=20 active=20 students=13 colleges=1
+migrations=15 gradebands=8 null_gp=8`, identity `ae1f7d62…`) with zero
+fixture residue and zero scratch databases.
+
+Security/diff audit: no role-name conditionals, no client-controlled
+tenant/actor/target/scope, no raw or unsafe SQL added, no shell/eval, no
+secrets, no request-body/header/query logging, no new audit metadata, no
+new routes or permissions, no authorization removed, and **no
+`assertTermOpen` call site modified** — confirming the N-3 26-site
+transaction conversion was not started. No Prisma schema, migration,
+dependency, Docker, `.alloy`, `money.ts`, `permissions.ts`,
+`src/access`/PolicyService or `apps/web` change.
+
+**Still deferred, unchanged:** N-3, N-4, N-12, N-16b (W3a/W3c); N-7, N-8,
+N-9, N-10, N-22, N-23 download half, Res-1 (W2 remainder); N-11
+retroactive-regrading guard (M25); N-26…N-32; S-3/S-4/S-5; D-3;
+O-A…O-H; T-1…T-6. **M24-W3a, W3c and W4 were NOT executed and M24 remains
+OPEN.**
+
+*Last updated after M24-W3b (seven lifecycle findings closed; W3a/W3c/W4
+not started; M24 OPEN).*
+
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
   Hardening & Debt Retirement (P2-IDOR-1 file authorization, mail
@@ -3763,11 +3881,11 @@ N-10, N-22, N-8, N-9, Res-1 deferred; M24 OPEN).*
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M24 status**: W0 (discovery/design) and W1 COMPLETE; W2 **PARTIAL** —
-  N-6, the N-23 ordering half and N-24 closed under O-3(B)/O-4(B2), with
-  N-7, N-10, N-22, the N-23 download half, N-8, N-9 and Res-1 deferred with
-  recorded blockers. N-1 (HIGH) remains CLOSED. W3–W4 NOT started;
-  O-5…O-8 remain open. M24 is **NOT closed**.
+- **M24 status**: W0 and W1 COMPLETE; W2 **PARTIAL**; **W3b COMPLETE**
+  (N-2, N-11 coverage, N-14, N-15, N-16a, N-17, N-18 closed). N-1 (HIGH)
+  remains CLOSED. **W3a** (N-3, N-4, N-16b), **W3c** (N-12) and **W4** NOT
+  started; the W2 remainder and N-11's retroactive guard (O-5 → M25)
+  remain deferred. M24 is **NOT closed**.
 - **M23 status**: **M23 COMPLETE AND CLOSED (W0–W4)** — Authorization
   Correctness & Audit Integrity. S-1, S-2 (approved scope), D-1, D-2 and
   D-4 all CLOSED; every remaining finding carries an explicit
@@ -3783,10 +3901,10 @@ N-10, N-22, N-8, N-9, Res-1 deferred; M24 OPEN).*
   browser-print; M17 term lifecycle, M16 refunds+accountant, M15
   rollover and M14 payments all remain complete (webhook delivery
   still pending provider-dashboard endpoint registration).
-- **Latest commit**: the M24-W2 file/session/export commit on branch
+- **Latest commit**: the M24-W3b lifecycle-integrity commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 15 found, database schema up to date
-- **Tests**: **769/769 passing** (57 suites)
+- **Tests**: **800/800 passing** (58 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -3795,11 +3913,11 @@ N-10, N-22, N-8, N-9, Res-1 deferred; M24 OPEN).*
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13 and
   `docs/M23_PLATFORM_DISCOVERY_DESIGN.md` (current reconciliation)
-- **Next planned milestone**: the remaining W2 findings (N-7, N-10, N-22,
-  N-23 download half, N-8, N-9, Res-1) each need a recorded decision before
-  they can proceed; M24-W3 (academic lifecycle & concurrency) is designed
-  and awaiting authorization. Reporting/analytics and CI/lint remain M25
-  candidates
+- **Next planned milestone**: M24-W3a (locking/concurrency: N-3's 26-site
+  transaction conversion, N-4 capacity, N-16b) and M24-W3c (N-12) are
+  designed and awaiting authorization, followed by W4 close-out. The W2
+  remainder still needs its recorded decisions. Reporting/analytics and
+  CI/lint remain M25 candidates
 
 ## 15. Future Roadmap
 

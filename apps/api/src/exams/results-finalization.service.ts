@@ -418,7 +418,14 @@ export class ResultsFinalizationService {
     const students = await this.prisma.studentProfile.findMany({
       where: {
         collegeId: user.collegeId,
-        enrollments: { some: { section: { termId } } },
+        // M24-W3b (N-18): only an ACTIVE enrollment makes a student part
+        // of the term's finalization population. Without the status
+        // filter DROPPED and COMPLETED students appeared on the worklist,
+        // which every other cross-module enrollment predicate already
+        // excludes (sections, attendance, live results, resolveReadTarget).
+        // This narrows the LISTING only — finalization itself still
+        // recomputes from published marks and refuses NO_PUBLISHED_RESULTS.
+        enrollments: { some: { status: 'ACTIVE', section: { termId } } },
       },
       select: {
         id: true,

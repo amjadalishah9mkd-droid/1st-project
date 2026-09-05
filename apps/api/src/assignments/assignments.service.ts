@@ -311,6 +311,28 @@ export class AssignmentsService {
         },
         include: assignmentInclude,
       });
+      // M24-W3b (N-14): `Submission.isLate` is a PERSISTED fact computed
+      // once at submit time (`now > assignment.dueAt`). Moving `dueAt`
+      // therefore left existing submissions mis-flagged forever —
+      // on-time work looked late after the date was pulled in, and late
+      // work looked on-time after an extension. The due date stays
+      // mutable (that is the existing documented contract); what is
+      // corrected here is the DERIVED flag, recomputed against the new
+      // due date inside the same transaction so an assignment and its
+      // submissions can never disagree. The comparison is the same one
+      // `submit` uses — strictly greater than, so a submission exactly at
+      // the due date is on time — and existing timestamp handling is
+      // reused unchanged.
+      if (row.dueAt.getTime() !== existing.dueAt.getTime()) {
+        await tx.submission.updateMany({
+          where: { assignmentId: existing.id, submittedAt: { gt: row.dueAt } },
+          data: { isLate: true },
+        });
+        await tx.submission.updateMany({
+          where: { assignmentId: existing.id, submittedAt: { lte: row.dueAt } },
+          data: { isLate: false },
+        });
+      }
       // M23-W2 (S-2): assignments.created/published/deleted were
       // audited, updates were not — yet due dates and maxPoints change
       // how existing submissions are graded. Field NAMES only: the

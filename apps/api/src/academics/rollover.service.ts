@@ -436,6 +436,16 @@ export class RolloverService {
         await this.lifecycle.assertTermOpen(tx, user.collegeId, toTermId);
         // Row lock + CAS: exactly one execution ever proceeds.
         await tx.$queryRaw`SELECT id FROM "TermRollover" WHERE id = ${rollover.id} FOR UPDATE`;
+        // M24-W3b (N-15): re-read the row UNDER the lock. The plan was
+        // previously taken from the pre-lock read at the top of execute(),
+        // so a concurrent `updatePlan` committing in that window was
+        // silently lost and a stale plan executed while `preview()`
+        // rendered the newer one. The value actually used for the writes
+        // is now protected by the same lock as the writes.
+        const rolloverRow = await tx.termRollover.findUniqueOrThrow({
+          where: { id: rollover.id },
+          select: { id: true, fromTermId: true, plan: true },
+        });
         const claimed = await tx.termRollover.updateMany({
           where: { id: rollover.id, status: 'DRAFT' },
           data: { status: 'EXECUTED', executedById: user.id, executedAt: new Date() },
@@ -447,7 +457,19 @@ export class RolloverService {
           });
         }
 
-        const plan = rollover.plan as unknown as RolloverPlanInput;
+        const plan = rolloverRow.plan as unknown as RolloverPlanInput;
+        // M24-W3b (N-2): a CLOSED source term is a valid rollover SOURCE
+        // (M17 O-3) but is READ-ONLY — the file's own invariant is that
+        // "source sections and all historical data stay untouched". The
+        // source-enrollment conclusion below is a WRITE to the source
+        // term, so it must not run when the source is closed. The status
+        // is read inside the transaction; no new lock is taken (locking
+        // is N-3 / W3a scope).
+        const sourceTerm = await tx.term.findFirstOrThrow({
+          where: { id: rolloverRow.fromTermId, collegeId: user.collegeId },
+          select: { status: true },
+        });
+        const sourceIsReadOnly = sourceTerm.status === 'CLOSED';
         const targetSectionBySource = new Map<string, string>();
         const stats = {
           sectionsCreated: 0,
@@ -587,17 +609,25 @@ export class RolloverService {
             });
             stats.enrollmentsCreated += created.count;
           }
-          // The source term is over for every listed section: conclude
+          // The source term is over for every CARRIED section: conclude
           // its ACTIVE enrollments (history preserved, rows immutable).
-          const completed = await tx.enrollment.updateMany({
-            where: {
-              sectionId: entry.sourceSectionId,
-              status: 'ACTIVE',
-              section: { collegeId: user.collegeId },
-            },
-            data: { status: 'COMPLETED' },
-          });
-          stats.enrollmentsCompleted += completed.count;
+          //
+          // M24-W3b (N-2): two guards. (1) A SKIP entry is explicitly not
+          // carried, so concluding its source enrollments was wrong —
+          // this statement sat outside the SKIP filter used in pass 1 and
+          // ran for every entry. (2) A CLOSED source term is read-only,
+          // so its history must not be rewritten at all.
+          if (entry.action !== 'SKIP' && !sourceIsReadOnly) {
+            const completed = await tx.enrollment.updateMany({
+              where: {
+                sectionId: entry.sourceSectionId,
+                status: 'ACTIVE',
+                section: { collegeId: user.collegeId },
+              },
+              data: { status: 'COMPLETED' },
+            });
+            stats.enrollmentsCompleted += completed.count;
+          }
         }
 
         if (graduateStudentIds.size > 0) {

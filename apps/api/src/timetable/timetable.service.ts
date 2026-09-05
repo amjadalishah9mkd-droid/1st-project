@@ -201,6 +201,7 @@ export class TimetableService {
       startTime: input.startTime,
       endTime: input.endTime,
       room: input.room ?? null,
+      sectionRoom: section.room,
       excludeSlotId: null,
     });
 
@@ -231,7 +232,8 @@ export class TimetableService {
   ): Promise<TimetableSlotItem> {
     const existing = await this.prisma.timetableSlot.findFirst({
       where: { id, section: { collegeId: user.collegeId } },
-      include: { section: { select: { termId: true } } },
+      // M24-W3b (N-16a): `room` for effective-room resolution.
+      include: { section: { select: { termId: true, room: true } } },
     });
     if (!existing) {
       throw new NotFoundException({
@@ -265,6 +267,7 @@ export class TimetableService {
       startTime: next.startTime,
       endTime: next.endTime,
       room: next.room,
+      sectionRoom: existing.section.room,
       excludeSlotId: id,
     });
 
@@ -352,6 +355,9 @@ export class TimetableService {
       startTime: string;
       endTime: string;
       room: string | null;
+      /** M24-W3b (N-16a): the owning section's room, for effective-room
+       * resolution (`slot.room ?? section.room`). */
+      sectionRoom: string | null;
       excludeSlotId: string | null;
     },
   ): Promise<void> {
@@ -363,7 +369,13 @@ export class TimetableService {
       },
       include: {
         section: {
-          select: { id: true, name: true, course: { select: { code: true } } },
+          // M24-W3b (N-16a): `room` is needed to resolve the effective room.
+          select: {
+            id: true,
+            name: true,
+            room: true,
+            course: { select: { code: true } },
+          },
         },
       },
     });
@@ -378,10 +390,21 @@ export class TimetableService {
           message: `This section already meets ${slot.startTime}–${slot.endTime} on that day`,
         });
       }
-      if (check.room && slot.room && slot.room === check.room) {
+      // M24-W3b (N-16a): the room check previously required BOTH slots to
+      // carry an explicit room, while every other surface resolves the
+      // room as `slot.room ?? section.room` (e.g. attendance). Two
+      // sections sharing a section-level room, with no room on either
+      // slot, were therefore double-booked silently — the conflict rule
+      // and the display rule disagreed. Compare the same effective room
+      // both sides resolve to. No room policy changes: an explicit slot
+      // room still overrides its section, and two sections with no room
+      // anywhere still do not conflict on room.
+      const effectiveRoom = check.room ?? check.sectionRoom;
+      const slotEffectiveRoom = slot.room ?? slot.section.room;
+      if (effectiveRoom && slotEffectiveRoom && slotEffectiveRoom === effectiveRoom) {
         throw new BadRequestException({
           code: 'ROOM_CONFLICT',
-          message: `Room ${check.room} is occupied by ${slot.section.course.code} — Section ${slot.section.name} (${slot.startTime}–${slot.endTime})`,
+          message: `Room ${effectiveRoom} is occupied by ${slot.section.course.code} — Section ${slot.section.name} (${slot.startTime}–${slot.endTime})`,
         });
       }
     }
