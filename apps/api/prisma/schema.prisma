@@ -1,0 +1,1695 @@
+// CampusOS — Prisma schema (Blueprint v1.0 §1–§4, source of truth alignment)
+// Conventions: cuid PKs, createdAt/updatedAt everywhere, tenant-safe collegeId
+// on all aggregate roots, composite unique constraints scoped by collegeId.
+// Delete policies: Restrict on academic/financial references, Cascade only on
+// pure children, SetNull on optional actor references.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ──────────────────────────── Enums ────────────────────────────
+
+enum RoleKey {
+  ADMIN
+  TEACHER
+  STUDENT
+  GUARDIAN
+  ACCOUNTANT
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+// M11 — identity verification lifecycle (separate from UserStatus, which
+// keeps its operational meaning: suspension/archival).
+enum UserVerification {
+  LEGACY
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+// M11 — external authentication providers. Identity key is the provider's
+// immutable subject (Google `sub`), never the email address.
+enum AuthProvider {
+  GOOGLE
+}
+
+// M11 — student identity claim lifecycle.
+enum ClaimStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum PermissionScope {
+  OWN
+  ASSIGNED
+  DEPARTMENT
+  ALL
+  CHILD
+}
+
+enum StudentStatus {
+  ENROLLED
+  GRADUATED
+  WITHDRAWN
+  SUSPENDED
+}
+
+enum CourseStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  DROPPED
+  COMPLETED
+}
+
+enum SessionStatus {
+  SCHEDULED
+  HELD
+  CANCELLED
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
+enum ExamType {
+  QUIZ
+  MIDTERM
+  FINAL
+  PRACTICAL
+}
+
+enum ExamStatus {
+  DRAFT
+  SCHEDULED
+  COMPLETED
+  PUBLISHED
+}
+
+enum InvoiceStatus {
+  PENDING
+  PARTIAL
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CHEQUE
+  OTHER
+  ONLINE
+}
+
+/// M14-W1: in-flight gateway payment lifecycle. Settled money remains the
+/// Payment model; a PaymentAttempt only *becomes* a Payment on verified
+/// confirmation. REFUNDED is reserved for V2 reconciliation flags.
+/// M15-W1: rollover draft/idempotency anchor (execution engine lands in
+/// M15-W2). Exactly one rollover may target a given term
+/// (@@unique([collegeId, toTermId])); the W2 execution path performs a
+/// concurrency-safe DRAFT -> EXECUTED CAS on `status`. `plan` stores the
+/// admin-edited mapping as ids/flags only — never PII — and is revalidated
+/// against live data at execution time (never trusted stale).
+/// M17-W1 — term lifecycle (design §7). CLOSED terms are read-only for
+/// academic mutations; additive financial ledger operations (arrears,
+/// refunds) remain allowed (D-1).
+enum TermStatus {
+  ACTIVE
+  CLOSED
+}
+
+/// M18-W1 — finalized academic snapshot lifecycle (design §13).
+/// FINALIZED = the active immutable record; SUPERSEDED = replaced by a
+/// newer version (kept forever); VOID = administratively invalidated.
+enum TermResultStatus {
+  FINALIZED
+  SUPERSEDED
+  VOID
+}
+
+enum TermRolloverStatus {
+  DRAFT
+  EXECUTED
+}
+
+enum PaymentAttemptStatus {
+  CREATED
+  PENDING
+  SUCCEEDED
+  FAILED
+  EXPIRED
+  CANCELLED
+  REFUNDED
+}
+
+/// M16-W1 — refund lifecycle (design §10). Terminal: SUCCEEDED / FAILED /
+/// CANCELLED. No APPROVED (D-2: single-step, no maker-checker).
+enum RefundAttemptStatus {
+  REQUESTED
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+/// M16-W1 — how the money goes back (design §§6–7). RECORDED = staff
+/// confirms an out-of-band cash/bank return; PROVIDER = gateway refund.
+enum RefundMethod {
+  PROVIDER
+  RECORDED
+}
+
+enum PostType {
+  GENERAL
+  RESOURCE
+  ACHIEVEMENT
+  EVENT_SHARE
+}
+
+enum ContentStatus {
+  ACTIVE
+  REMOVED_BY_AUTHOR
+  REMOVED_BY_MODERATOR
+}
+
+enum GroupPrivacy {
+  OPEN
+  REQUEST
+}
+
+enum GroupRole {
+  MEMBER
+  MODERATOR
+}
+
+enum MembershipStatus {
+  ACTIVE
+  PENDING
+}
+
+enum GroupStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum SocietyCategory {
+  TECHNICAL
+  CULTURAL
+  SPORTS
+  LITERARY
+  SOCIAL
+  OTHER
+}
+
+enum SocietyRole {
+  MEMBER
+  OFFICER
+  PRESIDENT
+}
+
+enum SocietyStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum EventStatus {
+  ACTIVE
+  CANCELLED
+  REMOVED
+}
+
+enum RsvpStatus {
+  GOING
+  INTERESTED
+  DECLINED
+}
+
+enum ReportTargetType {
+  POST
+  COMMENT
+  USER
+  EVENT
+  RESOURCE
+}
+
+enum ReportReason {
+  SPAM
+  HARASSMENT
+  INAPPROPRIATE
+  MISINFORMATION
+  OTHER
+}
+
+enum ReportStatus {
+  OPEN
+  REVIEWING
+  RESOLVED
+  DISMISSED
+}
+
+enum ModerationActionType {
+  REMOVE_CONTENT
+  RESTORE_CONTENT
+  WARN_USER
+  SUSPEND_COMMUNITY
+  LIFT_SUSPENSION
+}
+
+enum AnnouncementScope {
+  ALL
+  ROLE
+  DEPARTMENT
+  SECTION
+}
+
+// ──────────────────────── Tenant Root ──────────────────────────
+
+model College {
+  id        String   @id @default(cuid())
+  name      String
+  code      String   @unique
+  settings  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users             User[]
+  academicYears     AcademicYear[]
+  terms             Term[]
+  departments       Department[]
+  courses           Course[]
+  sections          Section[]
+  teacherProfiles   TeacherProfile[]
+  studentProfiles   StudentProfile[]
+  exams             Exam[]
+  gradeBands        GradeBand[]
+  feeStructures     FeeStructure[]
+  invoices          Invoice[]
+  posts             Post[]
+  groups            Group[]
+  societies         Society[]
+  events            Event[]
+  resources         Resource[]
+  reports           Report[]
+  moderationActions ModerationAction[]
+  announcements     Announcement[]
+  auditLogs         AuditLog[]
+  identityClaims    StudentIdentityClaim[]
+  evidenceFiles     EvidenceFile[]
+  storedFiles       StoredFile[]
+  financeDocuments  FinanceDocument[]
+  guardianLinks     GuardianLink[]
+  paymentAttempts   PaymentAttempt[]
+  refundAttempts    RefundAttempt[]
+  termRollovers     TermRollover[]
+  TermResult        TermResult[]
+}
+
+// ────────────────────── Identity & Access ──────────────────────
+
+model User {
+  id                 String           @id @default(cuid())
+  collegeId          String
+  email              String
+  // Nullable since M11: Google-born accounts have no password. Password
+  // login already fails closed when the hash is absent.
+  passwordHash       String?
+  role               RoleKey
+  status             UserStatus       @default(ACTIVE)
+  // M21-W1 (O-2) — lifecycle metadata for the LAST status change. Nullable,
+  // additive, no backfill: pre-M21 accounts simply have no recorded change.
+  // The AuditLog remains the full history; these columns make the current
+  // state explainable on the row itself.
+  statusReason       String?
+  statusChangedAt    DateTime?
+  statusChangedById  String?
+  // M11 identity verification lifecycle. LEGACY = pre-M11 trusted accounts
+  // (admin-created / invite-accepted); no new gate applies to them.
+  verificationStatus UserVerification @default(LEGACY)
+  firstName          String
+  lastName           String
+  phone              String?
+  avatarUrl          String?
+  mustChangePassword Boolean          @default(true)
+  // M12-W2 — suppresses NOTIFICATION email only; transactional mail
+  // (invites, resets, verification decisions) always ignores this.
+  emailOptOut        Boolean          @default(false)
+  lastLoginAt        DateTime?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  college College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+
+  teacherProfile         TeacherProfile?
+  studentProfile         StudentProfile?
+  refreshTokens          RefreshToken[]
+  notifications          Notification[]
+  credentialTokens       CredentialToken[]      @relation("CredentialTokenUser")
+  credentialTokensIssued CredentialToken[]      @relation("CredentialTokenIssuer")
+  authIdentities         AuthIdentity[]
+  identityClaims         StudentIdentityClaim[] @relation("ClaimUser")
+  identityClaimsDecided  StudentIdentityClaim[] @relation("ClaimDecidedBy")
+  evidenceFiles          EvidenceFile[]
+  storedFilesOwned       StoredFile[]           @relation("StoredFileOwner")
+  storedFilesCreated     StoredFile[]           @relation("StoredFileCreator")
+  financeDocsIssued      FinanceDocument[]      @relation("FinanceDocumentIssuer")
+  financeDocsVoided      FinanceDocument[]      @relation("FinanceDocumentVoider")
+  statusChangedBy        User?                  @relation("UserStatusChangedBy", fields: [statusChangedById], references: [id], onDelete: SetNull)
+  statusChangesMade      User[]                 @relation("UserStatusChangedBy")
+  guardianLinks          GuardianLink[]         @relation("GuardianLinks")
+  guardianLinksCreated   GuardianLink[]         @relation("GuardianLinkCreator")
+
+  sessionsTaken            ClassSession[]     @relation("SessionTakenBy")
+  attendanceMarked         AttendanceRecord[] @relation("AttendanceMarkedBy")
+  assignmentsCreated       Assignment[]       @relation("AssignmentCreatedBy")
+  submissionsGraded        Submission[]       @relation("SubmissionGradedBy")
+  examsPublished           Exam[]             @relation("ExamPublishedBy")
+  marksEntered             Mark[]             @relation("MarkEnteredBy")
+  paymentsRecorded         Payment[]          @relation("PaymentRecordedBy")
+  paymentAttemptsInitiated PaymentAttempt[]   @relation("PaymentAttemptInitiator")
+  refundsRecorded          Refund[]           @relation("RefundRecordedBy")
+  refundAttemptsRequested  RefundAttempt[]    @relation("RefundAttemptRequester")
+  termResultsFinalized     TermResult[]       @relation("TermResultFinalizedBy")
+  termRolloversExecuted    TermRollover[]
+  posts                    Post[]             @relation("PostAuthor")
+  comments                 Comment[]          @relation("CommentAuthor")
+  likes                    Like[]
+  groupsCreated            Group[]            @relation("GroupCreatedBy")
+  groupMemberships         GroupMember[]
+  societyMemberships       SocietyMember[]
+  eventsCreated            Event[]            @relation("EventCreatedBy")
+  eventRsvps               EventRsvp[]
+  resourcesUploaded        Resource[]         @relation("ResourceUploader")
+  reportsFiled             Report[]           @relation("ReportReporter")
+  reportsResolved          Report[]           @relation("ReportResolvedBy")
+  moderationActionsTaken   ModerationAction[] @relation("ModerationActor")
+  moderationActionsAgainst ModerationAction[] @relation("ModerationTargetUser")
+  announcementsAuthored    Announcement[]     @relation("AnnouncementAuthor")
+  auditLogs                AuditLog[]         @relation("AuditActor")
+
+  @@unique([collegeId, email])
+  @@index([collegeId, role])
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  description String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rolePermissions RolePermission[]
+}
+
+model RolePermission {
+  id           String          @id @default(cuid())
+  role         RoleKey
+  permissionId String
+  scope        PermissionScope
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([role, permissionId])
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  familyId  String
+  expiresAt DateTime
+  revokedAt DateTime?
+  userAgent String?
+  ip        String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+}
+
+enum CredentialPurpose {
+  INVITE
+  RESET
+}
+
+model CredentialToken {
+  id          String            @id @default(cuid())
+  userId      String
+  tokenHash   String            @unique
+  purpose     CredentialPurpose
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdById String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  user      User  @relation("CredentialTokenUser", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy User? @relation("CredentialTokenIssuer", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([userId, purpose, usedAt])
+}
+
+// M11 — external provider identity (Google). Deliberately global (no
+// collegeId): one Google account is one human across the platform, which is
+// itself a duplicate-prevention guarantee.
+model AuthIdentity {
+  id          String       @id @default(cuid())
+  userId      String
+  provider    AuthProvider
+  providerSub String
+  emailAtLink String
+  linkedAt    DateTime     @default(now())
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // A provider account can be linked to exactly one CampusOS user, ever.
+  @@unique([provider, providerSub])
+  // One identity per provider per user (v1).
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+// M11-W7 — one-time OAuth state consumption, shared across API instances.
+// Stores only a SHA-256 hash of the state value; insert-as-claim makes
+// consumption atomic (a unique violation = replay). Expired rows are swept
+// by the daily retention job.
+model OauthStateConsumption {
+  id        String   @id @default(cuid())
+  stateHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+// M13-W1 — guardian ↔ student relationship (Blueprint M13, decisions
+// G1–G7). Many-to-many: one guardian may have several children, one
+// student several guardians. Duplicate prevention lives in PostgreSQL
+// (@@unique). Access dies with status=REVOKED — every CHILD-scope check
+// reads ACTIVE links at request time.
+enum GuardianLinkStatus {
+  ACTIVE
+  REVOKED
+}
+
+model GuardianLink {
+  id               String             @id @default(cuid())
+  collegeId        String
+  guardianUserId   String
+  studentProfileId String
+  relationship     String
+  status           GuardianLinkStatus @default(ACTIVE)
+  createdById      String?
+  revokedAt        DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  college        College        @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  guardian       User           @relation("GuardianLinks", fields: [guardianUserId], references: [id], onDelete: Cascade)
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Restrict)
+  createdBy      User?          @relation("GuardianLinkCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([guardianUserId, studentProfileId])
+  @@index([studentProfileId])
+  @@index([guardianUserId, status])
+}
+
+// M11-W3 — student-ID evidence uploads. Purpose-restricted file metadata:
+// only keys registered here are treated as verification evidence, and only
+// authorized parties can obtain signed URLs for them (files.controller).
+model EvidenceFile {
+  id         String   @id @default(cuid())
+  key        String   @unique
+  collegeId  String
+  uploaderId String
+  mimeType   String
+  size       Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  college  College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  uploader User    @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
+
+  @@index([uploaderId])
+}
+
+// M19-W1 — stored-file ownership record (P2-IDOR-1). Every new upload gets a
+// row; signing a key that HAS a row requires same-college membership or
+// ownership (files/stored-file-authz.service.ts). Keys without a row are
+// grandfathered pre-M19 uploads and keep the M10-W1 capability-URL behavior,
+// so every existing stored URL keeps working. Backfill for derivable legacy
+// keys (evidence, assignment/post attachments, submissions) happens in
+// migration #13.
+enum FilePurpose {
+  COMMUNITY_ATTACHMENT
+  SUBMISSION
+  EVIDENCE
+  OTHER
+}
+
+model StoredFile {
+  id          String      @id @default(cuid())
+  collegeId   String
+  key         String      @unique
+  purpose     FilePurpose @default(OTHER)
+  ownerUserId String?
+  createdById String?
+  createdAt   DateTime    @default(now())
+
+  college   College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  ownerUser User?   @relation("StoredFileOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  createdBy User?   @relation("StoredFileCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([collegeId])
+  @@index([ownerUserId])
+}
+
+// M11 — claim binding a login account to a real student identity
+// (StudentProfile). Duplicate prevention is enforced at the database level
+// with partial unique indexes added by raw SQL in the migration:
+//   UNIQUE (studentProfileId) WHERE status IN ('PENDING','APPROVED')
+//   UNIQUE (userId)           WHERE status = 'PENDING'
+model StudentIdentityClaim {
+  id                 String      @id @default(cuid())
+  collegeId          String
+  userId             String
+  studentProfileId   String?
+  claimedAdmissionNo String
+  evidenceFileKey    String?
+  status             ClaimStatus @default(PENDING)
+  rejectionReason    String?
+  decidedById        String?
+  decidedAt          DateTime?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  college        College         @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  user           User            @relation("ClaimUser", fields: [userId], references: [id], onDelete: Cascade)
+  studentProfile StudentProfile? @relation(fields: [studentProfileId], references: [id], onDelete: Restrict)
+  decidedBy      User?           @relation("ClaimDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@index([collegeId, status])
+  @@index([userId])
+}
+
+// ───────────────────── Academic Structure ──────────────────────
+
+model AcademicYear {
+  id        String   @id @default(cuid())
+  collegeId String
+  label     String
+  startsOn  DateTime @db.Date
+  endsOn    DateTime @db.Date
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  college College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  terms   Term[]
+
+  @@unique([collegeId, label])
+}
+
+/// NOTE (M15-W1): a partial unique index enforces at most ONE current term
+/// per college at the database level:
+///   CREATE UNIQUE INDEX "Term_one_current_per_college"
+///     ON "Term" ("collegeId") WHERE "isCurrent";
+/// Prisma cannot express partial indexes, so it lives as raw SQL in the
+/// 20260825* m15_calendar_invariants migration. setCurrentTerm's
+/// clear-then-set transaction remains the application-level path.
+model Term {
+  id             String     @id @default(cuid())
+  collegeId      String
+  academicYearId String
+  label          String
+  startsOn       DateTime   @db.Date
+  endsOn         DateTime   @db.Date
+  isCurrent      Boolean    @default(false)
+  /// M17-W1: lifecycle state. All existing terms default ACTIVE.
+  status         TermStatus @default(ACTIVE)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  college       College        @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  academicYear  AcademicYear   @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  rolloversFrom TermRollover[] @relation("RolloverFromTerm")
+  rolloversTo   TermRollover[] @relation("RolloverToTerm")
+
+  sections      Section[]
+  exams         Exam[]
+  feeStructures FeeStructure[]
+  TermResult    TermResult[]
+
+  @@unique([academicYearId, label])
+  @@index([collegeId, status])
+  @@index([collegeId, isCurrent])
+}
+
+model Department {
+  id            String   @id @default(cuid())
+  collegeId     String
+  name          String
+  code          String
+  headTeacherId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  college     College         @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  headTeacher TeacherProfile? @relation("DepartmentHead", fields: [headTeacherId], references: [id], onDelete: SetNull)
+
+  courses         Course[]
+  teacherProfiles TeacherProfile[]
+  studentProfiles StudentProfile[]
+
+  @@unique([collegeId, code])
+}
+
+model Course {
+  id           String       @id @default(cuid())
+  collegeId    String
+  departmentId String
+  code         String
+  title        String
+  credits      Int
+  description  String?
+  status       CourseStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  college    College    @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+
+  sections      Section[]
+  feeStructures FeeStructure[]
+  resources     Resource[]
+  CourseResult  CourseResult[]
+
+  @@unique([collegeId, code])
+  @@index([departmentId])
+}
+
+model Section {
+  id        String   @id @default(cuid())
+  collegeId String
+  courseId  String
+  termId    String
+  name      String
+  capacity  Int
+  room      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  college College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  course  Course  @relation(fields: [courseId], references: [id], onDelete: Restrict)
+  term    Term    @relation(fields: [termId], references: [id], onDelete: Restrict)
+
+  enrollments         Enrollment[]
+  teachingAssignments TeachingAssignment[]
+  timetableSlots      TimetableSlot[]
+  classSessions       ClassSession[]
+  assignments         Assignment[]
+  examPapers          ExamPaper[]
+  CourseResult        CourseResult[]
+
+  @@unique([courseId, termId, name])
+  @@index([termId])
+}
+
+model TeacherProfile {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  collegeId     String
+  departmentId  String
+  employeeNo    String
+  designation   String
+  qualification String?
+  joinedOn      DateTime @db.Date
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Restrict)
+  college    College    @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+
+  headOfDepartments   Department[]         @relation("DepartmentHead")
+  teachingAssignments TeachingAssignment[]
+  advisedSocieties    Society[]            @relation("SocietyAdvisor")
+
+  @@unique([collegeId, employeeNo])
+  @@index([departmentId])
+}
+
+model StudentProfile {
+  id            String        @id @default(cuid())
+  userId        String        @unique
+  collegeId     String
+  departmentId  String
+  admissionNo   String
+  rollNo        String
+  batch         String
+  dateOfBirth   DateTime?     @db.Date
+  // M19-W2 (O-2): emergency-contact information ONLY. These columns never
+  // establish guardian identity or access — GuardianLink is the sole
+  // authorization channel. Kept under their historical names for
+  // compatibility; exposure is minimized in students.service (full-scope
+  // staff and the student themself).
+  guardianName  String?
+  guardianPhone String?
+  guardianEmail String?
+  address       String?
+  status        StudentStatus @default(ENROLLED)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Restrict)
+  college    College    @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+
+  enrollments       Enrollment[]
+  attendanceRecords AttendanceRecord[]
+  submissions       Submission[]
+  marks             Mark[]
+  invoices          Invoice[]
+  identityClaims    StudentIdentityClaim[]
+  guardianLinks     GuardianLink[]
+  TermResult        TermResult[]
+
+  @@unique([collegeId, admissionNo])
+  @@index([departmentId])
+  @@index([collegeId, batch])
+}
+
+model Enrollment {
+  id         String           @id @default(cuid())
+  studentId  String
+  sectionId  String
+  status     EnrollmentStatus @default(ACTIVE)
+  enrolledAt DateTime         @default(now())
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  student StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  section Section        @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+
+  @@unique([studentId, sectionId])
+  @@index([sectionId, status])
+}
+
+model TeachingAssignment {
+  id        String   @id @default(cuid())
+  teacherId String
+  sectionId String
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  teacher TeacherProfile @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  section Section        @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+
+  @@unique([teacherId, sectionId])
+  @@index([sectionId])
+}
+
+// ──────────────────── Scheduling & Attendance ──────────────────
+
+model TimetableSlot {
+  id        String   @id @default(cuid())
+  sectionId String
+  dayOfWeek Int // 1 = Monday … 7 = Sunday
+  startTime String // "HH:mm"
+  endTime   String // "HH:mm"
+  room      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  section  Section        @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  sessions ClassSession[]
+
+  @@index([sectionId, dayOfWeek])
+}
+
+model ClassSession {
+  id        String        @id @default(cuid())
+  slotId    String
+  sectionId String // denormalized for roster/summary queries
+  date      DateTime      @db.Date
+  status    SessionStatus @default(SCHEDULED)
+  takenById String?
+  note      String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  slot    TimetableSlot @relation(fields: [slotId], references: [id], onDelete: Restrict)
+  section Section       @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  takenBy User?         @relation("SessionTakenBy", fields: [takenById], references: [id], onDelete: SetNull)
+
+  attendanceRecords AttendanceRecord[]
+
+  @@unique([slotId, date])
+  @@index([sectionId, date])
+}
+
+model AttendanceRecord {
+  id         String           @id @default(cuid())
+  sessionId  String
+  studentId  String
+  status     AttendanceStatus
+  markedById String
+  note       String?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  session  ClassSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  student  StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  markedBy User           @relation("AttendanceMarkedBy", fields: [markedById], references: [id], onDelete: Restrict)
+
+  @@unique([sessionId, studentId])
+  @@index([studentId])
+}
+
+// ─────────────────────────── Assessment ────────────────────────
+
+model Assignment {
+  id          String    @id @default(cuid())
+  sectionId   String
+  title       String
+  description String
+  attachments Json      @default("[]")
+  dueAt       DateTime
+  maxPoints   Decimal   @db.Decimal(10, 2)
+  allowLate   Boolean   @default(false)
+  createdById String
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  section   Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  createdBy User    @relation("AssignmentCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  submissions Submission[]
+
+  @@index([sectionId, dueAt])
+}
+
+model Submission {
+  id           String    @id @default(cuid())
+  assignmentId String
+  studentId    String
+  textContent  String?
+  fileUrl      String?
+  fileName     String?
+  submittedAt  DateTime  @default(now())
+  isLate       Boolean   @default(false)
+  points       Decimal?  @db.Decimal(10, 2)
+  feedback     String?
+  gradedById   String?
+  gradedAt     DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  assignment Assignment     @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  student    StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  gradedBy   User?          @relation("SubmissionGradedBy", fields: [gradedById], references: [id], onDelete: SetNull)
+
+  @@unique([assignmentId, studentId])
+  @@index([studentId])
+}
+
+model Exam {
+  id            String     @id @default(cuid())
+  collegeId     String
+  termId        String
+  title         String
+  type          ExamType
+  status        ExamStatus @default(DRAFT)
+  publishedAt   DateTime?
+  publishedById String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  college     College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  term        Term    @relation(fields: [termId], references: [id], onDelete: Restrict)
+  publishedBy User?   @relation("ExamPublishedBy", fields: [publishedById], references: [id], onDelete: SetNull)
+
+  papers ExamPaper[]
+
+  @@index([termId, status])
+}
+
+model ExamPaper {
+  id        String   @id @default(cuid())
+  examId    String
+  sectionId String
+  examDate  DateTime
+  maxMarks  Decimal  @db.Decimal(10, 2)
+  weight    Decimal  @default(1) @db.Decimal(10, 2) // dormant GPA hook
+  room      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  exam    Exam    @relation(fields: [examId], references: [id], onDelete: Cascade)
+  section Section @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+
+  marks Mark[]
+
+  @@unique([examId, sectionId])
+  @@index([sectionId])
+}
+
+model Mark {
+  id            String    @id @default(cuid())
+  examPaperId   String
+  studentId     String
+  marksObtained Decimal   @db.Decimal(10, 2)
+  enteredById   String
+  lockedAt      DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  examPaper ExamPaper      @relation(fields: [examPaperId], references: [id], onDelete: Cascade)
+  student   StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  enteredBy User           @relation("MarkEnteredBy", fields: [enteredById], references: [id], onDelete: Restrict)
+
+  @@unique([examPaperId, studentId])
+  @@index([studentId])
+}
+
+/// M18-W1 — one FINALIZED academic snapshot per student per term
+/// (versioned; design §12). IMMUTABLE after creation: corrections create
+/// a new version and CAS the old row to SUPERSEDED — never in-place
+/// edits. DB invariant (raw SQL, migration #12): at most one FINALIZED
+/// row per (studentId, termId).
+model TermResult {
+  id                String           @id @default(cuid())
+  collegeId         String
+  studentId         String
+  termId            String
+  status            TermResultStatus @default(FINALIZED)
+  version           Int              @default(1)
+  overallPercentage Decimal          @db.Decimal(5, 2)
+  gradeLabel        String?
+  /// Null when the college has not configured GradeBand.gradePoint —
+  /// CampusOS never invents a grade-point scale (O-4 policy gap).
+  gradePoint        Decimal?         @db.Decimal(4, 2)
+  termGpa           Decimal?         @db.Decimal(4, 2)
+  creditsAttempted  Int
+  creditsEarned     Int?
+  attendancePercent Decimal?         @db.Decimal(5, 2)
+  remark            String?
+  finalizedById     String
+  finalizedAt       DateTime
+  /// Amendment chain: the NEWER version that replaced this row.
+  supersededById    String?          @unique
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  college      College        @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  student      StudentProfile @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  term         Term           @relation(fields: [termId], references: [id], onDelete: Restrict)
+  finalizedBy  User           @relation("TermResultFinalizedBy", fields: [finalizedById], references: [id], onDelete: Restrict)
+  supersededBy TermResult?    @relation("TermResultSupersession", fields: [supersededById], references: [id], onDelete: Restrict)
+  supersedes   TermResult?    @relation("TermResultSupersession")
+
+  courseResults CourseResult[]
+
+  @@index([collegeId, termId])
+  @@index([studentId])
+}
+
+/// M18-W1 — immutable per-course lines under a TermResult snapshot.
+/// Course code/title/credits are DENORMALIZED on purpose: historical
+/// records must survive later catalog edits (design §12).
+model CourseResult {
+  id           String   @id @default(cuid())
+  termResultId String
+  courseId     String
+  sectionId    String
+  courseCode   String
+  courseTitle  String
+  credits      Int
+  obtained     Decimal  @db.Decimal(10, 2)
+  maxMarks     Decimal  @db.Decimal(10, 2)
+  percentage   Decimal  @db.Decimal(5, 2)
+  gradeLabel   String?
+  gradePoint   Decimal? @db.Decimal(4, 2)
+  passed       Boolean?
+  createdAt    DateTime @default(now())
+
+  termResult TermResult @relation(fields: [termResultId], references: [id], onDelete: Cascade)
+  course     Course     @relation(fields: [courseId], references: [id], onDelete: Restrict)
+  section    Section    @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+
+  @@unique([termResultId, courseId])
+}
+
+model GradeBand {
+  id         String   @id @default(cuid())
+  collegeId  String
+  label      String
+  minPercent Decimal  @db.Decimal(5, 2)
+  maxPercent Decimal  @db.Decimal(5, 2)
+  gradePoint Decimal? @db.Decimal(4, 2) // dormant GPA hook
+  sortOrder  Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  college College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+
+  @@unique([collegeId, label])
+}
+
+// ────────────────────────────── Fees ───────────────────────────
+
+model FeeStructure {
+  id          String   @id @default(cuid())
+  collegeId   String
+  termId      String
+  courseId    String?
+  name        String
+  totalAmount Decimal  @db.Decimal(10, 2)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  college College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  term    Term    @relation(fields: [termId], references: [id], onDelete: Restrict)
+  course  Course? @relation(fields: [courseId], references: [id], onDelete: Restrict)
+
+  components FeeComponent[]
+  invoices   Invoice[]
+
+  @@index([termId])
+}
+
+model FeeComponent {
+  id          String   @id @default(cuid())
+  structureId String
+  label       String
+  amount      Decimal  @db.Decimal(10, 2)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  structure FeeStructure @relation(fields: [structureId], references: [id], onDelete: Cascade)
+
+  @@index([structureId])
+}
+
+model Invoice {
+  id          String        @id @default(cuid())
+  collegeId   String
+  studentId   String
+  structureId String
+  invoiceNo   String
+  amount      Decimal       @db.Decimal(10, 2)
+  dueDate     DateTime      @db.Date
+  status      InvoiceStatus @default(PENDING)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  college   College        @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  student   StudentProfile @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  structure FeeStructure   @relation(fields: [structureId], references: [id], onDelete: Restrict)
+
+  payments       Payment[]
+  attempts       PaymentAttempt[]
+  refunds        Refund[]
+  refundAttempts RefundAttempt[]
+  documents      FinanceDocument[]
+
+  @@unique([collegeId, invoiceNo])
+  @@index([studentId, status])
+}
+
+model Payment {
+  id           String        @id @default(cuid())
+  invoiceId    String
+  amount       Decimal       @db.Decimal(10, 2)
+  method       PaymentMethod
+  reference    String?
+  paidAt       DateTime
+  recordedById String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  invoice        Invoice         @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  recordedBy     User?           @relation("PaymentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  attempt        PaymentAttempt?
+  refunds        Refund[]
+  refundAttempts RefundAttempt[]
+  receipt        FinanceDocument? @relation("PaymentReceipt")
+
+  @@index([invoiceId])
+}
+
+/// M14-W1: one row per student-initiated (or future staff-initiated) gateway
+/// checkout. collegeId is a tenancy belt independent of joins — webhook
+/// processing resolves attempts from stored state only, never from payload
+/// claims. amount is the server-computed payable frozen at initiation.
+model PaymentAttempt {
+  id            String               @id @default(cuid())
+  collegeId     String
+  invoiceId     String
+  initiatedById String
+  amount        Decimal              @db.Decimal(10, 2)
+  currency      String               @default("PKR")
+  provider      String
+  providerRef   String?
+  status        PaymentAttemptStatus @default(CREATED)
+  paymentId     String?              @unique
+  /// Set when a verified confirmation exceeded the remaining balance —
+  /// the money is still recorded; admins reconcile/refund manually.
+  overpaid      Boolean              @default(false)
+  failureCode   String?
+  confirmedAt   DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  college     College  @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  initiatedBy User     @relation("PaymentAttemptInitiator", fields: [initiatedById], references: [id], onDelete: Restrict)
+  payment     Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@unique([provider, providerRef])
+  @@index([invoiceId, status])
+  @@index([collegeId, status])
+}
+
+/// M14-W1: webhook idempotency ledger (used from W3). Insert-first claim on
+/// the provider's event id — a redelivered webhook hits the unique
+/// constraint and becomes a no-op. Payload bodies are never stored.
+model TermRollover {
+  id           String             @id @default(cuid())
+  collegeId    String
+  fromTermId   String
+  toTermId     String
+  status       TermRolloverStatus @default(DRAFT)
+  /// Mapping plan: section mappings, per-student overrides, graduate
+  /// flags — ids and enums only, revalidated at execution.
+  plan         Json               @default("{}")
+  /// Execution counters (sections/enrollments created, students
+  /// graduated, …) written by W2 on EXECUTED.
+  counters     Json?
+  executedById String?
+  executedAt   DateTime?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  college    College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  fromTerm   Term    @relation("RolloverFromTerm", fields: [fromTermId], references: [id], onDelete: Restrict)
+  toTerm     Term    @relation("RolloverToTerm", fields: [toTermId], references: [id], onDelete: Restrict)
+  executedBy User?   @relation(fields: [executedById], references: [id], onDelete: SetNull)
+
+  @@unique([collegeId, toTermId])
+  @@index([collegeId, status])
+}
+
+model GatewayEvent {
+  id         String   @id @default(cuid())
+  provider   String
+  eventId    String
+  attemptId  String?
+  outcome    String
+  receivedAt DateTime @default(now())
+
+  @@unique([provider, eventId])
+  @@index([attemptId])
+}
+
+/// M16-W1 — refund lifecycle/state machine (design §9). Analog of
+/// PaymentAttempt: collegeId is an independent tenancy belt; amount/reason
+/// are frozen server-side at creation; providerRefundRef is written only
+/// from adapter responses (never client input). DB invariants (raw SQL in
+/// migration #10): amount > 0 and at most ONE in-flight
+/// (REQUESTED/PROCESSING) attempt per payment.
+model RefundAttempt {
+  id                String              @id @default(cuid())
+  collegeId         String
+  paymentId         String
+  invoiceId         String
+  amount            Decimal             @db.Decimal(10, 2)
+  currency          String              @default("PKR")
+  reason            String
+  method            RefundMethod
+  provider          String?
+  providerRefundRef String?
+  status            RefundAttemptStatus @default(REQUESTED)
+  failureCode       String?
+  requestedById     String
+  confirmedAt       DateTime?
+  refundId          String?             @unique
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  college     College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  payment     Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  requestedBy User    @relation("RefundAttemptRequester", fields: [requestedById], references: [id], onDelete: Restrict)
+  refund      Refund? @relation(fields: [refundId], references: [id], onDelete: Restrict)
+
+  // Postgres UNIQUE allows multiple NULLs, so RECORDED attempts (no
+  // provider ref) never collide; two provider refunds can never share a ref.
+  @@unique([provider, providerRefundRef])
+  @@index([collegeId, status])
+  @@index([paymentId])
+  @@index([invoiceId])
+}
+
+/// M16-W1 — settled money-out ledger (design §8). IMMUTABLE after creation:
+/// the source of truth that money was actually returned. Only a SUCCEEDED
+/// RefundAttempt (provider-confirmed or staff-RECORDED) materializes a row.
+/// DB invariant (raw SQL, migration #10): amount > 0.
+model Refund {
+  id           String       @id @default(cuid())
+  paymentId    String
+  invoiceId    String
+  amount       Decimal      @db.Decimal(10, 2)
+  method       RefundMethod
+  reference    String?
+  refundedAt   DateTime
+  recordedById String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  payment    Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  invoice    Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  recordedBy User?   @relation("RefundRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  attempt RefundAttempt?
+
+  document FinanceDocument? @relation("RefundDocument")
+
+  @@index([paymentId])
+  @@index([invoiceId])
+}
+
+// M20-W1 — immutable finance documents (Option B, docs/M20_FINANCE_DOCUMENTS_DESIGN.md).
+// One PAYMENT_RECEIPT per settled Payment, one REFUND_DOCUMENT per Refund
+// (paymentId/refundId unique = DB idempotency). Rows are historical
+// snapshots: every display/financial value below is FROZEN at issuance and
+// never reconstructed from mutable live data (M18 principle). The only
+// lifecycle transition is ACTIVE → VOID (CAS, audited, reason required);
+// numbers are per-college unique and never reused. Deletion is not an
+// application operation (Restrict FKs on money rows; documents outlive
+// staff accounts via SetNull).
+enum FinanceDocumentKind {
+  PAYMENT_RECEIPT
+  REFUND_DOCUMENT
+}
+
+enum FinanceDocumentStatus {
+  ACTIVE
+  VOID
+}
+
+model FinanceDocument {
+  id        String                @id @default(cuid())
+  collegeId String
+  kind      FinanceDocumentKind
+  status    FinanceDocumentStatus @default(ACTIVE)
+
+  // Immutable per-college number: RCP-/RFD-<year>-<seq5>.
+  receiptNo String
+  year      Int
+  sequence  Int
+
+  // Source money rows (exactly one of paymentId/refundId per kind).
+  paymentId String? @unique
+  refundId  String? @unique
+  invoiceId String
+
+  // Frozen issuance-time snapshot (NEVER re-read from live rows).
+  studentName     String
+  admissionNo     String
+  rollNo          String
+  invoiceNo       String
+  structureName   String
+  collegeName     String
+  collegeCode     String
+  amount          Decimal  @db.Decimal(10, 2)
+  method          String
+  referenceMasked String?
+  paidAt          DateTime
+  invoiceAmount   Decimal  @db.Decimal(10, 2)
+  balanceAfter    Decimal  @db.Decimal(10, 2)
+  receivedByName  String?
+  parentReceiptNo String?
+
+  issuedById String?
+  issuedAt   DateTime @default(now())
+  voidedById String?
+  voidedAt   DateTime?
+  voidReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  college  College  @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  payment  Payment? @relation("PaymentReceipt", fields: [paymentId], references: [id], onDelete: Restrict)
+  refund   Refund?  @relation("RefundDocument", fields: [refundId], references: [id], onDelete: Restrict)
+  invoice  Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  issuedBy User?    @relation("FinanceDocumentIssuer", fields: [issuedById], references: [id], onDelete: SetNull)
+  voidedBy User?    @relation("FinanceDocumentVoider", fields: [voidedById], references: [id], onDelete: SetNull)
+
+  @@unique([collegeId, receiptNo])
+  @@index([collegeId, kind])
+  @@index([invoiceId])
+}
+
+// ─────────────────────────── Community ─────────────────────────
+
+model Post {
+  id           String        @id @default(cuid())
+  collegeId    String
+  authorId     String
+  type         PostType      @default(GENERAL)
+  body         String
+  attachments  Json          @default("[]")
+  groupId      String?
+  societyId    String?
+  resourceId   String?
+  eventId      String?
+  status       ContentStatus @default(ACTIVE)
+  likeCount    Int           @default(0)
+  commentCount Int           @default(0)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  college  College   @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  author   User      @relation("PostAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  group    Group?    @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  society  Society?  @relation(fields: [societyId], references: [id], onDelete: SetNull)
+  resource Resource? @relation(fields: [resourceId], references: [id], onDelete: SetNull)
+  event    Event?    @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
+  comments Comment[]
+  likes    Like[]
+
+  @@index([collegeId, status, createdAt])
+  @@index([groupId])
+  @@index([societyId])
+}
+
+model Comment {
+  id        String        @id @default(cuid())
+  postId    String
+  authorId  String
+  parentId  String?
+  body      String
+  status    ContentStatus @default(ACTIVE)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  post   Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author User     @relation("CommentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  parent Comment? @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+
+  replies Comment[] @relation("CommentReplies")
+  likes   Like[]
+
+  @@index([postId, status])
+}
+
+model Like {
+  id        String   @id @default(cuid())
+  userId    String
+  postId    String?
+  commentId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post    Post?    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  comment Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, postId])
+  @@unique([userId, commentId])
+}
+
+model Group {
+  id          String       @id @default(cuid())
+  collegeId   String
+  name        String
+  description String
+  coverUrl    String?
+  privacy     GroupPrivacy @default(OPEN)
+  createdById String
+  status      GroupStatus  @default(ACTIVE)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  college   College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  createdBy User    @relation("GroupCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  members GroupMember[]
+  posts   Post[]
+
+  @@unique([collegeId, name])
+}
+
+model GroupMember {
+  id        String           @id @default(cuid())
+  groupId   String
+  userId    String
+  role      GroupRole        @default(MEMBER)
+  status    MembershipStatus @default(ACTIVE)
+  joinedAt  DateTime         @default(now())
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([userId])
+}
+
+model Society {
+  id               String          @id @default(cuid())
+  collegeId        String
+  name             String
+  category         SocietyCategory
+  description      String
+  logoUrl          String?
+  facultyAdvisorId String?
+  status           SocietyStatus   @default(ACTIVE)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  college        College         @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  facultyAdvisor TeacherProfile? @relation("SocietyAdvisor", fields: [facultyAdvisorId], references: [id], onDelete: SetNull)
+
+  members SocietyMember[]
+  events  Event[]
+  posts   Post[]
+
+  @@unique([collegeId, name])
+}
+
+model SocietyMember {
+  id        String           @id @default(cuid())
+  societyId String
+  userId    String
+  role      SocietyRole      @default(MEMBER)
+  status    MembershipStatus @default(ACTIVE)
+  joinedAt  DateTime         @default(now())
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  society Society @relation(fields: [societyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([societyId, userId])
+  @@index([userId])
+}
+
+model Event {
+  id          String      @id @default(cuid())
+  collegeId   String
+  societyId   String?
+  title       String
+  description String
+  venue       String
+  startsAt    DateTime
+  endsAt      DateTime
+  coverUrl    String?
+  capacity    Int?
+  createdById String
+  status      EventStatus @default(ACTIVE)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  college   College  @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  society   Society? @relation(fields: [societyId], references: [id], onDelete: SetNull)
+  createdBy User     @relation("EventCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  rsvps EventRsvp[]
+  posts Post[]
+
+  @@index([collegeId, startsAt])
+}
+
+model EventRsvp {
+  id        String     @id @default(cuid())
+  eventId   String
+  userId    String
+  status    RsvpStatus
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+}
+
+model Resource {
+  id            String        @id @default(cuid())
+  collegeId     String
+  uploaderId    String
+  courseId      String?
+  title         String
+  description   String?
+  fileUrl       String
+  fileName      String
+  fileType      String
+  fileSize      Int
+  downloadCount Int           @default(0)
+  status        ContentStatus @default(ACTIVE)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  college  College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  uploader User    @relation("ResourceUploader", fields: [uploaderId], references: [id], onDelete: Restrict)
+  course   Course? @relation(fields: [courseId], references: [id], onDelete: SetNull)
+
+  posts Post[]
+
+  @@index([collegeId, status])
+}
+
+// ─────────────────────────── Moderation ────────────────────────
+
+model Report {
+  id             String           @id @default(cuid())
+  collegeId      String
+  reporterId     String
+  targetType     ReportTargetType
+  targetId       String
+  reason         ReportReason
+  details        String?
+  status         ReportStatus     @default(OPEN)
+  resolvedById   String?
+  resolvedAt     DateTime?
+  resolutionNote String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  college    College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  reporter   User    @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Restrict)
+  resolvedBy User?   @relation("ReportResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  moderationActions ModerationAction[]
+
+  @@index([collegeId, status])
+  @@index([targetType, targetId])
+}
+
+model ModerationAction {
+  id           String               @id @default(cuid())
+  collegeId    String
+  reportId     String?
+  actorId      String
+  action       ModerationActionType
+  targetType   ReportTargetType
+  targetId     String
+  targetUserId String?
+  expiresAt    DateTime?
+  note         String?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  college    College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  report     Report? @relation(fields: [reportId], references: [id], onDelete: SetNull)
+  actor      User    @relation("ModerationActor", fields: [actorId], references: [id], onDelete: Restrict)
+  targetUser User?   @relation("ModerationTargetUser", fields: [targetUserId], references: [id], onDelete: SetNull)
+
+  @@index([targetUserId, action])
+}
+
+// ──────────────────────────── Platform ─────────────────────────
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  body      String
+  linkPath  String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+model Announcement {
+  id            String            @id @default(cuid())
+  collegeId     String
+  authorId      String
+  title         String
+  body          String
+  audienceScope AnnouncementScope
+  audienceIds   Json              @default("[]")
+  publishedAt   DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  college College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  author  User    @relation("AnnouncementAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([collegeId, publishedAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  collegeId  String
+  actorId    String?
+  action     String
+  targetType String?
+  targetId   String?
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  college College @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  actor   User?   @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([collegeId, createdAt])
+}

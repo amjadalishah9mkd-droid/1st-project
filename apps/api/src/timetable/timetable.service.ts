@@ -1,0 +1,412 @@
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import type {
+  CreateSlotInput,
+  TimetableSlotItem,
+  UpdateSlotInput,
+} from '@campusos/shared';
+import type { Prisma } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { PolicyService } from '../access/policy.service';
+import { AuditService } from '../audit/audit.service';
+import { changedFields } from '../audit/changed-fields';
+import type { AuthenticatedUser } from '../access/authenticated-user';
+import { TermLifecycleService } from '../academics/term-lifecycle.service';
+
+const slotInclude = {
+  section: {
+    include: {
+      course: { select: { code: true, title: true } },
+      term: { select: { id: true, label: true } },
+      teachingAssignments: {
+        include: {
+          teacher: {
+            include: { user: { select: { firstName: true, lastName: true } } },
+          },
+        },
+      },
+    },
+  },
+} satisfies Prisma.TimetableSlotInclude;
+
+type SlotRecord = Prisma.TimetableSlotGetPayload<{ include: typeof slotInclude }>;
+
+function toItem(slot: SlotRecord): TimetableSlotItem {
+  return {
+    id: slot.id,
+    sectionId: slot.sectionId,
+    dayOfWeek: slot.dayOfWeek,
+    startTime: slot.startTime,
+    endTime: slot.endTime,
+    room: slot.room,
+    courseCode: slot.section.course.code,
+    courseTitle: slot.section.course.title,
+    sectionName: slot.section.name,
+    termLabel: slot.section.term.label,
+    teacherNames: slot.section.teachingAssignments.map(
+      (a) => `${a.teacher.user.firstName} ${a.teacher.user.lastName}`,
+    ),
+  };
+}
+
+function overlaps(
+  aStart: string,
+  aEnd: string,
+  bStart: string,
+  bEnd: string,
+): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+@Injectable()
+export class TimetableService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly lifecycle: TermLifecycleService,
+    private readonly policy: PolicyService,
+    private readonly audit: AuditService,
+  ) {}
+
+  /**
+   * Role-aware weekly timetable (Blueprint §7):
+   *  view=me            → the caller's own schedule (enrolled or assigned
+   *                       sections; admins with ALL scope see everything)
+   *  view=section:<id>  → one section's slots (academics.read scoped)
+   */
+  async read(
+    user: AuthenticatedUser,
+    view: string,
+  ): Promise<TimetableSlotItem[]> {
+    const readScope = await this.policy.scopeFor(user, 'timetable.read');
+    if (!readScope) {
+      throw new ForbiddenException({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission to perform this action',
+      });
+    }
+
+    let where: Prisma.TimetableSlotWhereInput;
+    if (view.startsWith('student:')) {
+      // M13-W3: guardian view of a linked child's timetable. PolicyService
+      // CHILD check is the sole authorizer; staff with ALL pass too.
+      const studentProfileId = view.slice('student:'.length);
+      if (readScope !== 'ALL') {
+        // Only CHILD scope (guardians) may name another student; OWN and
+        // ASSIGNED callers must use view=me / section:<id>.
+        const allowed =
+          readScope === 'CHILD' &&
+          (await this.policy.can(user, 'timetable.read', {
+            studentProfileId,
+          }));
+        if (!allowed) {
+          throw new ForbiddenException({
+            code: 'FORBIDDEN',
+            message: 'You do not have permission to perform this action',
+          });
+        }
+      }
+      where = {
+        section: {
+          collegeId: user.collegeId,
+          enrollments: {
+            some: { studentId: studentProfileId, status: 'ACTIVE' },
+          },
+        },
+      };
+    } else if (view.startsWith('section:')) {
+      const sectionId = view.slice('section:'.length);
+      const academicsScope = await this.policy.scopeFor(user, 'academics.read');
+      // M14-W0 (P2-GUARD-1): the section view is an academics surface —
+      // callers without any academics.read grant (e.g. guardians, whose
+      // timetable access is CHILD-scoped via view=student:<id>) must not
+      // browse arbitrary sections. Scope-driven, no role names.
+      if (!academicsScope) {
+        throw new ForbiddenException({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission to perform this action',
+        });
+      }
+      where = {
+        sectionId,
+        section: {
+          collegeId: user.collegeId,
+          ...(academicsScope === 'OWN'
+            ? {
+                enrollments: {
+                  some: { student: { userId: user.id }, status: 'ACTIVE' },
+                },
+              }
+            : {}),
+        },
+      };
+    } else {
+      // view=me
+      where = {
+        section: {
+          collegeId: user.collegeId,
+          ...(readScope === 'ALL'
+            ? {}
+            : {
+                OR: [
+                  {
+                    enrollments: {
+                      some: { student: { userId: user.id }, status: 'ACTIVE' },
+                    },
+                  },
+                  {
+                    teachingAssignments: {
+                      some: { teacher: { userId: user.id } },
+                    },
+                  },
+                ],
+              }),
+        },
+      };
+    }
+
+    const slots = await this.prisma.timetableSlot.findMany({
+      where,
+      include: slotInclude,
+      orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }],
+    });
+    return slots.map(toItem);
+  }
+
+  async createSlot(
+    user: AuthenticatedUser,
+    input: CreateSlotInput,
+  ): Promise<TimetableSlotItem> {
+    const section = await this.prisma.section.findFirst({
+      where: { id: input.sectionId, collegeId: user.collegeId },
+      select: { id: true, termId: true, room: true },
+    });
+    if (!section) {
+      throw new BadRequestException({
+        code: 'INVALID_SECTION',
+        message: 'The selected section does not exist in this college',
+      });
+    }
+
+    // M17-W2: CLOSED terms are read-only for timetables.
+    await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, section.termId);
+
+    await this.assertNoConflicts(user, {
+      sectionId: input.sectionId,
+      termId: section.termId,
+      dayOfWeek: input.dayOfWeek,
+      startTime: input.startTime,
+      endTime: input.endTime,
+      room: input.room ?? null,
+      sectionRoom: section.room,
+      excludeSlotId: null,
+    });
+
+    const created = await this.prisma.timetableSlot.create({
+      data: {
+        sectionId: input.sectionId,
+        dayOfWeek: input.dayOfWeek,
+        startTime: input.startTime,
+        endTime: input.endTime,
+        room: input.room,
+      },
+      include: slotInclude,
+    });
+    await this.audit.log({
+      collegeId: user.collegeId,
+      actorId: user.id,
+      action: 'timetable.slot_created',
+      targetType: 'TimetableSlot',
+      targetId: created.id,
+    });
+    return toItem(created);
+  }
+
+  async updateSlot(
+    user: AuthenticatedUser,
+    id: string,
+    input: UpdateSlotInput,
+  ): Promise<TimetableSlotItem> {
+    const existing = await this.prisma.timetableSlot.findFirst({
+      where: { id, section: { collegeId: user.collegeId } },
+      // M24-W3b (N-16a): `room` for effective-room resolution.
+      include: { section: { select: { termId: true, room: true } } },
+    });
+    if (!existing) {
+      throw new NotFoundException({
+        code: 'NOT_FOUND',
+        message: 'Timetable slot not found',
+      });
+    }
+    // M17-W2: CLOSED terms are read-only for timetables.
+    await this.lifecycle.assertTermOpen(
+      this.prisma,
+      user.collegeId,
+      existing.section.termId,
+    );
+
+    const next = {
+      dayOfWeek: input.dayOfWeek ?? existing.dayOfWeek,
+      startTime: input.startTime ?? existing.startTime,
+      endTime: input.endTime ?? existing.endTime,
+      room: input.room === undefined ? existing.room : input.room,
+    };
+    if (next.startTime >= next.endTime) {
+      throw new BadRequestException({
+        code: 'INVALID_TIMES',
+        message: 'End time must be after the start time',
+      });
+    }
+    await this.assertNoConflicts(user, {
+      sectionId: existing.sectionId,
+      termId: existing.section.termId,
+      dayOfWeek: next.dayOfWeek,
+      startTime: next.startTime,
+      endTime: next.endTime,
+      room: next.room,
+      sectionRoom: existing.section.room,
+      excludeSlotId: id,
+    });
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.timetableSlot.update({
+        where: { id },
+        data: next,
+        include: slotInclude,
+      });
+      // M23-W2 (S-2): timetable.slot_created and slot_deleted were
+      // audited, but an in-place reschedule left no trace at all.
+      await this.audit.logAtomic(
+        {
+          collegeId: user.collegeId,
+          actorId: user.id,
+          action: 'timetable.slot_updated',
+          targetType: 'TimetableSlot',
+          targetId: id,
+          metadata: {
+            sectionId: existing.sectionId,
+            changed: changedFields(
+              ['dayOfWeek', 'startTime', 'endTime', 'room'],
+              existing,
+              next,
+            ),
+          },
+        },
+        tx,
+      );
+      return row;
+    });
+    return toItem(updated);
+  }
+
+  async deleteSlot(
+    user: AuthenticatedUser,
+    id: string,
+  ): Promise<{ removed: true }> {
+    const existing = await this.prisma.timetableSlot.findFirst({
+      where: { id, section: { collegeId: user.collegeId } },
+      include: { _count: { select: { sessions: true } } },
+    });
+    if (!existing) {
+      throw new NotFoundException({
+        code: 'NOT_FOUND',
+        message: 'Timetable slot not found',
+      });
+    }
+    if (existing._count.sessions > 0) {
+      // Restrict policy: sessions (and their attendance) reference the slot.
+      throw new BadRequestException({
+        code: 'SLOT_HAS_SESSIONS',
+        message:
+          'This slot already has class sessions and cannot be deleted. Adjust its times instead.',
+      });
+    }
+    await this.lifecycle.assertSectionTermOpen(
+      this.prisma,
+      user.collegeId,
+      existing.sectionId,
+    );
+    await this.prisma.timetableSlot.delete({ where: { id } });
+    await this.audit.log({
+      collegeId: user.collegeId,
+      actorId: user.id,
+      action: 'timetable.slot_deleted',
+      targetType: 'TimetableSlot',
+      targetId: id,
+    });
+    return { removed: true };
+  }
+
+  /**
+   * Conflict detection (Blueprint M3):
+   *  - SLOT_CONFLICT: the same section already meets at an overlapping time.
+   *  - ROOM_CONFLICT: another section in the same term occupies the room at
+   *    an overlapping time.
+   */
+  private async assertNoConflicts(
+    user: AuthenticatedUser,
+    check: {
+      sectionId: string;
+      termId: string;
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      room: string | null;
+      /** M24-W3b (N-16a): the owning section's room, for effective-room
+       * resolution (`slot.room ?? section.room`). */
+      sectionRoom: string | null;
+      excludeSlotId: string | null;
+    },
+  ): Promise<void> {
+    const sameDaySlots = await this.prisma.timetableSlot.findMany({
+      where: {
+        dayOfWeek: check.dayOfWeek,
+        section: { collegeId: user.collegeId, termId: check.termId },
+        ...(check.excludeSlotId ? { id: { not: check.excludeSlotId } } : {}),
+      },
+      include: {
+        section: {
+          // M24-W3b (N-16a): `room` is needed to resolve the effective room.
+          select: {
+            id: true,
+            name: true,
+            room: true,
+            course: { select: { code: true } },
+          },
+        },
+      },
+    });
+
+    for (const slot of sameDaySlots) {
+      if (!overlaps(check.startTime, check.endTime, slot.startTime, slot.endTime)) {
+        continue;
+      }
+      if (slot.sectionId === check.sectionId) {
+        throw new BadRequestException({
+          code: 'SLOT_CONFLICT',
+          message: `This section already meets ${slot.startTime}–${slot.endTime} on that day`,
+        });
+      }
+      // M24-W3b (N-16a): the room check previously required BOTH slots to
+      // carry an explicit room, while every other surface resolves the
+      // room as `slot.room ?? section.room` (e.g. attendance). Two
+      // sections sharing a section-level room, with no room on either
+      // slot, were therefore double-booked silently — the conflict rule
+      // and the display rule disagreed. Compare the same effective room
+      // both sides resolve to. No room policy changes: an explicit slot
+      // room still overrides its section, and two sections with no room
+      // anywhere still do not conflict on room.
+      const effectiveRoom = check.room ?? check.sectionRoom;
+      const slotEffectiveRoom = slot.room ?? slot.section.room;
+      if (effectiveRoom && slotEffectiveRoom && slotEffectiveRoom === effectiveRoom) {
+        throw new BadRequestException({
+          code: 'ROOM_CONFLICT',
+          message: `Room ${effectiveRoom} is occupied by ${slot.section.course.code} — Section ${slot.section.name} (${slot.startTime}–${slot.endTime})`,
+        });
+      }
+    }
+  }
+}
