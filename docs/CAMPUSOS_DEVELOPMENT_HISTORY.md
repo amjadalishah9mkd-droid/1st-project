@@ -173,7 +173,8 @@ Principles applied consistently from M0 onward:
 | M23-W2 | Audit integrity for the S-2 mutation surface | `6c1c3fb` |
 | M23-W3 | Data integrity: D-4 fee consistency, D-1 export filter, D-2 gradePoint | `c7839bf` |
 | M23-W4 | Final re-audit, regression, close-out — **M23 CLOSED** | `52e817f` |
-| M24-W0 | Platform discovery + M24 design (`docs/M24_PLATFORM_DISCOVERY_DESIGN.md`) | *(this commit)* |
+| M24-W0 | Platform discovery + M24 design (`docs/M24_PLATFORM_DISCOVERY_DESIGN.md`) | `5abdbeb` |
+| M24-W1 | Input validation & tenancy hardening (N-1 HIGH, N-5, N-13, N-25) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -3547,6 +3548,111 @@ zero scratch databases). **M24-W1 was NOT started.**
 
 *Last updated after M24-W0 (design only — M24 NOT implemented).*
 
+## M24-W1 — input validation & tenancy hardening
+
+Closes the four W1 findings from `docs/M24_PLATFORM_DISCOVERY_DESIGN.md`,
+including the milestone's HIGH. Gating decisions were taken as recorded
+there: **O-1 = both layers** (validation *and* an explicit tenancy
+predicate) and **O-2 = sweep all 192 routes**. No migration, no schema,
+no dependency, no Docker, no new route, no new permission or role, no
+`PolicyService` change, no UI change, and **no reporting features** — only
+the security defect on the existing analytics endpoint.
+
+Every defect was reproduced before being fixed: the new suite was written
+first and **8 of its 23 tests failed against unfixed code**, one per
+defect.
+
+**N-1 (HIGH) — analytics tenancy/validation bypass.** `@Query('examId')`
+carried no validation pipe, so omitting it yielded `undefined`; Prisma
+drops `undefined` predicates and `ExamPaper` has no `collegeId` of its own,
+so `requireExam` returned an arbitrary exam and the paper query collapsed
+to `where: {}`. Fixed in both layers per O-1: `examAnalyticsQuerySchema`
+makes `examId` a required non-empty string validated *before* the service
+runs, and the paper query now states
+`{ examId, exam: { collegeId: user.collegeId } }` so a widened identifier
+still cannot cross a tenant. Live: omitted → **400** (was 200 returning
+every paper in every college), array → **400** (was 500), valid → 200
+unchanged. Proven cross-tenant against a real second college with its own
+exam, paper and mark; the rival course code, room and paper id appear in no
+response, and a positive control confirms authorized analytics still works.
+
+**N-5 — calendar-invalid dates.** `isoDate` was a syntactic regex, so
+`2024-13-45` reached Prisma as `Invalid Date`. A bare `Date.parse` refine
+would have been insufficient — `Date.parse('2024-02-30')` silently returns
+March 1 — so a calendar **round-trip** check was added to the shared
+primitive in all four schema files and to the export filters. It rejects
+`2024-13-45`, `2024-02-30`, `2024-04-31` and `2023-02-29` while accepting
+real dates including the `2024-02-29` leap day. Live:
+`attendance.csv?from=2024-13-45` → **400** (was 500). A
+`PrismaClientValidationError` → 400 backstop was added to the exception
+filter so any future validation gap degrades to a controlled 400 instead of
+a 500; because that response is now a 4xx it would have stopped being
+logged, so it emits an explicit operational record (fixed schema, generic
+client message) and still counts as an unexpected server error.
+
+**N-13 — term guard on a read path.** `assertTermOpen` was applied inside
+`analytics()`, throwing `409 TERM_CLOSED` on a pure read and making exam
+analytics permanently unreachable after the sanctioned publish → close →
+finalize lifecycle. Removed from the read path only; CLOSED-term *write*
+enforcement is unchanged and pinned by a test asserting a PATCH to an exam
+in a closed term is still refused with the row unmodified.
+
+**N-25 — malformed percent-encoding.** `decodeURIComponent` threw an
+unhandled `URIError` on `%zz`. Wrapped, reusing the established
+`INVALID_FILE_URL` rejection so a malformed escape is indistinguishable
+from any other rejected key. Live: `%zz`, `%`, `abc%` → **400** (was 500).
+
+**Validation sweep (O-2).** All 192 routes were inventoried
+programmatically. **Zero** `@Body` decorators lack a validation pipe.
+Eleven `@Query` parameters did; each was traced to its sink and
+dispositioned. Four were real defects and are fixed — the three above plus
+the array class on `transcript`, `report/term` and, notably, the **public
+unauthenticated** `/auth/invite-info`, where an array token produced a 500.
+The remaining seven are NO DEFECT with reasons recorded (signed-download
+`exp`/`sig` fail closed; optional `userId` on group-leave cannot widen;
+Google `start` parameters are not authorization inputs; one scanner false
+positive). Separately, all 27 models lacking their own `collegeId` were
+reviewed: every query but the N-1 site filters by an identifier already
+resolved under a tenancy-scoped lookup, and no second instance exists of
+N-1's distinguishing shape — a sole predicate that could become
+`undefined`.
+
+On `/auth/invite-info` the rate limiter was deliberately left **first**, so
+validation cannot become a way to skip it; and format rejection does not
+create an existence oracle — a well-formed but nonexistent token still
+returns the same generic `INVALID_TOKEN`.
+
+**Backward compatibility.** Only malformed input changed behaviour. One
+edge was deliberately preserved rather than tightened: `?studentId=`
+(empty) still means "no target supplied" exactly as the previous
+`studentId || undefined` did, pinned by a test covering both a wide scope
+(MISSING_TARGET) and an OWN-scope caller (own record). The web client
+already sends `examId` explicitly and a scalar `studentId`, so no UI change
+was required.
+
+Verified: **752/752 tests (56 suites, +24)**, typecheck 0, Prisma valid,
+**15 migrations** unchanged, API and web production images build, all four
+containers healthy, live/ready/preview 200, backup healthy, four demo
+logins 200, demo identity fingerprint `ae1f7d62…` unchanged, zero fixture
+residue, zero scratch databases. Security sweep of the whole diff: no
+role-name conditionals, no client-controlled tenant/actor identifiers, no
+raw or unsafe SQL added, no shell/eval, no secrets, no new routes or
+permissions, no authorization weakening, no request-body/header/query
+logging, `money.ts` and `permissions.ts` untouched.
+
+*Honest note:* the `OUTSIDE_TERM` NaN-bypass half of N-5 is confirmed at
+code level but could not be reproduced as an observable failure in the
+seeded fixture, because the section had no timetable slots so the failing
+write was never reached. The regression test pins the corrected 400
+behaviour regardless.
+
+**No W2/W3/W4 work was performed.** All other M24 findings (N-2…N-4,
+N-6…N-12, N-14…N-24, N-26…N-32, Res-1) remain DEFERRED exactly as
+recorded, as do every previously deferred product and operational item.
+M24 is **NOT closed**.
+
+*Last updated after M24-W1 (N-1/N-5/N-13/N-25 closed; W2–W4 not started).*
+
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
   Hardening & Debt Retirement (P2-IDOR-1 file authorization, mail
@@ -3558,10 +3664,9 @@ zero scratch databases). **M24-W1 was NOT started.**
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M24 status**: DISCOVERY/DESIGN COMPLETE only (W0) — awaiting O-1…O-8
-  decisions and explicit W1 authorization. Recommended direction is Input
-  Validation & Tenancy Hardening; N-1 is a live-proven HIGH tenancy defect
-  that remains **unfixed by design** (W0 is discovery only).
+- **M24 status**: W0 (discovery/design) and W1 (input validation & tenancy
+  hardening) COMPLETE. N-1, the HIGH tenancy defect, is **CLOSED**.
+  W2–W4 NOT started; O-3…O-8 remain open. M24 is **NOT closed**.
 - **M23 status**: **M23 COMPLETE AND CLOSED (W0–W4)** — Authorization
   Correctness & Audit Integrity. S-1, S-2 (approved scope), D-1, D-2 and
   D-4 all CLOSED; every remaining finding carries an explicit
@@ -3577,10 +3682,10 @@ zero scratch databases). **M24-W1 was NOT started.**
   browser-print; M17 term lifecycle, M16 refunds+accountant, M15
   rollover and M14 payments all remain complete (webhook delivery
   still pending provider-dashboard endpoint registration).
-- **Latest commit**: the M24-W0 discovery/design commit on branch
+- **Latest commit**: the M24-W1 validation/tenancy commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 15 found, database schema up to date
-- **Tests**: **728/728 passing** (55 suites)
+- **Tests**: **752/752 passing** (56 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -3589,10 +3694,10 @@ zero scratch databases). **M24-W1 was NOT started.**
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13 and
   `docs/M23_PLATFORM_DISCOVERY_DESIGN.md` (current reconciliation)
-- **Next planned milestone**: M24-W1 (validation & tenancy correctness) is
-  designed and awaiting authorization. Reporting/analytics is deferred to
-  M25 because M24-W0 proved the analytics surface itself leaks; CI/lint
-  (O-H) is the competing M25 candidate
+- **Next planned milestone**: M24-W2 (file/session/export authorization —
+  N-6…N-10, N-22…N-24, Res-1) is designed and awaiting authorization, and
+  is gated on decisions O-3 and O-4. Reporting/analytics and CI/lint remain
+  M25 candidates
 
 ## 15. Future Roadmap
 

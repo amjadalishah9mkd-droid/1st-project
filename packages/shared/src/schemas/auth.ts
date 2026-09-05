@@ -37,6 +37,24 @@ export const changePasswordSchema = z
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 
 /** Invitation / reset acceptance (M10-W2). Same password policy. */
+/**
+ * M24-W1 (N-1 array class) — query contract for the PUBLIC
+ * `GET /auth/invite-info`. The token was previously read as a bare
+ * `@Query('token')`: an omitted value was defaulted to `''` (safe), but an
+ * array-valued parameter reached the credential lookup and produced a 500
+ * on an unauthenticated endpoint. The token format is the same 64-hex shape
+ * `acceptInviteSchema` already enforces, so an invalid link is rejected
+ * before any lookup — with the same generic failure the acceptance path
+ * uses, so no new existence oracle is introduced.
+ */
+export const inviteInfoQuerySchema = z.object({
+  token: z
+    .string()
+    .trim()
+    .regex(/^[0-9a-f]{64}$/, 'Invalid link'),
+});
+export type InviteInfoQuery = z.infer<typeof inviteInfoQuerySchema>;
+
 export const acceptInviteSchema = z.object({
   token: z
     .string()

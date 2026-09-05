@@ -11,10 +11,12 @@ import {
 import {
   createExamPaperSchema,
   createExamSchema,
+  examAnalyticsQuerySchema,
   gradeBandsUpdateSchema,
   paginationQuerySchema,
   resultsQuerySchema,
   saveMarksSchema,
+  studentTargetQuerySchema,
   updateExamPaperSchema,
   updateExamSchema,
   finalizeResultSchema,
@@ -154,9 +156,13 @@ export class ExamsController {
   @RequirePermission(PERMISSIONS.EXAMS_MANAGE)
   analytics(
     @CurrentUser() user: AuthenticatedUser,
-    @Query('examId') examId: string,
+    // M24-W1 (N-1): validated BEFORE the service can run a query. An
+    // omitted or array-valued examId is now a 400; previously it reached
+    // Prisma as `undefined` and collapsed the tenancy predicate.
+    @Query(new ZodValidationPipe(examAnalyticsQuerySchema))
+    query: z.infer<typeof examAnalyticsQuerySchema>,
   ) {
-    return this.exams.analytics(user, examId);
+    return this.exams.analytics(user, query.examId);
   }
 
   // ── Grade bands ────────────────────────────────────────────
@@ -235,22 +241,26 @@ export class ExamsController {
 
   // Reads ride the existing results.read scopes
   // (OWN/CHILD/ASSIGNED/ALL — ASSIGNED narrowed in M23-W1).
+  // M24-W1 (N-1 array class): studentId is validated as a scalar string;
+  // an array or duplicated parameter previously reached Prisma as a 500.
   @Get('results/report/term/:termId')
   @RequirePermission(PERMISSIONS.RESULTS_READ)
   reportCard(
     @CurrentUser() user: AuthenticatedUser,
     @Param('termId') termId: string,
-    @Query('studentId') studentId?: string,
+    @Query(new ZodValidationPipe(studentTargetQuerySchema))
+    query: z.infer<typeof studentTargetQuerySchema>,
   ) {
-    return this.finalization.report(user, termId, studentId || undefined);
+    return this.finalization.report(user, termId, query.studentId);
   }
 
   @Get('results/transcript')
   @RequirePermission(PERMISSIONS.RESULTS_READ)
   transcript(
     @CurrentUser() user: AuthenticatedUser,
-    @Query('studentId') studentId?: string,
+    @Query(new ZodValidationPipe(studentTargetQuerySchema))
+    query: z.infer<typeof studentTargetQuerySchema>,
   ) {
-    return this.finalization.transcript(user, studentId || undefined);
+    return this.finalization.transcript(user, query.studentId);
   }
 }

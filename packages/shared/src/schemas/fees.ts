@@ -1,9 +1,23 @@
 import { z } from 'zod';
 
 /** Fee schemas (M6). Single validation source. */
+// M24-W1 (N-5): the regex is syntactic only — it accepted impossible dates
+// like 2024-13-45 and 2024-02-30, which reached Prisma as `Invalid Date`
+// (a 500) and, in attendance session generation, made every NaN comparison
+// false and bypassed the OUTSIDE_TERM guard. The round-trip check rejects
+// any value the calendar cannot represent exactly: `2024-02-30` normalizes
+// to March 1 and therefore no longer re-serializes to the input, while real
+// dates (including leap days such as 2024-02-29) round-trip unchanged.
 const isoDate = z
   .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use the format YYYY-MM-DD');
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use the format YYYY-MM-DD')
+  .refine((value) => {
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    return (
+      !Number.isNaN(parsed.getTime()) &&
+      parsed.toISOString().slice(0, 10) === value
+    );
+  }, 'Not a real calendar date');
 
 export const feeComponentSchema = z.object({
   label: z.string().trim().min(1, 'Label is required').max(80),

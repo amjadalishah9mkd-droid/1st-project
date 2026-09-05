@@ -196,6 +196,18 @@ Two structural properties matter for M24:
 - **Disposition:** NEW DEFECT — implementation required (**M24-W1, first
   item**).
 
+> **RESOLVED in M24-W1.** Decision O-1 was implemented as **both**
+> layers. (1) `examAnalyticsQuerySchema` makes `examId` a required
+> non-empty string, attached with `ZodValidationPipe`, so the service can
+> no longer be reached without an identifier and an array-valued
+> parameter is a 400 rather than a Prisma 500. (2) Defence in depth: the
+> `examPaper.findMany` predicate is now
+> `{ examId, exam: { collegeId: user.collegeId } }`, so even a widened
+> identifier cannot return another college's papers. Live: omitted → 400
+> `VALIDATION_ERROR` (was 200 with every paper in every college), array →
+> 400 (was 500), valid → 200 unchanged. Cross-tenant proven with a real
+> second college carrying its own exam, paper and mark.
+
 ### N-5 — MEDIUM — regex-only date validation reaches Prisma as `Invalid Date`
 
 - **Location:** `packages/shared/src/schemas/academics.ts:4-6` and
@@ -214,6 +226,23 @@ Two structural properties matter for M24:
   comparisons evaluate false and the guard is *bypassed* before the
   `createMany` fails.
 - **Disposition:** NEW DEFECT — implementation required (W1).
+
+> **RESOLVED in M24-W1.** `isoDate` now adds a calendar **round-trip**
+> check to the existing regex in all four shared schema files, and the
+> export filters use the same rule. A bare `Date.parse` refine would have
+> been insufficient: `Date.parse('2024-02-30')` silently returns March 1.
+> The round-trip rejects `2024-13-45`, `2024-02-30`, `2024-04-31` and
+> `2023-02-29` while accepting real dates including the `2024-02-29` leap
+> day. Live: `attendance.csv?from=2024-13-45` → 400 (was 500).
+> A `PrismaClientValidationError` → 400 backstop was also added to the
+> exception filter, kept diagnosable via an explicit operational log
+> record with a generic client message.
+>
+> *Honest note:* the `OUTSIDE_TERM` NaN bypass is confirmed at code level
+> but could **not** be reproduced as an observable failure in the seeded
+> fixture, because the section had no timetable slots so the failing write
+> was never reached. The regression test pins the corrected 400 behaviour
+> either way.
 
 ### N-7 — MEDIUM — `FilesController` declares no permission, bypassing the verification-lifecycle gate
 
@@ -293,6 +322,11 @@ Two structural properties matter for M24:
 `decodeURIComponent('%zz')` throws `URIError` (not an `HttpException`) → 500
 instead of 400. Robustness, not a boundary failure. NEW DEFECT (W1 with the
 validation sweep).
+
+> **RESOLVED in M24-W1.** The decode is wrapped and a failure reuses the
+> established `INVALID_FILE_URL` rejection, so a malformed escape is
+> indistinguishable from any other rejected key. Live: `%zz`, `%` and
+> `abc%` all → 400 (was 500).
 
 ### Verified SAFE — recorded so the negative results are on record
 
@@ -462,6 +496,10 @@ New audit-coverage gaps:
   lifecycle is publish → close → finalize, exam analytics becomes
   permanently unreachable exactly when it is most useful. NEW DEFECT (W1,
   alongside N-1 in the same method).
+  **RESOLVED in M24-W1:** the guard was removed from the read path only.
+  CLOSED-term *write* enforcement is unchanged and pinned by a test
+  asserting a PATCH to an exam in a closed term is still refused and the
+  row is unmodified.
 - **N-14 — LOW —** published assignment `dueAt` is mutable with no
   `publishedAt` guard (contrast `exams.update`), and `Submission.isLate` is
   computed once at submit (`assignments.service.ts:526`) and never
@@ -1008,3 +1046,71 @@ W1/W2 and need answers before implementation.
 **No defect discovered in W0 was fixed. No source, schema, migration,
 dependency, Docker, permission or test change was made. M24-W1 was NOT
 started.**
+
+---
+
+## 26. M24-W1 outcome (validation sweep results and dispositions)
+
+Implemented at commit `fix(m24): harden input validation and tenancy boundaries`.
+Decisions **O-1 = both layers** and **O-2 = all 192 routes** were applied as
+recommended above.
+
+### Sweep coverage
+
+All **192 routes** were inventoried programmatically (verb, path, and every
+`@Param`/`@Query`/`@Body` decorator with its pipe). Results:
+
+- **`@Body` without `ZodValidationPipe`: 0.** Every mutating body on the
+  platform is already schema-validated.
+- **`@Query` without `ZodValidationPipe`: 11.** Each was traced to its sink.
+- **Queries on parent-scoped models:** 27 models carry no `collegeId` of
+  their own. Every query on them was reviewed; all but the N-1 site filter
+  by an identifier that was itself resolved under a tenancy-scoped lookup,
+  which is the established safe pattern. The distinguishing property of
+  N-1 was that its **sole predicate could become `undefined`**, erasing the
+  filter entirely. No second instance of that shape exists.
+
+### Disposition of all 11 unvalidated query parameters
+
+| Route | Parameter | Verdict |
+|---|---|---|
+| `GET /results/analytics` | `examId` | **FIXED (N-1)** — required + tenancy predicate |
+| `GET /results/transcript` | `studentId` | **FIXED (N-1 array class)** — scalar-only; empty still means "absent" |
+| `GET /results/report/term/:termId` | `studentId` | **FIXED (N-1 array class)** — same |
+| `GET /auth/invite-info` | `token` | **FIXED (N-1 array class)** — 64-hex validated *after* the rate limiter; public endpoint no longer 500s |
+| `GET /files/:key` | `exp`, `sig` | **NO DEFECT** — fails closed; missing/array both 403 (signature verification rejects before any use) |
+| `DELETE /community/groups/:id/membership` | `userId` | **NO DEFECT** — optional by design (self vs moderator removal); array yields 404, no widening |
+| `GET /auth/google/start` | `intent`, `college`, `token` | **NO DEFECT** — array input returns 503/redirect, never 500; `intent` is not an authorization input and the token is carried in the signed state cookie |
+| `GET /auth/config` | *(none)* | **NO DEFECT** — scanner false positive; the handler takes no parameters |
+
+### Concrete findings and dispositions
+
+| ID | Severity | Disposition |
+|---|---|---|
+| N-1 analytics tenancy/validation bypass | HIGH | **CLOSED** |
+| N-1 array class — analytics, transcript, report card, invite-info | MEDIUM | **CLOSED** |
+| N-5 calendar-invalid dates → 500 + guard bypass | MEDIUM | **CLOSED** |
+| N-13 term guard on a read path | MEDIUM | **CLOSED** |
+| N-25 malformed percent-encoding → 500 | LOW | **CLOSED** |
+| All other M24 findings (N-2…N-4, N-6…N-12, N-14…N-24, N-26…N-32, Res-1) | HIGH…INFO | **DEFERRED** — unchanged, W2/W3/W4 |
+
+No new HIGH or CRITICAL defect was discovered during the sweep, so no stop
+condition was triggered. No finding was silently fixed or silently closed.
+
+### Scope discipline
+
+No migration, no schema change, no dependency change, no Docker change, no
+new route, no new permission or role (`permissions.ts` untouched), no
+`PolicyService` change, no money/financial primitive change, no UI change
+(the web client already sends `examId` explicitly and a scalar `studentId`,
+verified in source). Reporting/analytics features were **not** built — only
+the security defect on the existing endpoint was fixed.
+
+### Backward compatibility
+
+The only intentional behaviour changes are rejections of previously-500ing
+or previously-widening malformed input. Valid requests are unchanged, and
+one edge was deliberately preserved rather than tightened: `?studentId=`
+(empty) still means "no target supplied", exactly as the old
+`studentId || undefined` did — pinned by a dedicated regression test for
+both a wide scope (MISSING_TARGET) and an OWN-scope caller (own record).

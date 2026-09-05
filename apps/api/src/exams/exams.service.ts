@@ -727,10 +727,23 @@ export class ExamsService {
   }
 
   async analytics(user: AuthenticatedUser, examId: string): Promise<ExamAnalytics> {
+    // The exam is resolved through the established tenant-scoped helper,
+    // so a foreign or unknown id is an indistinguishable 404.
     const exam = await this.requireExam(user, examId);
-    await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, exam.termId);
+    // M24-W1 (N-13): analytics is a pure READ, so it is NOT gated on the
+    // term being open. The previous `assertTermOpen` here threw
+    // 409 TERM_CLOSED and made analytics permanently unreachable after the
+    // sanctioned publish → close → finalize lifecycle, which is the exact
+    // point it is most useful. Every other read path is likewise unguarded;
+    // CLOSED-term enforcement remains on the write paths only.
     const papers = await this.prisma.examPaper.findMany({
-      where: { examId },
+      // M24-W1 (N-1, decision O-1): defence in depth. `examId` is now
+      // validated as required at the controller, but `ExamPaper` carries no
+      // `collegeId` of its own — it reaches a college only through `exam` —
+      // so the tenancy predicate is stated explicitly here as well. Even if
+      // a caller ever reached this query with a widened identifier, it can
+      // no longer return another college's papers.
+      where: { examId, exam: { collegeId: user.collegeId } },
       include: {
         section: { include: { course: { select: { code: true } } } },
         marks: true,

@@ -13,6 +13,7 @@ import {
 import type { Request, Response } from 'express';
 import {
   acceptInviteSchema,
+  inviteInfoQuerySchema,
   changePasswordSchema,
   loginSchema,
   updatePreferencesSchema,
@@ -76,11 +77,18 @@ export class AuthController {
   @Public()
   @Get('invite-info')
   async inviteInfo(
-    @Query('token') token: string | undefined,
+    @Query() query: unknown,
     @Req() req: Request,
   ): Promise<{ mode: 'password' | 'google' | 'both'; collegeName: string; firstName: string }> {
+    // M24-W1 (N-1 array class): the rate limiter deliberately stays FIRST,
+    // so validation cannot become a way to skip it. The token is then
+    // validated with the shared schema (via the same pipe, so the error
+    // envelope is identical) before it can reach the credential lookup —
+    // an array-valued token previously reached the lookup and produced a
+    // 500 on this public endpoint.
     this.limiter.assert('inviteInfo', requestMeta(req).ip);
-    const record = await this.credentials.lookupValid(token ?? '', 'INVITE');
+    const { token } = new ZodValidationPipe(inviteInfoQuerySchema).transform(query);
+    const record = await this.credentials.lookupValid(token, 'INVITE');
     return {
       mode: this.credentials.inviteMode(record, this.google.isConfigured()),
       collegeName: record.user.college.name,

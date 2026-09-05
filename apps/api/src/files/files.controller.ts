@@ -103,7 +103,21 @@ export class FilesController {
         message: 'Only CampusOS file URLs can be signed',
       });
     }
-    const key = decodeURIComponent(body.url.slice(FILE_URL_PREFIX.length));
+    // M24-W1 (N-25): `signFileUrlSchema`'s regex admits a lone `%` or a
+    // malformed escape such as `%zz`, and `decodeURIComponent` throws a
+    // `URIError` on those. A `URIError` is not an `HttpException`, so it
+    // surfaced as a 500 instead of the intended 400. Decode defensively and
+    // reuse the established INVALID_FILE_URL rejection, so a malformed key
+    // is indistinguishable from any other rejected key.
+    let key: string;
+    try {
+      key = decodeURIComponent(body.url.slice(FILE_URL_PREFIX.length));
+    } catch {
+      throw new BadRequestException({
+        code: 'INVALID_FILE_URL',
+        message: 'Only CampusOS file URLs can be signed',
+      });
+    }
     if (
       key.length === 0 ||
       key.includes('/') ||

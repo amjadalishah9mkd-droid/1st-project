@@ -36,10 +36,23 @@ const studentsQuery = z.object({
   departmentId: z.string().optional(),
   batch: z.string().max(20).optional(),
 });
+// M24-W1 (N-5): the same calendar round-trip check the shared `isoDate`
+// primitive uses. Previously a syntactically-valid but impossible date
+// (`2024-13-45`) reached Prisma as `Invalid Date` and returned a 500.
+const isoDateFilter = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((value) => {
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    return (
+      !Number.isNaN(parsed.getTime()) &&
+      parsed.toISOString().slice(0, 10) === value
+    );
+  }, 'Not a real calendar date');
 const attendanceQuery = z.object({
   sectionId: z.string().optional(),
-  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  from: isoDateFilter.optional(),
+  to: isoDateFilter.optional(),
 });
 const feesQuery = z.object({
   status: z

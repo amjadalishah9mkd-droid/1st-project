@@ -71,6 +71,42 @@ export const resultsQuerySchema = z.object({
   termId: z.string().optional(),
 });
 
+/**
+ * M24-W1 (N-1) — `GET /results/analytics` query contract.
+ *
+ * `examId` is REQUIRED. Before this schema existed the parameter was read
+ * as a bare `@Query('examId')`, so omitting it yielded `undefined`; Prisma
+ * drops `undefined` predicates, and `ExamPaper` carries no `collegeId` of
+ * its own, so the analytics query degraded to `where: {}` and returned
+ * every exam paper in every college. Requiring a non-empty string here
+ * means the service can never be reached with a missing identifier, and
+ * an array-valued parameter is rejected as a 400 instead of reaching
+ * Prisma as a 500.
+ */
+export const examAnalyticsQuerySchema = z.object({
+  examId: z.string().min(1, 'examId is required'),
+});
+export type ExamAnalyticsQuery = z.infer<typeof examAnalyticsQuerySchema>;
+
+/**
+ * M24-W1 (N-1 array class) — the finalized-results reads take an optional
+ * `studentId`. It must be a scalar string: an array or duplicated
+ * parameter previously reached Prisma and produced a 500.
+ *
+ * The empty string is mapped to `undefined` to preserve the exact prior
+ * controller semantics (`studentId || undefined`), so `?studentId=` still
+ * means "no target supplied" — for OWN scope that is the caller's own
+ * record, and for wider scopes it is still MISSING_TARGET. Only the
+ * array/duplicate defect changes behaviour.
+ */
+export const studentTargetQuerySchema = z.object({
+  studentId: z
+    .string()
+    .optional()
+    .transform((value) => (value ? value : undefined)),
+});
+export type StudentTargetQuery = z.infer<typeof studentTargetQuerySchema>;
+
 // ── M18-W1: academic result finalization (design §17) ─────────────────
 // Typed confirmation = the term label (M15/M17 pattern), validated
 // server-side. The client never supplies collegeId, status, version or
