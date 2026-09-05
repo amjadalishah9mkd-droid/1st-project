@@ -17,7 +17,12 @@ containers healthy, demo state unchanged
 - **Runtime**: NestJS 10 API, Prisma 5.22 / PostgreSQL, Next.js 14 web,
   shared TypeScript/Zod contract package. Node engines `>=20`; images
   `node:22-bookworm-slim`.
-- **Authorization**: 37 permissions, 68 role grants, five scopes
+- **Authorization**: 38 permissions, 73 role grants, five scopes
+  *(corrected in M24-W0 — this line originally read "37 permissions, 68
+  role grants", which was a miscount. Verified against source at `ac25eec`
+  and against the seeded `Permission`/`RolePermission` tables: 38 and 73.
+  `permissions.ts` has been unchanged since M18 `c555035`, so this was
+  never drift. See M24 finding N-31.)*
   (ALL/ASSIGNED/DEPARTMENT/OWN/CHILD) resolved by PolicyService
   (`packages/shared/src/permissions.ts:9-193`,
   `apps/api/src/access/policy.service.ts:139-233`).

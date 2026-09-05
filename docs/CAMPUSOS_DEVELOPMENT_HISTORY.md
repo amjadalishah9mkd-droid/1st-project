@@ -172,7 +172,8 @@ Principles applied consistently from M0 onward:
 | M23-W1 | Enforce ASSIGNED scope for finalized results (S-1, HIGH) | `9c46336` |
 | M23-W2 | Audit integrity for the S-2 mutation surface | `6c1c3fb` |
 | M23-W3 | Data integrity: D-4 fee consistency, D-1 export filter, D-2 gradePoint | `c7839bf` |
-| M23-W4 | Final re-audit, regression, close-out — **M23 CLOSED** | *(this commit)* |
+| M23-W4 | Final re-audit, regression, close-out — **M23 CLOSED** | `52e817f` |
+| M24-W0 | Platform discovery + M24 design (`docs/M24_PLATFORM_DISCOVERY_DESIGN.md`) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -3442,7 +3443,109 @@ at 15 migrations throughout.
 **M23 CLOSED.** M24 has NOT been started and requires separate
 authorization; reporting/analytics remains the leading M24 candidate.
 
-*Last updated after M23-W4 — **M23 CLOSED** (W0–W4 complete). M24 not started.*
+*Last updated after M23-W4 — **M23 CLOSED** (W0–W4 complete).*
+
+## M24-W0 — Platform discovery + design (design only)
+
+Read-only discovery from `52e817f`. Baseline independently re-measured
+rather than inherited: 728/728 tests (55 suites), typecheck 0, Prisma
+valid, 15 migrations up to date, all four containers healthy,
+live/ready/preview 200, backup healthcheck passing, four demo logins 200,
+zero skipped/only/todo tests. Scale: 28 controllers, 192 routes,
+62 services, 57 Prisma models, 38 permissions, 73 grants.
+`docs/M24_PLATFORM_DISCOVERY_DESIGN.md` records the full analysis.
+
+**M23 re-verified, nothing reopened.** All five M23 fixes are present and
+effective at this HEAD — the S-1 `ASSIGNED` branch, the nine atomic
+`logAtomic` audit sites, the relational `fees.csv` term filter, the
+grade-band `gradePoint` preservation and the fee-structure `FOR UPDATE`
+lock — with suites 18/18, 35/35 and 25/25 green. `AuditLog` remains
+append-only and `permissions.ts` is unchanged since M18.
+
+**Highest-priority new finding (N-1, HIGH, live-proven).**
+`GET /results/analytics` is the only query parameter in the exams
+controller not routed through `ZodValidationPipe`
+(`exams/exams.controller.ts:153-160`). Omitting `examId` yields
+`undefined`, which Prisma drops, so `requireExam` returns an *arbitrary*
+exam instead of 404 and `examPaper.findMany({ where: { examId: undefined } })`
+becomes `where: {}` — and `ExamPaper` carries no `collegeId`, reaching a
+college only through `exam`. Proven live at this HEAD: the request
+returned **HTTP 200 with all four `ExamPaper` rows spanning both exams**
+(`papers_per_exam` = 3,1) while reporting one arbitrary exam's title. In a
+multi-college deployment this is a cross-tenant disclosure of paper ids,
+course codes, section names, mark counts and per-paper statistics. Graded
+HIGH as a broken tenancy invariant rather than an active breach: the
+caller must be an authenticated ADMIN (teacher 403, accountant 403,
+anonymous 401, all verified) and the platform is single-college today.
+`?examId=` and `?examId=nonexistent` correctly 404; only total omission
+triggers it, and `?examId[]=a&examId[]=b` returns 500.
+
+Its root cause is systemic — validation is opt-in per route and Prisma
+silently drops `undefined` predicates. **N-5** is the same class: the
+shared `isoDate` regex is syntactic only, so `2024-13-45` reaches Prisma
+as `Invalid Date` — proven live as a **500** on
+`exports/attendance.csv?from=2024-13-45`, and more seriously it *bypasses*
+the `OUTSIDE_TERM` guard in attendance session generation because every
+`NaN` comparison evaluates false.
+
+Two findings are policy drift rather than code error. **N-6:**
+`students.csv` now returns the **full student directory including email
+addresses** to ACCOUNTANT (proven live, 200) because M16 widened
+`users.read` to ALL scope after M12 declared exports "admin-only in v1".
+**N-7:** `FilesController` declares no permission at all, and
+`PermissionsGuard` returns `true` without metadata, so the M11-W5
+verification-lifecycle gate never runs for upload or URL signing — a
+self-registered UNVERIFIED account can upload and sign.
+
+Also found: rollover mutating a CLOSED **source** term's enrollments
+against the file's own stated invariant (N-2); `assertTermOpen`'s
+`FOR SHARE` lock released before the caller's write at **25 of 33 call
+sites**, degrading the documented serialization guard to an
+unsynchronized preflight (N-3); an enrollment-capacity TOCTOU with no
+database constraint — the same unlocked read-modify-write class M23 fixed
+in fees, which did not generalize (N-4); and grade-band edits
+retroactively re-grading already-published, marks-locked exams because
+labels resolve at read time, plus unvalidated coverage gaps (N-11).
+
+**33 new findings: 2 HIGH, 12 MEDIUM, 14 LOW, 4 INFO, 0 CRITICAL.** No
+unconditional or unauthenticated exploit was found. The extensive
+verified-SAFE results are recorded too, including path-traversal defence,
+signed-URL verification, refresh-token rotation with family-wide reuse
+detection, immediate effect of suspension, the OAuth implementation
+(PKCE + nonce + signed one-time state with DB-atomic consumption +
+RS256/`kid` pinning + email-is-never-identity), the finalization snapshot
+model, and `Decimal`-only money with a single reducer.
+
+**Three previously deferred findings were honestly reclassified
+SUPERSEDED** because their premise was wrong: T-1, T-2 and T-3 claimed the
+notification scheduler, bulk student import and the users module had no
+coverage — all three *are* covered (the scheduler from a misplaced owner
+in `moderation.e2e-spec.ts`), so they are ownership debt, not coverage
+holes. Reporting/analytics is **superseded as the M24 recommendation**:
+N-1 proves the analytics surface leaks and N-13 makes it unreachable for
+closed terms, so building reporting first would inherit both. O-H (no CI,
+no lint, no web test harness) was confirmed and promoted to HIGH. One
+documentation defect was corrected: M23-W0 recorded "37 permissions /
+68 grants"; source and the seeded database both say **38 / 73** (N-31).
+
+**Recommended M24: Input Validation & Tenancy Hardening** — W1 validation
+and tenancy correctness (N-1, N-5, N-13, N-25 plus a sweep of all 192
+routes), W2 file/session/export authorization (N-6…N-10, N-22…N-24),
+W3 academic lifecycle and concurrency integrity (N-2, N-3, N-4, N-11,
+N-12, N-14…N-18), W4 re-audit and close-out. No migration is anticipated;
+migrations stay at 15. Reporting/analytics and CI/lint move to M25.
+Eight open decisions O-1…O-8 are recorded, with O-1/O-2 gating W1 and
+O-3/O-4 gating W2.
+
+No implementation was performed: no source, schema, migration, package,
+UI, Docker, permission or test change, and no discovered defect fixed.
+Verification was read-only HTTP plus read-only SQL; no fixture was
+created and no business or demo data was modified. Database integrity
+unchanged before and after (`users=20 active=20 students=13 colleges=1
+migrations=15`, 8 grade bands all `gradePoint` NULL, zero fixture rows,
+zero scratch databases). **M24-W1 was NOT started.**
+
+*Last updated after M24-W0 (design only — M24 NOT implemented).*
 
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
@@ -3455,6 +3558,10 @@ authorization; reporting/analytics remains the leading M24 candidate.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
+- **M24 status**: DISCOVERY/DESIGN COMPLETE only (W0) — awaiting O-1…O-8
+  decisions and explicit W1 authorization. Recommended direction is Input
+  Validation & Tenancy Hardening; N-1 is a live-proven HIGH tenancy defect
+  that remains **unfixed by design** (W0 is discovery only).
 - **M23 status**: **M23 COMPLETE AND CLOSED (W0–W4)** — Authorization
   Correctness & Audit Integrity. S-1, S-2 (approved scope), D-1, D-2 and
   D-4 all CLOSED; every remaining finding carries an explicit
@@ -3470,7 +3577,7 @@ authorization; reporting/analytics remains the leading M24 candidate.
   browser-print; M17 term lifecycle, M16 refunds+accountant, M15
   rollover and M14 payments all remain complete (webhook delivery
   still pending provider-dashboard endpoint registration).
-- **Latest commit**: the M23-W4 close-out commit on branch
+- **Latest commit**: the M24-W0 discovery/design commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 15 found, database schema up to date
 - **Tests**: **728/728 passing** (55 suites)
@@ -3482,10 +3589,10 @@ authorization; reporting/analytics remains the leading M24 candidate.
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13 and
   `docs/M23_PLATFORM_DISCOVERY_DESIGN.md` (current reconciliation)
-- **Next planned milestone**: none scheduled. M23 is CLOSED; M24 has NOT
-  been started and requires explicit authorization (reporting/analytics
-  is the leading candidate, with the T-1/T-2 test gaps and O-H CI/lint
-  as competing priorities)
+- **Next planned milestone**: M24-W1 (validation & tenancy correctness) is
+  designed and awaiting authorization. Reporting/analytics is deferred to
+  M25 because M24-W0 proved the analytics surface itself leaks; CI/lint
+  (O-H) is the competing M25 candidate
 
 ## 15. Future Roadmap
 

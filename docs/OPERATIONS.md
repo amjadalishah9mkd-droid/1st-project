@@ -1080,6 +1080,18 @@ unwritable, or backups are configured but stale (older than
 `BACKUP_MAX_AGE_SECONDS`, default 26h — one missed daily cycle). The
 response never contains credentials, DSNs, paths or filenames.
 
+> **Config trap — set `BACKUP_MAX_AGE_SECONDS` to a plain integer only**
+> (verified in M24-W0, finding N-20; not yet fixed).
+> The API computes `Number(BACKUP_MAX_AGE_SECONDS)`. A non-numeric value
+> yields `NaN`, and `latestAgeSeconds > NaN` is always false, so an
+> arbitrarily stale backup is reported `stale: false` and `/health/ops`
+> reports `ok` — **staleness detection is silently disabled**. The
+> container healthcheck (`scripts/backup/backup-healthcheck.sh`) validates
+> the same variable strictly and fails closed, so on a malformed value the
+> two disagree: the backup sidecar goes unhealthy while `/health/ops` still
+> says `ok`. If those two ever disagree, trust the sidecar and check this
+> variable first. Leave it unset to use the 26h default.
+
 `runtime` is a fixed-name, **instance-local** counter snapshot with
 `scope: instance` and `resetAt`. Values: `requestsCompleted`,
 `responses4xx`, `responses5xx`, `known5xx`, `unexpected5xx`, and
