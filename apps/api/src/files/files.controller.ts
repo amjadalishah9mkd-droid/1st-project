@@ -131,12 +131,22 @@ export class FilesController {
         message: 'Only CampusOS file URLs can be signed',
       });
     }
-    // M11-W3: verification evidence is a restricted file class. Signing —
-    // the only way to a working URL — requires per-user authorization.
-    await this.evidenceAuthz.assertCanSign(user, key);
+    // M24-W2 (N-23): the tenancy/ownership gate runs FIRST. It is the
+    // cheaper, non-auditing check, and EvidenceAuthzService writes a
+    // `verification.evidence_accessed` record as soon as it authorizes.
+    // With the previous ordering a request that passed the evidence gate
+    // but was then refused here still produced a successful-access audit
+    // row — a false positive in the security trail. Ordering them this way
+    // means the access event is only ever recorded once EVERY gate has
+    // passed. Both gates still apply and neither is weakened: the refusal
+    // outcome for an unauthorized caller is the same indistinguishable 404.
+    //
     // M19-W1 (P2-IDOR-1): tenant/ownership authorization for every key with
     // an ownership record; unknown keys are grandfathered pre-M19 uploads.
     await this.storedFileAuthz.assertCanSign(user, key);
+    // M11-W3: verification evidence is a restricted file class. Signing —
+    // the only way to a working URL — requires per-user authorization.
+    await this.evidenceAuthz.assertCanSign(user, key);
     const { exp, sig } = this.signer.sign(key);
     return {
       url: `${FILE_URL_PREFIX}${encodeURIComponent(key)}?exp=${exp}&sig=${sig}`,

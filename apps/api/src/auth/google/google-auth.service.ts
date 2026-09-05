@@ -707,6 +707,15 @@ export class GoogleAuthService {
     }
 
     await this.prisma.authIdentity.delete({ where: { id: identity.id } });
+    // M24-W2 (N-24): unlinking removed the identity but revoked no refresh
+    // token, so any session established VIA the now-removed Google
+    // identity stayed valid for the full refresh window. The primary
+    // reason to unlink is a compromised Google account, where the user
+    // reasonably expects existing sessions to die. Revoke every family —
+    // the same established mechanism `UserLifecycleService` uses on a
+    // status change and the credential path uses on a password reset
+    // (passing `null` keeps no family alive, so this fails closed).
+    await this.tokens.revokeAllExceptFamily(user.id, null);
     await this.audit.log({
       collegeId: user.collegeId,
       actorId: user.id,

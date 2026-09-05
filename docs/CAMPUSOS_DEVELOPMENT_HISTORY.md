@@ -174,7 +174,8 @@ Principles applied consistently from M0 onward:
 | M23-W3 | Data integrity: D-4 fee consistency, D-1 export filter, D-2 gradePoint | `c7839bf` |
 | M23-W4 | Final re-audit, regression, close-out — **M23 CLOSED** | `52e817f` |
 | M24-W0 | Platform discovery + M24 design (`docs/M24_PLATFORM_DISCOVERY_DESIGN.md`) | `5abdbeb` |
-| M24-W1 | Input validation & tenancy hardening (N-1 HIGH, N-5, N-13, N-25) | *(this commit)* |
+| M24-W1 | Input validation & tenancy hardening (N-1 HIGH, N-5, N-13, N-25) | `2785c78` |
+| M24-W2 | File authorization, session integrity, export PII (N-6, N-23 ordering, N-24) | *(this commit)* |
 
 *(M10 was deliberately executed in the order W3 → W1 → W2 → W4 → W5: the
 config/env hardening of W3 provided the `FILE_URL_SECRET` plumbing that W1
@@ -3653,6 +3654,104 @@ M24 is **NOT closed**.
 
 *Last updated after M24-W1 (N-1/N-5/N-13/N-25 closed; W2–W4 not started).*
 
+## M24-W2 — file authorization, session integrity and export PII (partial)
+
+Executes the **independent subset** of W2. Three findings are closed with
+runtime and mutation evidence; four are reported blocked by explicit W2
+constraints rather than worked around. W2 is therefore **partially
+complete** and M24 remains **open**.
+
+**Decisions applied as authorized.** **O-3 = B** — ACCOUNTANT keeps
+`students.csv`, without email. **O-4 = B2 (temporary/narrowed)** —
+EVIDENCE keeps its strict gate; **`OTHER` explicitly retains its existing
+owner/same-college behaviour** (no fail-closed, no reinterpretation, no
+bulk relabel); SUBMISSION/COMMUNITY_ATTACHMENT get no new model, deferring
+the deeper N-8 sharing question. This resolved the blocker that stopped the
+previous W2 attempt.
+
+**N-6 — students.csv PII (CLOSED).** M12 documented exports as admin-only;
+M16 then granted ACCOUNTANT `users.read` at ALL scope, so the finance role
+silently gained the full directory including student email. Per O-3(B) the
+permission was *not* narrowed — instead the `email` column is emitted only
+to principals holding the existing **ADMIN-only `users.manage`**
+permission, resolved through PolicyService. That is the same policy-driven
+minimisation M19-W2 used for emergency contacts and M21-W3 for lifecycle
+metadata: no role-name conditional, no new permission, `users.read` grants
+untouched. Live: the ADMIN header still carries `email`; the ACCOUNTANT
+header is `firstName,lastName,admissionNo,rollNo,department,batch,status`
+with **zero** `@campusos.dev` occurrences in the body, the student rows
+still present, teacher 403, anonymous 401, tenant scoping intact, and a
+forged `collegeId`/`role` cannot restore the column. A test also asserts no
+substitute PII field was introduced. The stale "admin-only in v1" note in
+`exports.module.ts` is corrected in place — the accurate rule was always
+"resolved scope ALL for the backing permission".
+
+**N-23 ordering — evidence audit (CLOSED).** `EvidenceAuthzService` writes
+`verification.evidence_accessed` as soon as it authorizes, but the
+controller ran it *before* the `StoredFileAuthzService` tenancy gate, so a
+request ultimately refused still produced a successful-access record. The
+two gates were reordered — tenancy first — so the access event is recorded
+only after every gate passes. Both gates remain present and neither is
+weakened; an unauthorized caller still gets the same indistinguishable 404.
+Proven with a fixture whose `EvidenceFile` is in-tenant while its
+`StoredFile` ownership row is rival-college: the request 404s and writes
+**no** audit row, while a genuinely authorized signing still writes exactly
+one with server-derived actor and tenant and `{as}` metadata only.
+
+**N-24 — Google unlink (CLOSED).** Unlink deleted the `AuthIdentity` but
+revoked no refresh token, so sessions created via the removed identity
+stayed valid for the full window — precisely wrong for the "revoke a
+compromised Google account" case. It now calls
+`tokens.revokeAllExceptFamily(user.id, null)`, the established mechanism
+used on status change and password reset (passing `null` keeps no family
+alive, so it fails closed). Proven end to end: live refresh rows drop to 0,
+the identity is gone, and replaying the pre-unlink refresh cookie returns
+401.
+
+**Blocked and NOT implemented — reported, not worked around.**
+**N-7** (FilesController permission metadata): the fix is to declare a
+permission so PolicyService's lifecycle gate runs, but **no permission is
+held by every uploading role** (the intersection of all five roles' grants
+is empty) and `POST /files` is a single shared endpoint serving assignment
+attachments, submissions and community resources. Every available route is
+forbidden here — a new permission, editing `permissions.ts`, exposing
+`lifecycleAllows` from `src/access`, new per-purpose routes, or duplicating
+the lifecycle rule in the controller — and deciding which roles may upload
+is a product decision. **N-10** (login tenancy): closing it requires a way
+for login to disambiguate tenant, a product/contract decision; a bare
+`orderBy` would be a change that cannot be proven to fix the finding.
+**N-22** (orphan reaper): identifying unreferenced keys requires exactly
+the `Submission.fileUrl`/`Post.attachments`/`Resource.fileUrl` reverse-scan
+W2 forbids, and is inseparable from the deferred N-8 model. **N-23
+download-audit half**: `GET /files/:key` is `@Public()` and
+signature-authorized, so there is no session from which to derive
+`actorId`, which W2 requires. **N-8, N-9, Res-1** remain deferred by
+O-4(B2); Res-1 is additionally inert here (`Resource.fileUrl` = 0 rows).
+
+**Mutation-tested.** Reverting the N-6 gate fails 4 tests, the N-23
+reordering fails 1, and the N-24 revocation fails 1 — each security fix is
+genuinely covered, not merely present.
+
+Verified: **769/769 tests (57 suites, +17)**, typecheck 0, Prisma valid,
+**15 migrations** unchanged, API and web production images build, all four
+containers healthy, live/ready/preview 200, backup healthy, four demo
+logins 200. M23 re-confirmed closed (S-1, and the W1/W2/W3 suites all
+green at 102/102). Demo integrity unchanged: `users=20 active=20
+students=13 colleges=1 migrations=15 gradebands=8 null_gp=8`, identity
+`ae1f7d62…`, zero fixture users/colleges/stored-files/identities, zero
+scratch databases, no validation images. `OTHER`-purpose file behaviour is
+pinned unchanged by a dedicated test, so W2 provably did not break existing
+file access.
+
+No Prisma schema, migration, dependency, Docker, `.alloy`, `money.ts`,
+`permissions.ts`, `src/access`/PolicyService, UI, new route, new permission
+or new role change. **M24-W3 and M24-W4 were NOT started. M24 remains
+OPEN**, with N-7, N-8, N-9, N-10, N-22, the N-23 download half and Res-1
+explicitly preserved as deferred.
+
+*Last updated after M24-W2 (partial — N-6/N-23-ordering/N-24 closed; N-7,
+N-10, N-22, N-8, N-9, Res-1 deferred; M24 OPEN).*
+
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
   Hardening & Debt Retirement (P2-IDOR-1 file authorization, mail
@@ -3664,9 +3763,11 @@ M24 is **NOT closed**.
   StudentProfile guardian columns are actively USED by
   students.service (the true debt is PII duplication outside
   GuardianLink, pending O-2 — not "dead columns").
-- **M24 status**: W0 (discovery/design) and W1 (input validation & tenancy
-  hardening) COMPLETE. N-1, the HIGH tenancy defect, is **CLOSED**.
-  W2–W4 NOT started; O-3…O-8 remain open. M24 is **NOT closed**.
+- **M24 status**: W0 (discovery/design) and W1 COMPLETE; W2 **PARTIAL** —
+  N-6, the N-23 ordering half and N-24 closed under O-3(B)/O-4(B2), with
+  N-7, N-10, N-22, the N-23 download half, N-8, N-9 and Res-1 deferred with
+  recorded blockers. N-1 (HIGH) remains CLOSED. W3–W4 NOT started;
+  O-5…O-8 remain open. M24 is **NOT closed**.
 - **M23 status**: **M23 COMPLETE AND CLOSED (W0–W4)** — Authorization
   Correctness & Audit Integrity. S-1, S-2 (approved scope), D-1, D-2 and
   D-4 all CLOSED; every remaining finding carries an explicit
@@ -3682,10 +3783,10 @@ M24 is **NOT closed**.
   browser-print; M17 term lifecycle, M16 refunds+accountant, M15
   rollover and M14 payments all remain complete (webhook delivery
   still pending provider-dashboard endpoint registration).
-- **Latest commit**: the M24-W1 validation/tenancy commit on branch
+- **Latest commit**: the M24-W2 file/session/export commit on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 15 found, database schema up to date
-- **Tests**: **752/752 passing** (56 suites)
+- **Tests**: **769/769 passing** (57 suites)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -3694,10 +3795,11 @@ M24 is **NOT closed**.
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13 and
   `docs/M23_PLATFORM_DISCOVERY_DESIGN.md` (current reconciliation)
-- **Next planned milestone**: M24-W2 (file/session/export authorization —
-  N-6…N-10, N-22…N-24, Res-1) is designed and awaiting authorization, and
-  is gated on decisions O-3 and O-4. Reporting/analytics and CI/lint remain
-  M25 candidates
+- **Next planned milestone**: the remaining W2 findings (N-7, N-10, N-22,
+  N-23 download half, N-8, N-9, Res-1) each need a recorded decision before
+  they can proceed; M24-W3 (academic lifecycle & concurrency) is designed
+  and awaiting authorization. Reporting/analytics and CI/lint remain M25
+  candidates
 
 ## 15. Future Roadmap
 

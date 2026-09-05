@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
-import type { PermissionKey } from '@campusos/shared';
+import { PERMISSIONS, type PermissionKey } from '@campusos/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { PolicyService } from '../access/policy.service';
 import { AuditService } from '../audit/audit.service';
@@ -22,7 +22,16 @@ import { CurrentUser } from '../access/current-user.decorator';
 import type { AuthenticatedUser } from '../access/authenticated-user';
 
 /**
- * M12-W3 — CSV exports (decision A3: admin-only in v1).
+ * M12-W3 — CSV exports (decision A3: full-scope staff only).
+ *
+ * M24-W2 (N-6) NOTE: the original A3 note read "admin-only in v1", which
+ * became stale in M16 when ACCOUNTANT was granted `users.read` and
+ * `fees.read` at ALL scope and therefore legitimately reached the student
+ * and fee exports. The accurate rule has always been the one implemented
+ * below — resolved scope 'ALL' for the backing permission — which today
+ * admits ADMIN and, for the exports whose permission it holds,
+ * ACCOUNTANT. Per-field PII is minimised separately by policy (see
+ * `students`), not by narrowing the export permission.
  *
  * Authorization is PolicyService-only and data-driven: each endpoint
  * requires the caller's RESOLVED scope for the relevant permission to be
@@ -124,12 +133,35 @@ export class ExportsService {
       // F1: cap materialization memory, not just the response.
       take: CSV_ROW_CAP + 1,
     });
+    // M24-W2 (N-6, decision O-3 = B): student EMAIL is account-identity
+    // PII that the finance role has no operational need for. M12 declared
+    // this export admin-only; M16 later granted ACCOUNTANT `users.read` at
+    // ALL scope, so the finance role silently gained the full directory
+    // including email. O-3(B) keeps ACCOUNTANT's access to the export and
+    // removes the email column instead of narrowing the permission.
+    //
+    // The gate is the EXISTING, ADMIN-only `users.manage` permission,
+    // resolved through PolicyService — email is visible to principals who
+    // administer user records, not merely to those who may read the
+    // directory. This is the same policy-driven minimisation M19-W2 used
+    // for emergency contacts and M21-W3 used for lifecycle metadata: no
+    // role-name conditional, no new permission, server-derived.
+    const includeEmail = await this.policy.can(user, PERMISSIONS.USERS_MANAGE);
     const csv = toCsv(
-      ['firstName', 'lastName', 'email', 'admissionNo', 'rollNo', 'department', 'batch', 'status'],
+      [
+        'firstName',
+        'lastName',
+        ...(includeEmail ? (['email'] as const) : []),
+        'admissionNo',
+        'rollNo',
+        'department',
+        'batch',
+        'status',
+      ],
       rows.map((s) => [
         s.user.firstName,
         s.user.lastName,
-        s.user.email,
+        ...(includeEmail ? [s.user.email] : []),
         s.admissionNo,
         s.rollNo,
         s.department.name,

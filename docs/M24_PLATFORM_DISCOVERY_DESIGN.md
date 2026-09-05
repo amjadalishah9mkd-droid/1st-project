@@ -371,6 +371,20 @@ and `set -e` aborts before extraction).
   violated here. Root cause is a permission whose scope semantics widened in
   a later milestone with no re-review of the export decision.
   **NEW DEFECT** — W1 (decision O-3 first).
+
+  > **RESOLVED in M24-W2 under decision O-3 = B.** ACCOUNTANT keeps the
+  > export; the `email` column is removed for principals lacking the
+  > existing ADMIN-only `users.manage` permission, resolved through
+  > PolicyService. No role-name conditional, no new permission, and
+  > `users.read` grants untouched — the same policy-driven PII
+  > minimisation M19-W2 used for emergency contacts and M21-W3 for
+  > lifecycle metadata. Live: the ADMIN header keeps `email`; the
+  > ACCOUNTANT header is
+  > `firstName,lastName,admissionNo,rollNo,department,batch,status` with
+  > **zero** `@campusos.dev` occurrences in the body. Teacher 403,
+  > anonymous 401 and tenant scoping unchanged; a forged
+  > `collegeId`/`role` cannot restore the column. The stale M12
+  > "admin-only in v1" note in `exports.module.ts` is corrected in place.
 - **N-28 — INFO — `DEPARTMENT` scope is a dead authorization path.**
   `policy.service.ts` implements `checkDepartment`, but **zero grants** use
   `DEPARTMENT` (verified against source and the seeded `RolePermission`
@@ -421,6 +435,25 @@ New audit-coverage gaps:
   the trail. `GET /files/:key` is **never** audited, so a 5-minute signed
   URL can be replayed an unbounded number of times with one recorded
   "access". Non-evidence signings are not audited at all. NEW DEFECT (W2).
+
+  > **ORDERING RESOLVED in M24-W2; download auditing REMAINS DEFERRED.**
+  > The two gates in `files.controller.ts` were reordered so the
+  > tenancy/ownership check runs before `EvidenceAuthzService`, which is
+  > the component that writes `verification.evidence_accessed` as soon as
+  > it authorizes. The access event is therefore recorded only once EVERY
+  > gate has passed; neither gate was weakened and an unauthorized caller
+  > still receives the same indistinguishable 404. Proven with a fixture
+  > whose `EvidenceFile` is in-tenant but whose `StoredFile` ownership row
+  > is rival-college: the request 404s and writes **no** audit row, where
+  > previously it wrote a successful-access record.
+  >
+  > **Still deferred — `GET /files/:key` download auditing.** That route
+  > is `@Public()` by design (browser navigation cannot attach a bearer
+  > token) and is authorized purely by the HMAC signature, so there is
+  > **no authenticated session from which to derive `actorId`**. W2
+  > requires audit actor and tenant to be server-derived from session
+  > context, so a download audit cannot be added without changing the
+  > download authentication contract. Recorded for a later decision.
 - **N-30 — INFO —** `logExport` runs only on the success path, so a
   rejected 50 001-row extraction attempt leaves **no** audit row; a bulk
   extraction attempt is invisible. DEFERRED.
@@ -569,6 +602,14 @@ N-10 above, plus:
   7-day window. Compare `UserLifecycleService`, which revokes
   in-transaction. Matters in the "revoke a compromised Google account"
   scenario. NEW DEFECT (W2).
+
+  > **RESOLVED in M24-W2.** Unlink now calls
+  > `tokens.revokeAllExceptFamily(user.id, null)` — the same established
+  > mechanism `UserLifecycleService` uses on a status change and the
+  > credential path uses on a password reset; passing `null` keeps no
+  > family alive, so it fails closed. Proven end to end: after unlink,
+  > live refresh rows for the account drop to 0, the `AuthIdentity` is
+  > gone, and replaying the pre-unlink refresh cookie returns 401.
 - **N-29 — INFO —** `JWT_REFRESH_SECRET` is **mandatory in production**
   (`config/env.ts:71`) but never used anywhere — refresh tokens are opaque
   random values. Dead required config; misleading. VERIFIED / NO DEFECT.
@@ -1114,3 +1155,47 @@ one edge was deliberately preserved rather than tightened: `?studentId=`
 (empty) still means "no target supplied", exactly as the old
 `studentId || undefined` did — pinned by a dedicated regression test for
 both a wide scope (MISSING_TARGET) and an OWN-scope caller (own record).
+
+---
+
+## 27. M24-W2 outcome (partial — independent subset only)
+
+Implemented at commit `fix(m24): harden file authorization and session integrity`.
+
+**Decisions applied.** **O-3 = B** — ACCOUNTANT keeps `students.csv`; the
+`email` column is removed for principals lacking the existing ADMIN-only
+`users.manage` permission. **O-4 = B2 (temporary/narrowed)** — EVIDENCE
+keeps its strict verification-lifecycle gate; **`OTHER` explicitly retains
+its current owner/same-college behaviour** (no fail-closed, no
+reinterpretation, no bulk relabel); SUBMISSION and COMMUNITY_ATTACHMENT get
+no new model. O-4(B2) therefore defers the deeper N-8 file-sharing
+authorization model rather than resolving it.
+
+### Implemented and closed
+
+| Finding | Fix | Runtime evidence |
+|---|---|---|
+| **N-6** | Email column gated on existing `users.manage` via PolicyService | ADMIN header keeps `email`; ACCOUNTANT header drops it with **0** `@campusos.dev` in the body; teacher 403; anon 401; forged `collegeId`/`role` inert; tenant-scoped |
+| **N-23** (ordering half) | Tenancy gate reordered before the auditing evidence gate in `files.controller.ts` | A refused signing now writes **no** `verification.evidence_accessed` row; an authorized signing still writes exactly one with server-derived actor/tenant and `{as}` metadata only |
+| **N-24** | `tokens.revokeAllExceptFamily(user.id, null)` on unlink | Live refresh rows → 0 after unlink; identity removed; pre-unlink refresh cookie → 401 |
+
+**Mutation-tested:** reverting N-6 fails 4 tests, N-23 fails 1, N-24 fails 1
+— each fix is genuinely covered rather than merely present.
+
+### Blocked within W2 constraints — reported, NOT implemented
+
+| Finding | Exact blocker |
+|---|---|
+| **N-7** FilesController permission metadata | The fix is to add `@RequirePermission` so PolicyService's lifecycle gate runs. **No permission is held by every uploading role** (intersection of ADMIN/TEACHER/STUDENT/ACCOUNTANT/GUARDIAN grants = ∅), and `POST /files` is one shared endpoint serving assignment attachments, submissions and community resources. Every route out is forbidden here: a new permission (`files.upload`), editing `permissions.ts`, exposing `lifecycleAllows` from `src/access`, new per-purpose routes, or duplicating the lifecycle rule in the controller (a parallel authorization path). Choosing which roles may upload is also a product decision. **Requires authorization of one of those.** |
+| **N-10** login tenancy | `findFirst` by email alone is non-deterministic against `@@unique([collegeId,email])`, and the rate-limit key `acct:${email}` is global. Closing it needs a way for login to disambiguate tenant (subdomain, college selector, …) — a product/contract decision. A bare `orderBy` would make selection deterministic without closing the cross-tenant DoS, so it would be a change that cannot be proven to fix the finding. |
+| **N-22** orphan reaper | Determining that a non-evidence key is unreferenced requires scanning `Submission.fileUrl`, `Post.attachments`, `Assignment.attachments` and `Resource.fileUrl` — the exact reverse-search W2 forbids — and deleting on that inference risks destroying live files. It is also inseparable from the deferred N-8 sharing model. |
+| **N-23** download-audit half | `GET /files/:key` is `@Public()` and signature-authorized, so there is **no session** from which to derive `actorId`; W2 requires server-derived audit actor/tenant. |
+| **N-8, N-9, Res-1** | Deferred by O-4(B2) by design. Res-1 is additionally inert in this environment (`Resource.fileUrl IS NOT NULL` = 0). |
+
+### Scope discipline
+
+No Prisma schema, migration, dependency, Docker, `.alloy`, `money.ts`,
+`permissions.ts`, `src/access`/PolicyService, UI, new route, new permission
+or new role change. Migrations remain 15. `OTHER`-purpose behaviour is
+pinned unchanged by a dedicated regression test, so W2 provably did not
+break existing file access.
