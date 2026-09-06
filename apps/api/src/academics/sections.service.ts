@@ -240,6 +240,15 @@ export class SectionsService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3): the assertion above is a PREFLIGHT on
+      // `this.prisma` — its `FOR SHARE` lock is gone before this
+      // transaction opens, so a concurrent close could commit in
+      // between. Re-assert here so the Term row is held `FOR SHARE`
+      // through the update, with no transaction boundary between guard
+      // and mutation. The preflight stays to preserve the existing error
+      // precedence (TERM_CLOSED before CAPACITY_BELOW_ENROLLMENT /
+      // DUPLICATE_SECTION_NAME) — dual pattern per `generateInvoices`.
+      await this.lifecycle.assertTermOpen(tx, user.collegeId, existing.termId);
       const row = await tx.section.update({
         where: { id },
         data: { name: input.name, capacity: input.capacity, room: input.room },

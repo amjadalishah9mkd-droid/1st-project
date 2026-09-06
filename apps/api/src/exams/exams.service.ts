@@ -253,6 +253,14 @@ export class ExamsService {
       });
     }
     const updated = await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3): the assertion above is a PREFLIGHT on
+      // `this.prisma`, whose `FOR SHARE` lock is released before this
+      // transaction starts. Re-assert inside it so the Term row stays
+      // locked through the update and a concurrent close cannot slip in
+      // between guard and mutation. The preflight remains so TERM_CLOSED
+      // still precedes EXAM_PUBLISHED — dual pattern per
+      // `fees.generateInvoices`.
+      await this.lifecycle.assertTermOpen(tx, user.collegeId, existing.termId);
       const row = await tx.exam.update({
         where: { id },
         data: { title: input.title, type: input.type, status: input.status },
@@ -445,6 +453,14 @@ export class ExamsService {
       }
     }
     const updated = await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3): re-assert the term guard inside the transaction
+      // that performs the write — the preflight above ran on
+      // `this.prisma` and its `FOR SHARE` lock no longer exists here.
+      // Holding it for the duration of this transaction is what actually
+      // serializes the update against a concurrent close. The preflight
+      // is kept so the existing precedence (TERM_CLOSED before
+      // EXAM_PUBLISHED / NOT_FOUND / MAX_BELOW_MARKS) is unchanged.
+      await this.lifecycle.assertTermOpen(tx, user.collegeId, exam.termId);
       const row = await tx.examPaper.update({
         where: { id: paperId },
         data: {

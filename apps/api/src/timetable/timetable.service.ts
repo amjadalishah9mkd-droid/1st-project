@@ -272,6 +272,16 @@ export class TimetableService {
     });
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3): the assertion above is a PREFLIGHT on
+      // `this.prisma` — its `FOR SHARE` lock is released before this
+      // transaction opens, so a term could commit CLOSED between the
+      // guard and this write. Re-assert here so the Term row is held
+      // `FOR SHARE` through the update. Conflict detection deliberately
+      // stays OUTSIDE the transaction: it is a multi-row read that would
+      // extend the lock window, and it is unchanged by this fix. The
+      // preflight is kept so TERM_CLOSED still precedes INVALID_TIMES
+      // and SLOT_CONFLICT — dual pattern per `fees.generateInvoices`.
+      await this.lifecycle.assertTermOpen(tx, user.collegeId, existing.section.termId);
       const row = await tx.timetableSlot.update({
         where: { id },
         data: next,

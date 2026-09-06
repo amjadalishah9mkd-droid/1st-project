@@ -277,6 +277,17 @@ export class CalendarService {
       });
     }
     const updated = await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3): the assertion above is a PREFLIGHT — it runs on
+      // `this.prisma`, so its `FOR SHARE` lock is released the moment
+      // that statement's implicit transaction commits, leaving a window
+      // in which a concurrent close could commit before the update
+      // below. Re-assert INSIDE this transaction so the Term row stays
+      // locked `FOR SHARE` (against close's `FOR UPDATE`) through the
+      // write: guard and mutation now share one transaction with no
+      // boundary between them. The preflight is deliberately kept so the
+      // established error precedence (TERM_CLOSED before INVALID_DATES)
+      // is unchanged — same dual pattern as `fees.generateInvoices`.
+      await this.lifecycle.assertTermOpen(tx, user.collegeId, id);
       const row = await tx.term.update({
         where: { id },
         data: { label: input.label, startsOn, endsOn },
