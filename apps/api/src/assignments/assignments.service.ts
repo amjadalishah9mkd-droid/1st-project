@@ -306,6 +306,23 @@ export class AssignmentsService {
       }
     }
     const updated = await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3): AUTHORITATIVE lifecycle guard. The assertion above
+      // is a PREFLIGHT on `this.prisma`, so its `FOR SHARE` lock on the
+      // Term row is released as soon as that statement's implicit
+      // transaction commits — leaving a window in which a concurrent close
+      // could commit before the writes below. Re-asserting on `tx` holds
+      // the lock (against close's `FOR UPDATE`) for the whole transaction,
+      // so the assignment update and the dependent `isLate` recomputation
+      // can no longer land in a closed term. The preflight is retained
+      // deliberately: it is what makes TERM_CLOSED precede
+      // MAX_POINTS_BELOW_GRADES, and the grade probe stays outside so the
+      // lock window covers writes only. Same dual pattern as
+      // `fees.generateInvoices` and Batches 1-3.
+      await this.lifecycle.assertSectionTermOpen(
+        tx,
+        user.collegeId,
+        existing.sectionId,
+      );
       const row = await tx.assignment.update({
         where: { id: existing.id },
         data: {
