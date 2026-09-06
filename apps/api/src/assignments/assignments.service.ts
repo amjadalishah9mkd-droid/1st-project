@@ -246,24 +246,31 @@ export class AssignmentsService {
       throw forbidden();
     }
     // M17-W2: CLOSED terms are read-only for assignments.
-    await this.lifecycle.assertSectionTermOpen(
-      this.prisma,
-      user.collegeId,
-      input.sectionId,
-    );
-
-    const created = await this.prisma.assignment.create({
-      data: {
-        sectionId: input.sectionId,
-        title: input.title,
-        description: input.description,
-        attachments: input.attachments,
-        dueAt: new Date(input.dueAt),
-        maxPoints: input.maxPoints,
-        allowLate: input.allowLate,
-        createdById: user.id,
-      },
-      include: assignmentInclude,
+    // M24-W3a (N-3): the guard MOVED into the creating transaction. Nothing
+    // was validated between the old guard and this insert, so relocating it
+    // changes no error precedence — the simple form is correct here and no
+    // preflight is needed. On `tx` the Section's Term is held `FOR SHARE`
+    // through the insert, so an assignment can no longer be created after a
+    // concurrent close committed.
+    const created = await this.prisma.$transaction(async (tx) => {
+      await this.lifecycle.assertSectionTermOpen(
+        tx,
+        user.collegeId,
+        input.sectionId,
+      );
+      return tx.assignment.create({
+        data: {
+          sectionId: input.sectionId,
+          title: input.title,
+          description: input.description,
+          attachments: input.attachments,
+          dueAt: new Date(input.dueAt),
+          maxPoints: input.maxPoints,
+          allowLate: input.allowLate,
+          createdById: user.id,
+        },
+        include: assignmentInclude,
+      });
     });
     await this.audit.log({
       collegeId: user.collegeId,
@@ -384,7 +391,18 @@ export class AssignmentsService {
           'Assignments with submissions cannot be deleted — student work is preserved',
       });
     }
-    await this.prisma.assignment.delete({ where: { id: existing.id } });
+    await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3): AUTHORITATIVE guard, inside the deleting
+      // transaction. Retained preflight keeps TERM_CLOSED ahead of
+      // HAS_SUBMISSIONS; the submission count stays outside, so the
+      // student-work protection is evaluated exactly as before.
+      await this.lifecycle.assertSectionTermOpen(
+        tx,
+        user.collegeId,
+        existing.sectionId,
+      );
+      await tx.assignment.delete({ where: { id: existing.id } });
+    });
     await this.audit.log({
       collegeId: user.collegeId,
       actorId: user.id,
@@ -408,10 +426,23 @@ export class AssignmentsService {
         message: 'This assignment is already published',
       });
     }
-    const updated = await this.prisma.assignment.update({
-      where: { id: existing.id },
-      data: { publishedAt: new Date() },
-      include: assignmentInclude,
+    // M24-W3a (N-3): AUTHORITATIVE guard shares the publishing
+    // transaction. Retained preflight keeps TERM_CLOSED ahead of
+    // ALREADY_PUBLISHED. The audit write and the notification event stay
+    // AFTER the commit exactly as before — the event must never fire for a
+    // publish that later rolled back, so it is deliberately not moved
+    // inside, and its payload is taken from the committed row.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await this.lifecycle.assertSectionTermOpen(
+        tx,
+        user.collegeId,
+        existing.sectionId,
+      );
+      return tx.assignment.update({
+        where: { id: existing.id },
+        data: { publishedAt: new Date() },
+        include: assignmentInclude,
+      });
     });
     await this.audit.log({
       collegeId: user.collegeId,

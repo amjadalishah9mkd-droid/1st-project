@@ -334,12 +334,19 @@ export class TimetableService {
           'This slot already has class sessions and cannot be deleted. Adjust its times instead.',
       });
     }
-    await this.lifecycle.assertSectionTermOpen(
-      this.prisma,
-      user.collegeId,
-      existing.sectionId,
-    );
-    await this.prisma.timetableSlot.delete({ where: { id } });
+    // M24-W3a (N-3): the guard MOVED into the deleting transaction. It
+    // already sat after the NOT_FOUND and SLOT_HAS_SESSIONS checks with
+    // nothing between it and the delete, so relocating it preserves every
+    // existing error precedence and needs no preflight. N-16b conflict
+    // semantics are untouched — this method performs no conflict check.
+    await this.prisma.$transaction(async (tx) => {
+      await this.lifecycle.assertSectionTermOpen(
+        tx,
+        user.collegeId,
+        existing.sectionId,
+      );
+      await tx.timetableSlot.delete({ where: { id } });
+    });
     await this.audit.log({
       collegeId: user.collegeId,
       actorId: user.id,

@@ -227,10 +227,21 @@ export class AttendanceService {
         });
       }
     }
-    const updated = await this.prisma.classSession.update({
-      where: { id: sessionId },
-      data: { status: input.status, note: input.note },
-      include: sessionInclude,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3): AUTHORITATIVE guard, inside the transaction that
+      // performs the transition. Retained preflight keeps TERM_CLOSED
+      // ahead of SESSION_HAS_ATTENDANCE; the N-17 attendance-record count
+      // above is unchanged and stays outside the transaction.
+      await this.lifecycle.assertSectionTermOpen(
+        tx,
+        user.collegeId,
+        session.sectionId,
+      );
+      return tx.classSession.update({
+        where: { id: sessionId },
+        data: { status: input.status, note: input.note },
+        include: sessionInclude,
+      });
     });
     await this.audit.log({
       collegeId: user.collegeId,

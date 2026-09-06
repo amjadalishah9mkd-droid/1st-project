@@ -174,16 +174,28 @@ export class SectionsService {
       });
     }
 
-    const created = await this.prisma.section.create({
-      data: {
-        collegeId: user.collegeId,
-        courseId: input.courseId,
-        termId: input.termId,
-        name: input.name,
-        capacity: input.capacity,
-        room: input.room,
-      },
-      include: sectionInclude,
+    const created = await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3): AUTHORITATIVE guard. The assertion above is a
+      // preflight on `this.prisma`, whose `FOR SHARE` lock is released as
+      // soon as that statement's implicit transaction commits — so a
+      // concurrent close could commit before this create. Re-asserting on
+      // `tx` holds the Term row `FOR SHARE` (against close's `FOR UPDATE`)
+      // through the insert. The preflight is retained so TERM_CLOSED still
+      // precedes DUPLICATE_SECTION_NAME; the duplicate probe deliberately
+      // stays outside the transaction. Dual pattern per
+      // `fees.generateInvoices`.
+      await this.lifecycle.assertTermOpen(tx, user.collegeId, input.termId);
+      return tx.section.create({
+        data: {
+          collegeId: user.collegeId,
+          courseId: input.courseId,
+          termId: input.termId,
+          name: input.name,
+          capacity: input.capacity,
+          room: input.room,
+        },
+        include: sectionInclude,
+      });
     });
     await this.audit.log({
       collegeId: user.collegeId,
@@ -458,9 +470,18 @@ export class SectionsService {
         message: 'Enrollment not found',
       });
     }
-    await this.prisma.enrollment.update({
-      where: { id: enrollment.id },
-      data: { status: 'DROPPED' },
+    await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3): AUTHORITATIVE guard, inside the transaction that
+      // performs the drop. The preflight above holds no lock by the time
+      // it returns; only this assertion serializes the write against a
+      // concurrent close. Retained preflight keeps TERM_CLOSED ahead of
+      // the 'Enrollment not found' 404, and the enrollment lookup stays
+      // outside so the transaction covers only the mutation.
+      await this.lifecycle.assertSectionTermOpen(tx, user.collegeId, sectionId);
+      await tx.enrollment.update({
+        where: { id: enrollment.id },
+        data: { status: 'DROPPED' },
+      });
     });
     await this.audit.log({
       collegeId: user.collegeId,
@@ -571,7 +592,14 @@ export class SectionsService {
         message: 'Teaching assignment not found',
       });
     }
-    await this.prisma.teachingAssignment.delete({ where: { id: existing.id } });
+    await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3): AUTHORITATIVE guard, inside the deleting
+      // transaction. Retained preflight preserves TERM_CLOSED ahead of the
+      // 'Teaching assignment not found' 404; the assignment lookup stays
+      // outside so only the delete is covered.
+      await this.lifecycle.assertSectionTermOpen(tx, user.collegeId, sectionId);
+      await tx.teachingAssignment.delete({ where: { id: existing.id } });
+    });
     await this.audit.log({
       collegeId: user.collegeId,
       actorId: user.id,

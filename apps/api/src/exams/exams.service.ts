@@ -216,18 +216,24 @@ export class ExamsService {
       });
     }
     // M17-W2: exams cannot be created in a CLOSED term.
-    await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, input.termId);
-    const created = await this.prisma.exam.create({
-      data: {
-        collegeId: user.collegeId,
-        termId: input.termId,
-        title: input.title,
-        type: input.type,
-      },
-      include: {
-        term: { select: { label: true } },
-        _count: { select: { papers: true } },
-      },
+    // M24-W3a (N-3): the guard MOVED into the creating transaction —
+    // nothing was validated between the old guard and this insert, so the
+    // simple form preserves every existing error precedence and no
+    // preflight is required.
+    const created = await this.prisma.$transaction(async (tx) => {
+      await this.lifecycle.assertTermOpen(tx, user.collegeId, input.termId);
+      return tx.exam.create({
+        data: {
+          collegeId: user.collegeId,
+          termId: input.termId,
+          title: input.title,
+          type: input.type,
+        },
+        include: {
+          term: { select: { label: true } },
+          _count: { select: { papers: true } },
+        },
+      });
     });
     await this.audit.log({
       collegeId: user.collegeId,
@@ -400,16 +406,26 @@ export class ExamsService {
         message: 'This section already has a paper in this exam',
       });
     }
-    const created = await this.prisma.examPaper.create({
-      data: {
-        examId,
-        sectionId: input.sectionId,
-        examDate: new Date(input.examDate),
-        maxMarks: input.maxMarks,
-        room: input.room,
-        ...(input.weight !== undefined ? { weight: input.weight } : {}),
-      },
-      include: paperInclude,
+    const created = await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3): AUTHORITATIVE guard, first statement inside the
+      // creating transaction. This site has several reads before the
+      // insert (section lookup, term-match, duplicate probe); they stay
+      // OUTSIDE so the lock window is not extended and the established
+      // precedence — TERM_CLOSED before EXAM_PUBLISHED, INVALID_SECTION,
+      // TERM_MISMATCH and DUPLICATE_PAPER — is preserved exactly. Dual
+      // preflight + re-assert pattern per `fees.generateInvoices`.
+      await this.lifecycle.assertTermOpen(tx, user.collegeId, exam.termId);
+      return tx.examPaper.create({
+        data: {
+          examId,
+          sectionId: input.sectionId,
+          examDate: new Date(input.examDate),
+          maxMarks: input.maxMarks,
+          room: input.room,
+          ...(input.weight !== undefined ? { weight: input.weight } : {}),
+        },
+        include: paperInclude,
+      });
     });
     await this.audit.log({
       collegeId: user.collegeId,
