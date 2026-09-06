@@ -360,9 +360,24 @@ export class AttendanceService {
     });
     const previousStatus = new Map(previous.map((r) => [r.studentId, r.status]));
 
-    await this.prisma.$transaction([
-      ...input.records.map((record) =>
-        this.prisma.attendanceRecord.upsert({
+    // M24-W3a (N-3): batch → interactive transaction. The array form could
+    // not host the guard, so the authoritative assertion never ran inside
+    // the transaction that writes the sheet. Every write of this atomic
+    // save — one upsert per record, then the session transition to HELD —
+    // now uses the SAME `tx` as the guard, which holds the Term row
+    // FOR SHARE against a concurrent close for the whole save. Records are
+    // awaited in input order and the session update last, preserving the
+    // array form's ordering exactly. The preflight above is retained so
+    // TERM_CLOSED still precedes NOT_ENROLLED; the enrolment and previous
+    // -status reads stay outside so the lock window covers writes only.
+    await this.prisma.$transaction(async (tx) => {
+      await this.lifecycle.assertSectionTermOpen(
+        tx,
+        user.collegeId,
+        session.sectionId,
+      );
+      for (const record of input.records) {
+        await tx.attendanceRecord.upsert({
           where: {
             sessionId_studentId: { sessionId, studentId: record.studentId },
           },
@@ -374,13 +389,13 @@ export class AttendanceService {
             note: record.note,
             markedById: user.id,
           },
-        }),
-      ),
-      this.prisma.classSession.update({
+        });
+      }
+      await tx.classSession.update({
         where: { id: sessionId },
         data: { status: 'HELD', takenById: user.id },
-      }),
-    ]);
+      });
+    });
 
     await this.audit.log({
       collegeId: user.collegeId,

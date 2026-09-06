@@ -536,23 +536,32 @@ export class SectionsService {
       });
     }
 
-    await this.prisma.$transaction([
-      ...(input.isPrimary
-        ? [
-            this.prisma.teachingAssignment.updateMany({
-              where: { sectionId, isPrimary: true },
-              data: { isPrimary: false },
-            }),
-          ]
-        : []),
-      this.prisma.teachingAssignment.create({
+    // M24-W3a (N-3): batch → interactive transaction. The array form of
+    // `$transaction` cannot host the guard (its elements are pre-built
+    // promises created off `this.prisma`), so the authoritative assertion
+    // had nowhere to run inside the transaction that performs the writes.
+    // Both writes now share one interactive transaction with the guard,
+    // which holds the Term row FOR SHARE against a concurrent close for
+    // their whole duration. Statement ORDER is preserved exactly —
+    // demote-existing-primary before insert — by awaiting sequentially,
+    // which is what the array form did. The preflight above is retained so
+    // TERM_CLOSED still precedes INVALID_TEACHER and ALREADY_ASSIGNED.
+    await this.prisma.$transaction(async (tx) => {
+      await this.lifecycle.assertSectionTermOpen(tx, user.collegeId, sectionId);
+      if (input.isPrimary) {
+        await tx.teachingAssignment.updateMany({
+          where: { sectionId, isPrimary: true },
+          data: { isPrimary: false },
+        });
+      }
+      await tx.teachingAssignment.create({
         data: {
           teacherId: teacherProfileId,
           sectionId,
           isPrimary: input.isPrimary ?? false,
         },
-      }),
-    ]);
+      });
+    });
     await this.audit.log({
       collegeId: user.collegeId,
       actorId: user.id,

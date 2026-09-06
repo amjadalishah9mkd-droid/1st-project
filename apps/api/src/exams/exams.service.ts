@@ -325,20 +325,31 @@ export class ExamsService {
     }
 
     const now = new Date();
-    const [updated] = await this.prisma.$transaction([
-      this.prisma.exam.update({
+    // M24-W3a (N-3): batch → interactive transaction. Publishing is two
+    // dependent writes — the exam transition and the locking of every
+    // unlocked mark — and the array form left the authoritative guard
+    // outside them. Both now share one interactive transaction with the
+    // guard, holding the Term row FOR SHARE against a concurrent close,
+    // and their order is unchanged. The preflight above is retained so
+    // TERM_CLOSED still precedes ALREADY_PUBLISHED and NO_PAPERS. The
+    // results.published event stays AFTER the commit — it announces
+    // committed state and must never fire for a rolled-back publish.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await this.lifecycle.assertTermOpen(tx, user.collegeId, exam.termId);
+      const row = await tx.exam.update({
         where: { id },
         data: { status: 'PUBLISHED', publishedAt: now, publishedById: user.id },
         include: {
           term: { select: { label: true } },
           _count: { select: { papers: true } },
         },
-      }),
-      this.prisma.mark.updateMany({
+      });
+      await tx.mark.updateMany({
         where: { examPaper: { examId: id }, lockedAt: null },
         data: { lockedAt: now },
-      }),
-    ]);
+      });
+      return row;
+    });
 
     await this.audit.log({
       collegeId: user.collegeId,
@@ -590,9 +601,20 @@ export class ExamsService {
       }
     }
 
-    await this.prisma.$transaction(
-      input.marks.map((mark) =>
-        this.prisma.mark.upsert({
+    // M24-W3a (N-3): batch → interactive transaction. The array form could
+    // not host the guard, so the authoritative assertion never ran inside
+    // the transaction writing the marks. Every upsert now uses the SAME
+    // `tx` as the guard, which holds the Term row FOR SHARE against a
+    // concurrent close for the whole save, and the upserts are awaited in
+    // input order exactly as the array form ran them. The preflight above
+    // is retained so TERM_CLOSED still precedes MARKS_LOCKED, NOT_ENROLLED
+    // and MARKS_EXCEED_MAX; enrolment/limit validation stays outside so
+    // the lock window covers writes only. Grade-band behaviour and the
+    // N-11 retroactive-regrading question are untouched here.
+    await this.prisma.$transaction(async (tx) => {
+      await this.lifecycle.assertTermOpen(tx, user.collegeId, paper.exam.termId);
+      for (const mark of input.marks) {
+        await tx.mark.upsert({
           where: {
             examPaperId_studentId: {
               examPaperId: paperId,
@@ -606,9 +628,9 @@ export class ExamsService {
             marksObtained: mark.marksObtained,
             enteredById: user.id,
           },
-        }),
-      ),
-    );
+        });
+      }
+    });
     await this.audit.log({
       collegeId: user.collegeId,
       actorId: user.id,
