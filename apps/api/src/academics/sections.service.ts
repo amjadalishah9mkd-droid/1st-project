@@ -414,6 +414,9 @@ export class SectionsService {
         message: `${student.name} is already enrolled in this section`,
       });
     }
+    // Fast preflight only. The authoritative capacity decision is repeated
+    // under the Section row lock below; this stale count must never authorize
+    // the enrollment.
     if (section._count.enrollments >= section.capacity) {
       throw new ConflictException({
         code: 'SECTION_FULL',
@@ -421,16 +424,53 @@ export class SectionsService {
       });
     }
 
-    if (existing) {
-      await this.prisma.enrollment.update({
-        where: { id: existing.id },
-        data: { status: 'ACTIVE', enrolledAt: new Date() },
+    await this.prisma.$transaction(async (tx) => {
+      // Lock order is contractual: Term before Section. The term guard holds
+      // FOR SHARE through the mutation, while the Section FOR UPDATE lock
+      // serializes contenders for its remaining capacity.
+      await this.lifecycle.assertSectionTermOpen(tx, user.collegeId, sectionId);
+      await tx.$queryRaw`SELECT id FROM "Section" WHERE id = ${sectionId} FOR UPDATE`;
+
+      // Both values are authoritative because they are read only after the
+      // Section lock. Every enrollment contender takes that same lock before
+      // deciding whether it may consume a seat.
+      const lockedSection = await tx.section.findUniqueOrThrow({
+        where: { id: sectionId },
+        select: { capacity: true },
       });
-    } else {
-      await this.prisma.enrollment.create({
-        data: { studentId: studentProfileId, sectionId },
+      const activeCount = await tx.enrollment.count({
+        where: { sectionId, status: 'ACTIVE' },
       });
-    }
+      const currentEnrollment = await tx.enrollment.findUnique({
+        where: {
+          studentId_sectionId: { studentId: studentProfileId, sectionId },
+        },
+      });
+
+      if (currentEnrollment?.status === 'ACTIVE') {
+        throw new ConflictException({
+          code: 'ALREADY_ENROLLED',
+          message: `${student.name} is already enrolled in this section`,
+        });
+      }
+      if (activeCount >= lockedSection.capacity) {
+        throw new ConflictException({
+          code: 'SECTION_FULL',
+          message: `Section is at capacity (${lockedSection.capacity})`,
+        });
+      }
+
+      if (currentEnrollment) {
+        await tx.enrollment.update({
+          where: { id: currentEnrollment.id },
+          data: { status: 'ACTIVE', enrolledAt: new Date() },
+        });
+      } else {
+        await tx.enrollment.create({
+          data: { studentId: studentProfileId, sectionId },
+        });
+      }
+    });
     await this.audit.log({
       collegeId: user.collegeId,
       actorId: user.id,
