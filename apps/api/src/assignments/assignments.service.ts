@@ -614,31 +614,106 @@ export class AssignmentsService {
       });
     }
 
-    await this.prisma.submission.upsert({
-      where: {
-        assignmentId_studentId: { assignmentId, studentId: student.id },
-      },
-      update: {
-        textContent: input.textContent ?? null,
-        fileUrl: input.fileUrl ?? null,
-        fileName: input.fileName ?? null,
-        submittedAt: now,
-        isLate,
-      },
-      create: {
-        assignmentId,
-        studentId: student.id,
-        textContent: input.textContent,
-        fileUrl: input.fileUrl,
-        fileName: input.fileName,
-        submittedAt: now,
-        isLate,
-      },
+    const wasResubmission = await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3 #13): the checks above preserve established error
+      // precedence but are preflights only. This guard holds the owning Term
+      // FOR SHARE through every authoritative decision and the upsert.
+      await this.lifecycle.assertSectionTermOpen(
+        tx,
+        user.collegeId,
+        assignment.sectionId,
+      );
+
+      // Stabilize the assignment fields that govern publication/deadline
+      // eligibility while the submission is decided and written.
+      await tx.$queryRaw`SELECT id FROM "Assignment" WHERE id = ${assignmentId} FOR SHARE`;
+      const authoritativeAssignment = await tx.assignment.findFirst({
+        where: {
+          id: assignmentId,
+          sectionId: assignment.sectionId,
+          section: { collegeId: user.collegeId },
+        },
+        select: {
+          id: true,
+          sectionId: true,
+          publishedAt: true,
+          dueAt: true,
+          allowLate: true,
+        },
+      });
+      if (!authoritativeAssignment?.publishedAt) {
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: 'Assignment not found',
+        });
+      }
+
+      const activeEnrollments = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM "Enrollment"
+        WHERE "studentId" = ${student.id}
+          AND "sectionId" = ${authoritativeAssignment.sectionId}
+          AND status = 'ACTIVE'
+        FOR SHARE`;
+      if (activeEnrollments.length === 0) {
+        throw forbidden();
+      }
+
+      const authoritativeNow = new Date();
+      const authoritativeIsLate = authoritativeNow > authoritativeAssignment.dueAt;
+      if (authoritativeIsLate && !authoritativeAssignment.allowLate) {
+        throw new BadRequestException({
+          code: 'PAST_DUE',
+          message: 'The due date has passed and late submissions are not allowed',
+        });
+      }
+
+      // Serialize against grading of an existing submission. For a first
+      // submission the unique key still supplies the established one-row
+      // upsert semantics for concurrent duplicate requests.
+      await tx.$queryRaw`
+        SELECT id FROM "Submission"
+        WHERE "assignmentId" = ${assignmentId} AND "studentId" = ${student.id}
+        FOR UPDATE`;
+      const authoritativeExisting = await tx.submission.findUnique({
+        where: {
+          assignmentId_studentId: { assignmentId, studentId: student.id },
+        },
+        select: { id: true, gradedAt: true },
+      });
+      if (authoritativeExisting?.gradedAt) {
+        throw new BadRequestException({
+          code: 'ALREADY_GRADED',
+          message: 'This submission has been graded and can no longer be changed',
+        });
+      }
+
+      await tx.submission.upsert({
+        where: {
+          assignmentId_studentId: { assignmentId, studentId: student.id },
+        },
+        update: {
+          textContent: input.textContent ?? null,
+          fileUrl: input.fileUrl ?? null,
+          fileName: input.fileName ?? null,
+          submittedAt: authoritativeNow,
+          isLate: authoritativeIsLate,
+        },
+        create: {
+          assignmentId,
+          studentId: student.id,
+          textContent: input.textContent,
+          fileUrl: input.fileUrl,
+          fileName: input.fileName,
+          submittedAt: authoritativeNow,
+          isLate: authoritativeIsLate,
+        },
+      });
+      return authoritativeExisting !== null;
     });
     await this.audit.log({
       collegeId: user.collegeId,
       actorId: user.id,
-      action: existing ? 'submissions.resubmitted' : 'submissions.created',
+      action: wasResubmission ? 'submissions.resubmitted' : 'submissions.created',
       targetType: 'Assignment',
       targetId: assignmentId,
     });
