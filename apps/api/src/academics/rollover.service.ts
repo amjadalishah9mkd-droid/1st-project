@@ -44,6 +44,7 @@ import type { AuthenticatedUser } from '../access/authenticated-user';
  */
 
 type PlanSection = RolloverPlanInput['sections'][number];
+type Tx = Prisma.TransactionClient;
 
 const badRequest = (code: string, message: string) =>
   new BadRequestException({ code, message });
@@ -107,33 +108,78 @@ export class RolloverService {
       );
     }
 
-    const plan = await this.suggestPlan(user.collegeId, fromTermId);
-    await this.prisma.termRollover.create({
-      data: {
+    const created = await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3 #2): the guard above is only a preflight. This
+      // authoritative guard holds the destination Term FOR SHARE through
+      // every rollover read and the draft write below, so a close cannot
+      // commit between lifecycle validation and mutation.
+      await this.lifecycle.assertTermOpen(tx, user.collegeId, toTermId);
+
+      const authoritativeSource = await tx.term.findFirst({
+        where: { id: fromTermId, collegeId: user.collegeId },
+        select: { id: true },
+      });
+      if (!authoritativeSource) {
+        throw badRequest('INVALID_SOURCE_TERM', 'Source term not found in this college');
+      }
+
+      const authoritativeExisting = await tx.termRollover.findUnique({
+        where: {
+          collegeId_toTermId: { collegeId: user.collegeId, toTermId },
+        },
+      });
+      if (authoritativeExisting) {
+        if (authoritativeExisting.status === 'EXECUTED') {
+          throw new ConflictException({
+            code: 'ALREADY_EXECUTED',
+            message: 'A rollover into this term has already been executed',
+          });
+        }
+        return null;
+      }
+
+      const targetSections = await tx.section.count({
+        where: { collegeId: user.collegeId, termId: toTermId },
+      });
+      if (targetSections > 0) {
+        throw badRequest(
+          'TARGET_TERM_NOT_EMPTY',
+          'The destination term already has sections — rollover requires an empty term',
+        );
+      }
+
+      const plan = await this.suggestPlan(tx, user.collegeId, fromTermId);
+      await tx.termRollover.create({
+        data: {
+          collegeId: user.collegeId,
+          fromTermId,
+          toTermId,
+          plan: plan as unknown as Prisma.InputJsonValue,
+        },
+      });
+      return plan.sections.length;
+    });
+    if (created !== null) {
+      await this.audit.log({
         collegeId: user.collegeId,
-        fromTermId,
-        toTermId,
-        plan: plan as unknown as Prisma.InputJsonValue,
-      },
-    });
-    await this.audit.log({
-      collegeId: user.collegeId,
-      actorId: user.id,
-      action: 'terms.rollover_drafted',
-      targetType: 'Term',
-      targetId: toTermId,
-      metadata: { fromTermId, sections: plan.sections.length },
-    });
+        actorId: user.id,
+        action: 'terms.rollover_drafted',
+        targetType: 'Term',
+        targetId: toTermId,
+        metadata: { fromTermId, sections: created },
+      });
+    }
     return this.preview(user, toTermId);
   }
 
   /** D1 default: same-course clone; D4: carry current teachers;
    *  D8: withdrawn/graduated excluded, suspended carried. */
   private async suggestPlan(
+    tx: Tx | PrismaService,
     collegeId: string,
     fromTermId: string,
   ): Promise<RolloverPlanInput> {
-    const sections = await this.prisma.section.findMany({
+    const sections = await tx.section.findMany({
       where: { collegeId, termId: fromTermId },
       include: {
         teachingAssignments: { select: { teacherId: true } },
