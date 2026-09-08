@@ -34,6 +34,7 @@ const slotInclude = {
 } satisfies Prisma.TimetableSlotInclude;
 
 type SlotRecord = Prisma.TimetableSlotGetPayload<{ include: typeof slotInclude }>;
+type Tx = Prisma.TransactionClient;
 
 function toItem(slot: SlotRecord): TimetableSlotItem {
   return {
@@ -194,7 +195,7 @@ export class TimetableService {
     // M17-W2: CLOSED terms are read-only for timetables.
     await this.lifecycle.assertTermOpen(this.prisma, user.collegeId, section.termId);
 
-    await this.assertNoConflicts(user, {
+    await this.assertNoConflicts(this.prisma, user, {
       sectionId: input.sectionId,
       termId: section.termId,
       dayOfWeek: input.dayOfWeek,
@@ -205,15 +206,48 @@ export class TimetableService {
       excludeSlotId: null,
     });
 
-    const created = await this.prisma.timetableSlot.create({
-      data: {
+    const created = await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3 #24 / N-16b): take the exclusive Term lock first.
+      // It protects both lifecycle state and the conflict-read → write
+      // critical section, serializing every timetable writer in this term.
+      await this.lockOpenTerm(tx, user.collegeId, section.termId);
+
+      const authoritativeSection = await tx.section.findFirst({
+        where: {
+          id: input.sectionId,
+          collegeId: user.collegeId,
+          termId: section.termId,
+        },
+        select: { id: true, room: true },
+      });
+      if (!authoritativeSection) {
+        throw new BadRequestException({
+          code: 'INVALID_SECTION',
+          message: 'The selected section does not exist in this college',
+        });
+      }
+
+      await this.assertNoConflicts(tx, user, {
         sectionId: input.sectionId,
+        termId: section.termId,
         dayOfWeek: input.dayOfWeek,
         startTime: input.startTime,
         endTime: input.endTime,
-        room: input.room,
-      },
-      include: slotInclude,
+        room: input.room ?? null,
+        sectionRoom: authoritativeSection.room,
+        excludeSlotId: null,
+      });
+
+      return tx.timetableSlot.create({
+        data: {
+          sectionId: input.sectionId,
+          dayOfWeek: input.dayOfWeek,
+          startTime: input.startTime,
+          endTime: input.endTime,
+          room: input.room,
+        },
+        include: slotInclude,
+      });
     });
     await this.audit.log({
       collegeId: user.collegeId,
@@ -260,7 +294,7 @@ export class TimetableService {
         message: 'End time must be after the start time',
       });
     }
-    await this.assertNoConflicts(user, {
+    await this.assertNoConflicts(this.prisma, user, {
       sectionId: existing.sectionId,
       termId: existing.section.termId,
       dayOfWeek: next.dayOfWeek,
@@ -272,19 +306,47 @@ export class TimetableService {
     });
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      // M24-W3a (N-3): the assertion above is a PREFLIGHT on
-      // `this.prisma` — its `FOR SHARE` lock is released before this
-      // transaction opens, so a term could commit CLOSED between the
-      // guard and this write. Re-assert here so the Term row is held
-      // `FOR SHARE` through the update. Conflict detection deliberately
-      // stays OUTSIDE the transaction: it is a multi-row read that would
-      // extend the lock window, and it is unchanged by this fix. The
-      // preflight is kept so TERM_CLOSED still precedes INVALID_TIMES
-      // and SLOT_CONFLICT — dual pattern per `fees.generateInvoices`.
-      await this.lifecycle.assertTermOpen(tx, user.collegeId, existing.section.termId);
+      // N-16b also applies to updates: without the same Term serialization,
+      // create/update or update/update pairs can both approve stale conflict
+      // snapshots. Preflights above remain solely for error precedence.
+      await this.lockOpenTerm(tx, user.collegeId, existing.section.termId);
+
+      const authoritative = await tx.timetableSlot.findFirst({
+        where: { id, section: { collegeId: user.collegeId } },
+        include: { section: { select: { termId: true, room: true } } },
+      });
+      if (!authoritative || authoritative.section.termId !== existing.section.termId) {
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: 'Timetable slot not found',
+        });
+      }
+      const authoritativeNext = {
+        dayOfWeek: input.dayOfWeek ?? authoritative.dayOfWeek,
+        startTime: input.startTime ?? authoritative.startTime,
+        endTime: input.endTime ?? authoritative.endTime,
+        room: input.room === undefined ? authoritative.room : input.room,
+      };
+      if (authoritativeNext.startTime >= authoritativeNext.endTime) {
+        throw new BadRequestException({
+          code: 'INVALID_TIMES',
+          message: 'End time must be after the start time',
+        });
+      }
+      await this.assertNoConflicts(tx, user, {
+        sectionId: authoritative.sectionId,
+        termId: authoritative.section.termId,
+        dayOfWeek: authoritativeNext.dayOfWeek,
+        startTime: authoritativeNext.startTime,
+        endTime: authoritativeNext.endTime,
+        room: authoritativeNext.room,
+        sectionRoom: authoritative.section.room,
+        excludeSlotId: id,
+      });
+
       const row = await tx.timetableSlot.update({
         where: { id },
-        data: next,
+        data: authoritativeNext,
         include: slotInclude,
       });
       // M23-W2 (S-2): timetable.slot_created and slot_deleted were
@@ -300,8 +362,8 @@ export class TimetableService {
             sectionId: existing.sectionId,
             changed: changedFields(
               ['dayOfWeek', 'startTime', 'endTime', 'room'],
-              existing,
-              next,
+              authoritative,
+              authoritativeNext,
             ),
           },
         },
@@ -364,6 +426,7 @@ export class TimetableService {
    *    an overlapping time.
    */
   private async assertNoConflicts(
+    tx: Tx | PrismaService,
     user: AuthenticatedUser,
     check: {
       sectionId: string;
@@ -378,7 +441,7 @@ export class TimetableService {
       excludeSlotId: string | null;
     },
   ): Promise<void> {
-    const sameDaySlots = await this.prisma.timetableSlot.findMany({
+    const sameDaySlots = await tx.timetableSlot.findMany({
       where: {
         dayOfWeek: check.dayOfWeek,
         section: { collegeId: user.collegeId, termId: check.termId },
@@ -425,5 +488,23 @@ export class TimetableService {
         });
       }
     }
+  }
+
+  /**
+   * Timetable writers serialize per Term. FOR UPDATE is acquired BEFORE the
+   * shared lifecycle guard, so there is no FOR SHARE → FOR UPDATE upgrade.
+   * The guard then supplies the canonical 404/TERM_CLOSED semantics while
+   * this transaction already holds the stronger lock.
+   */
+  private async lockOpenTerm(
+    tx: Tx,
+    collegeId: string,
+    termId: string,
+  ): Promise<void> {
+    await tx.$queryRaw`
+      SELECT id FROM "Term"
+      WHERE id = ${termId} AND "collegeId" = ${collegeId}
+      FOR UPDATE`;
+    await this.lifecycle.assertTermOpen(tx, collegeId, termId);
   }
 }
