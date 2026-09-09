@@ -762,14 +762,70 @@ export class AssignmentsService {
       });
     }
 
-    await this.prisma.submission.update({
-      where: { id: submissionId },
-      data: {
-        points: input.points,
-        feedback: input.feedback,
-        gradedById: user.id,
-        gradedAt: new Date(),
-      },
+    const graded = await this.prisma.$transaction(async (tx) => {
+      // M24-W3a (N-3 #14): the guard and checks above are preflights that
+      // preserve established errors. This authoritative guard holds the Term
+      // FOR SHARE through the grade write, serializing against term close.
+      await this.lifecycle.assertSectionTermOpen(
+        tx,
+        user.collegeId,
+        submission.assignment.sectionId,
+      );
+
+      // Freeze maxPoints/title while validating and grading, then serialize
+      // concurrent grades of this Submission. Lock order: Term → Assignment
+      // → Submission, matching submit's existing transaction order.
+      await tx.$queryRaw`
+        SELECT id FROM "Assignment"
+        WHERE id = ${submission.assignment.id}
+        FOR SHARE`;
+      await tx.$queryRaw`
+        SELECT id FROM "Submission"
+        WHERE id = ${submissionId}
+        FOR UPDATE`;
+      const authoritative = await tx.submission.findFirst({
+        where: {
+          id: submissionId,
+          assignment: {
+            id: submission.assignment.id,
+            section: { collegeId: user.collegeId },
+          },
+        },
+        include: {
+          assignment: {
+            select: { id: true, sectionId: true, title: true, maxPoints: true },
+          },
+          student: { select: { userId: true } },
+        },
+      });
+      if (!authoritative) {
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: 'Submission not found',
+        });
+      }
+      if (input.points > Number(authoritative.assignment.maxPoints)) {
+        throw new BadRequestException({
+          code: 'POINTS_EXCEED_MAX',
+          message: `Points cannot exceed the maximum (${authoritative.assignment.maxPoints})`,
+        });
+      }
+
+      await tx.submission.update({
+        where: { id: submissionId },
+        data: {
+          points: input.points,
+          feedback: input.feedback,
+          gradedById: user.id,
+          gradedAt: new Date(),
+        },
+      });
+      return {
+        studentUserId: authoritative.student.userId,
+        assignmentId: authoritative.assignment.id,
+        assignmentTitle: authoritative.assignment.title,
+        maxPoints: authoritative.assignment.maxPoints.toString(),
+      };
     });
     await this.audit.log({
       collegeId: user.collegeId,
@@ -781,13 +837,13 @@ export class AssignmentsService {
     });
     this.events.emit({
       type: 'assignment.graded',
-      studentUserId: submission.student.userId,
-      assignmentId: submission.assignment.id,
-      assignmentTitle: submission.assignment.title,
+      studentUserId: graded.studentUserId,
+      assignmentId: graded.assignmentId,
+      assignmentTitle: graded.assignmentTitle,
       points: String(input.points),
-      maxPoints: submission.assignment.maxPoints.toString(),
+      maxPoints: graded.maxPoints,
     });
-    return this.submissions(user, submission.assignment.id);
+    return this.submissions(user, graded.assignmentId);
   }
 
   // ── access helpers ─────────────────────────────────────────
