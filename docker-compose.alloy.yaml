@@ -1,0 +1,12 @@
+services:
+  site:
+    image: node:22-bookworm
+    working_dir: /workspace
+    network_mode: host
+    volumes:
+      - .:/workspace
+    environment:
+      IS_ALLOY: ${IS_ALLOY:-true}
+      PORT: 3000
+    command: node server.mjs
+    restart: unless-stopped
