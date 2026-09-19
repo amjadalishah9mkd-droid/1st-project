@@ -1,0 +1,132 @@
+import { NextRequest, NextResponse } from 'next/server';
+import {
+  matchRoutePermission,
+  roleHasPermission,
+  type RoleKey,
+} from '@campusos/shared';
+
+/**
+ * Route protection middleware (Blueprint §8).
+ *
+ * Uses the httpOnly `cos_auth` hint cookie set by the API on login/refresh
+ * ({ role, mustChangePassword } — no tokens, no permissions). This cookie is
+ * a ROUTING HINT ONLY: real authorization is enforced server-side on every
+ * API request via PolicyService. Route→permission mapping and the role
+ * matrix come from @campusos/shared — the same single source that seeds the
+ * database. No permission definitions are duplicated here.
+ */
+const SESSION_HINT_COOKIE = 'cos_auth';
+const PUBLIC_PATHS = ['/login'];
+// Public even with an active session hint (M10-W2): a logged-in admin may
+// open an invite/reset link on someone's behalf, and invitees have no session.
+const ALWAYS_PUBLIC_PATHS = ['/accept-invite'];
+
+interface SessionHint {
+  role: RoleKey;
+  mustChangePassword: boolean;
+  /** M11-W5 identity lifecycle hint (LEGACY/UNVERIFIED/PENDING/VERIFIED/REJECTED). */
+  verification: string;
+}
+
+/** Lifecycle states pinned to the /verify flow (M11-W5). */
+const UNVERIFIED_STATES = ['UNVERIFIED', 'PENDING', 'REJECTED'];
+
+function readHint(request: NextRequest): SessionHint | null {
+  const raw = request.cookies.get(SESSION_HINT_COOKIE)?.value;
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+    if (typeof parsed?.r !== 'string') return null;
+    return {
+      role: parsed.r as RoleKey,
+      mustChangePassword: parsed.mcp === true,
+      verification: typeof parsed.v === 'string' ? parsed.v : 'LEGACY',
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function middleware(request: NextRequest): NextResponse {
+  const { pathname } = request.nextUrl;
+  const hint = readHint(request);
+
+  if (
+    ALWAYS_PUBLIC_PATHS.some(
+      (p) => pathname === p || pathname.startsWith(`${p}/`),
+    )
+  ) {
+    return NextResponse.next();
+  }
+
+  // Public auth routes
+  if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
+    if (hint) {
+      return NextResponse.redirect(
+        new URL(hint.mustChangePassword ? '/change-password' : '/dashboard', request.url),
+      );
+    }
+    return NextResponse.next();
+  }
+
+  // Change-password requires a session; pinned while mustChangePassword=true
+  if (pathname === '/change-password') {
+    if (!hint) {
+      return NextResponse.redirect(new URL('/login', request.url));
+    }
+    return NextResponse.next();
+  }
+
+  // M11-W5: /verify requires a session; verified/legacy users don't belong there.
+  if (pathname === '/verify' || pathname.startsWith('/verify/')) {
+    if (!hint) {
+      return NextResponse.redirect(new URL('/login', request.url));
+    }
+    if (!UNVERIFIED_STATES.includes(hint.verification)) {
+      return NextResponse.redirect(new URL('/dashboard', request.url));
+    }
+    return NextResponse.next();
+  }
+
+  // Root: send to the right place
+  if (pathname === '/') {
+    if (!hint) return NextResponse.redirect(new URL('/login', request.url));
+    const target = hint.mustChangePassword
+      ? '/change-password'
+      : UNVERIFIED_STATES.includes(hint.verification)
+        ? '/verify'
+        : '/dashboard';
+    return NextResponse.redirect(new URL(target, request.url));
+  }
+
+  // Everything else is an authenticated application route
+  if (!hint) {
+    const loginUrl = new URL('/login', request.url);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  if (hint.mustChangePassword) {
+    return NextResponse.redirect(new URL('/change-password', request.url));
+  }
+
+  // M11-W5: accounts mid-verification are pinned to the /verify flow (the
+  // API enforces this server-side too — this only shapes navigation).
+  if (UNVERIFIED_STATES.includes(hint.verification)) {
+    return NextResponse.redirect(new URL('/verify', request.url));
+  }
+
+  // Route-level permission gate from the shared map (hint only; the API is
+  // the enforcement point).
+  const required = matchRoutePermission(pathname);
+  if (required && !roleHasPermission(hint.role, required)) {
+    return NextResponse.redirect(new URL('/dashboard', request.url));
+  }
+
+  return NextResponse.next();
+}
+
+export const config = {
+  // Protect application pages; skip Next internals, static assets and the
+  // API proxy (the API enforces its own auth).
+  matcher: ['/((?!_next|api|favicon.ico|.*\\..*).*)'],
+};

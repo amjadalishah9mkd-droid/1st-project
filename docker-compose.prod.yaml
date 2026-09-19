@@ -1,0 +1,150 @@
+# CampusOS — production deployment compose (M10-W3).
+# NOT used by the Alloy sandbox (that remains docker-compose.alloy.yaml).
+#
+# Usage:
+#   1. cp apps/api/.env.production.example .env.production  (fill values)
+#   2. docker compose -f docker-compose.prod.yaml --env-file .env.production up -d
+#
+# Demo seed is intentionally impossible here: SEED_DEMO is never set and the
+# seed script additionally refuses demo data when NODE_ENV=production.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  postgres:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_USER: campusos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: campusos
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U campusos -d campusos"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    logging: *default-logging
+
+  # One-shot least-privilege volume initialization. The API stays non-root;
+  # backup receives the same volume read-only only after ownership is set.
+  uploads-init:
+    image: node:22-bookworm-slim
+    user: "0:0"
+    command: chown -R 1000:1000 /data/uploads
+    volumes:
+      - uploads:/data/uploads
+    restart: "no"
+    logging: *default-logging
+
+  # M22-W3: local production backup parity. A cycle is healthy only after a
+  # custom DB dump AND read-only uploads archive both validate. This is local
+  # protection, not off-host backup or PITR (both remain deployment work).
+  backup:
+    image: postgres:16-bookworm
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: campusos
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      PGDATABASE: campusos
+      BACKUP_DIR: /var/backups/campusos
+      UPLOAD_DIR: /data/uploads
+      BACKUP_HEALTH_FILE: /var/backups/campusos/.backup-health
+      BACKUP_MAX_AGE_SECONDS: "93600"
+      RETENTION_DAYS: "14"
+      BACKUP_INTERVAL_SECONDS: "86400"
+      BACKUP_RETRY_SECONDS: "300"
+    volumes:
+      - ./scripts/backup:/scripts:ro
+      - pgbackups:/var/backups/campusos
+      - uploads:/data/uploads:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      uploads-init:
+        condition: service_completed_successfully
+    command: bash /scripts/backup-loop.sh
+    healthcheck:
+      test: ["CMD", "bash", "/scripts/backup-healthcheck.sh"]
+      interval: 5m
+      timeout: 10s
+      retries: 2
+      start_period: 2m
+    restart: unless-stopped
+    logging: *default-logging
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    # Usage requires this untracked file (see header). It carries optional
+    # Google/SMTP/Safepay variables without embedding values in Compose.
+    env_file:
+      - path: .env.production
+        required: false
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://campusos:${POSTGRES_PASSWORD}@postgres:5432/campusos
+      API_PORT: "4000"
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?set JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?set JWT_REFRESH_SECRET}
+      FILE_URL_SECRET: ${FILE_URL_SECRET:?set FILE_URL_SECRET}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      UPLOAD_DIR: /data/uploads
+      BACKUP_DIR: /var/backups/campusos
+      BACKUP_HEALTH_FILE: /var/backups/campusos/.backup-health
+    volumes:
+      - uploads:/data/uploads
+      - pgbackups:/var/backups/campusos:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      uploads-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:4000/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    logging: *default-logging
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      API_INTERNAL_URL: http://api:4000
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    logging: *default-logging
+
+volumes:
+  pgdata:
+  uploads:
+  pgbackups:
