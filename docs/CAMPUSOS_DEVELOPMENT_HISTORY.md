@@ -3945,7 +3945,7 @@ role/permission, or frontend implementation was part of W3a.
 *Last updated after the M24-W3a source and evidence reconciliation;
 W3a PARTIAL (source-Term lock open), W3c/W4 not started, M24 OPEN.*
 
-**Subsequent W3a implementation (uncommitted, independent closure review
+**Subsequent W3a implementation (`0d16327`, independent closure review
 pending):** A common college-scoped transaction advisory lock is now taken
 before row locks in `rollover.createDraft`, `rollover.execute`, and
 `calendar.setCurrentTerm`. Execute re-reads source Term status under a

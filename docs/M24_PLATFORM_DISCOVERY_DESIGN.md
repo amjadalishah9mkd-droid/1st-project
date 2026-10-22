@@ -1451,10 +1451,9 @@ required for W3a. **W3c (N-12), W4, and the W2 remainder remain open; M24
 is NOT closed. W3a itself remains OPEN pending source-Term locking in
 `rollover.execute` and a concurrency regression.**
 
-### W3a source-Term coordination implementation (uncommitted; closure review pending)
+### W3a source-Term coordination implementation (commit `0d16327`; closure review pending)
 
-The above source-Term blocker has now been implemented in the **current
-uncommitted worktree**, not in a numbered commit. A shared transaction-level,
+The above source-Term blocker was implemented in **`0d16327`**. A shared transaction-level,
 per-college `pg_advisory_xact_lock` is the first lock taken by
 `rollover.createDraft`, `rollover.execute`, and `calendar.setCurrentTerm`.
 That serializes multi-Term operations before their existing destination/target
@@ -1475,6 +1474,6 @@ temporarily removed, then passed after restoration. Existing related suites
 68 suites** passed. Typecheck and Prisma validation passed, migrations remain
 15. Host API/web builds still encounter pre-existing root-owned `dist`/`.next`
 permission failures; shared build and runtime health passed. These are
-observed results from this implementation run, not a commit or a formal W3a
+observed results from the implementation run, not a formal W3a
 close-out. **W3a remains OPEN pending independent review of the complete
 closure criteria; M24 remains OPEN.**

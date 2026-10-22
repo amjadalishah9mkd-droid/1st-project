@@ -39,11 +39,15 @@ describe('M24-W3a — academic Term lock coordination (real PostgreSQL)', () => 
   const setCurrent = (f: Fixture, id: string) =>
     http.patch(`/api/v1/terms/${id}/set-current`).set(auth(f));
 
-  async function fixture(): Promise<Fixture> {
+  async function fixture(failAfter?: 'college' | 'student' | 'terms' | 'login'): Promise<Fixture> {
     const tag = `${suffix}-${++seq}`;
+    let collegeId: string | undefined;
+    try {
     const college = await prisma.college.create({
       data: { name: `W3A College ${tag}`, code: `W3A-${tag}` },
     });
+    collegeId = college.id;
+    if (failAfter === 'college') throw new Error('Fixture setup interrupted');
     const demo = await prisma.user.findFirstOrThrow({
       where: { email: 'admin@campusos.dev' },
       select: { passwordHash: true },
@@ -81,6 +85,7 @@ describe('M24-W3a — academic Term lock coordination (real PostgreSQL)', () => 
         batch: '2039',
       },
     });
+    if (failAfter === 'student') throw new Error('Fixture setup interrupted');
     const year = await prisma.academicYear.create({
       data: {
         collegeId: college.id,
@@ -91,21 +96,20 @@ describe('M24-W3a — academic Term lock coordination (real PostgreSQL)', () => 
     });
     const sourceLabel = `Source-${tag}`;
     const destLabel = `Dest-${tag}`;
-    const [source, dest, current] = await Promise.all([
-      prisma.term.create({ data: {
+    const source = await prisma.term.create({ data: {
         collegeId: college.id, academicYearId: year.id, label: sourceLabel,
         startsOn: new Date('2039-01-01'), endsOn: new Date('2039-04-30'),
-      } }),
-      prisma.term.create({ data: {
+      } });
+    const dest = await prisma.term.create({ data: {
         collegeId: college.id, academicYearId: year.id, label: destLabel,
         startsOn: new Date('2039-05-01'), endsOn: new Date('2039-08-31'),
-      } }),
-      prisma.term.create({ data: {
+      } });
+    const current = await prisma.term.create({ data: {
         collegeId: college.id, academicYearId: year.id, label: `Current-${tag}`,
         startsOn: new Date('2039-09-01'), endsOn: new Date('2039-12-31'),
         isCurrent: true,
-      } }),
-    ]);
+      } });
+    if (failAfter === 'terms') throw new Error('Fixture setup interrupted');
     const course = await prisma.course.create({
       data: { collegeId: college.id, departmentId: dept.id, code: `W3A-${tag}`.slice(0, 24), title: 'Term race', credits: 3 },
     });
@@ -116,6 +120,7 @@ describe('M24-W3a — academic Term lock coordination (real PostgreSQL)', () => 
     app.get(LoginRateLimiterService).reset();
     const login = await http.post('/api/v1/auth/login').send({ email: admin.email, password: PASSWORD });
     expect(login.status).toBe(200);
+    if (failAfter === 'login') throw new Error('Fixture setup interrupted');
     return {
       collegeId: college.id, adminId: admin.id, studentUserId: studentUser.id,
       studentId: student.id, yearId: year.id, courseId: course.id,
@@ -123,23 +128,36 @@ describe('M24-W3a — academic Term lock coordination (real PostgreSQL)', () => 
       sectionId: section.id, sourceLabel, destLabel,
       token: login.body.data.accessToken as string,
     };
+    } catch (error) {
+      if (collegeId) {
+        try {
+          await cleanup(collegeId);
+        } catch (cleanupError) {
+          throw new AggregateError([error, cleanupError], 'Fixture setup and cleanup both failed');
+        }
+      }
+      throw error;
+    }
   }
 
-  async function cleanup(f: Fixture): Promise<void> {
-    await prisma.notification.deleteMany({ where: { userId: { in: [f.adminId, f.studentUserId] } } });
-    await prisma.refreshToken.deleteMany({ where: { userId: f.adminId } });
-    await prisma.auditLog.deleteMany({ where: { collegeId: f.collegeId } });
-    await prisma.enrollment.deleteMany({ where: { section: { collegeId: f.collegeId } } });
-    await prisma.teachingAssignment.deleteMany({ where: { section: { collegeId: f.collegeId } } });
-    await prisma.termRollover.deleteMany({ where: { collegeId: f.collegeId } });
-    await prisma.section.deleteMany({ where: { collegeId: f.collegeId } });
-    await prisma.course.deleteMany({ where: { collegeId: f.collegeId } });
-    await prisma.term.deleteMany({ where: { collegeId: f.collegeId } });
-    await prisma.academicYear.deleteMany({ where: { collegeId: f.collegeId } });
-    await prisma.studentProfile.delete({ where: { id: f.studentId } });
-    await prisma.user.deleteMany({ where: { id: { in: [f.adminId, f.studentUserId] } } });
-    await prisma.department.deleteMany({ where: { collegeId: f.collegeId } });
-    await prisma.college.delete({ where: { id: f.collegeId } });
+  async function cleanup(f: Fixture | string): Promise<void> {
+    // Only this fixture owns the newly created college, so a partial setup
+    // can be removed using the same tenant-scoped cleanup as a complete one.
+    const collegeId = typeof f === 'string' ? f : f.collegeId;
+    await prisma.notification.deleteMany({ where: { user: { collegeId } } });
+    await prisma.refreshToken.deleteMany({ where: { user: { collegeId } } });
+    await prisma.auditLog.deleteMany({ where: { collegeId } });
+    await prisma.enrollment.deleteMany({ where: { section: { collegeId } } });
+    await prisma.teachingAssignment.deleteMany({ where: { section: { collegeId } } });
+    await prisma.termRollover.deleteMany({ where: { collegeId } });
+    await prisma.section.deleteMany({ where: { collegeId } });
+    await prisma.course.deleteMany({ where: { collegeId } });
+    await prisma.term.deleteMany({ where: { collegeId } });
+    await prisma.academicYear.deleteMany({ where: { collegeId } });
+    await prisma.studentProfile.deleteMany({ where: { collegeId } });
+    await prisma.user.deleteMany({ where: { collegeId } });
+    await prisma.department.deleteMany({ where: { collegeId } });
+    await prisma.college.delete({ where: { id: collegeId } });
   }
 
   async function waitFor(check: () => Promise<boolean>, what: string, timeout = 3_000) {
@@ -151,32 +169,43 @@ describe('M24-W3a — academic Term lock coordination (real PostgreSQL)', () => 
     throw new Error(`Timed out waiting for ${what}`);
   }
 
-  async function tableWait(name: string): Promise<boolean> {
+  async function tableWait(name: string, blockerPid: number | undefined): Promise<boolean> {
+    if (blockerPid === undefined) return false;
     const rows = await prisma.$queryRawUnsafe<Array<{ n: bigint }>>(
-      'SELECT count(*) AS n FROM pg_locks WHERE relation = $1::regclass AND NOT granted',
+      'SELECT count(*) AS n FROM pg_locks WHERE relation = $1::regclass AND NOT granted AND $2::int = ANY(pg_blocking_pids(pid))',
       `"${name}"`,
+      blockerPid,
     );
     return Number(rows[0].n) > 0;
   }
 
-  async function advisoryWait(): Promise<boolean> {
+  async function advisoryWait(f: Fixture): Promise<boolean> {
+    // The one-argument bigint key uses classid/objid (high/low halves).
+    // objsubid=1 distinguishes it from the two-int advisory-lock overload.
     const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
-      SELECT count(*) AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`;
+      SELECT count(*) AS n FROM pg_locks l
+      JOIN pg_stat_activity a ON a.pid = l.pid
+      WHERE l.locktype = 'advisory' AND NOT l.granted AND l.objsubid = 1
+        AND ((l.classid::bigint << 32) | l.objid::bigint) = hashtext(${`${f.collegeId}:academic-terms`})::bigint
+        AND a.query LIKE '%pg_advisory_xact_lock%'`;
     return Number(rows[0].n) > 0;
   }
 
   function barrier(table: 'AuditLog' | 'Enrollment' | 'TermRollover') {
     let release!: () => void;
+    let holderPid: number | undefined;
     const held = new Promise<void>((resolve) => { release = resolve; });
     class Rollback extends Error {}
     const done = prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(`LOCK TABLE "${table}" IN EXCLUSIVE MODE`);
+      const rows = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+      holderPid = rows[0].pid;
       await held;
       throw new Rollback();
     }, { timeout: 30_000, maxWait: 10_000 }).catch((e) => {
       if (!(e instanceof Rollback)) throw e;
     });
-    return { release, done };
+    return { release, done, get holderPid() { return holderPid; } };
   }
 
   beforeAll(async () => {
@@ -185,6 +214,15 @@ describe('M24-W3a — academic Term lock coordination (real PostgreSQL)', () => 
     http = request(app.getHttpServer());
   });
   afterAll(async () => { await app.close(); });
+
+  it.each(['college', 'student', 'terms', 'login'] as const)(
+    'cleans up only the test-owned college when fixture setup fails after %s',
+    async (stage) => {
+      const tag = `${suffix}-${seq + 1}`;
+      await expect(fixture(stage)).rejects.toThrow('Fixture setup interrupted');
+      expect(await prisma.college.count({ where: { code: `W3A-${tag}` } })).toBe(0);
+    },
+  );
 
   it('close-first: the rollover reads CLOSED after waiting for source FOR UPDATE', async () => {
     const f = await fixture();
@@ -199,12 +237,24 @@ describe('M24-W3a — academic Term lock coordination (real PostgreSQL)', () => 
         return Number(rows[0].n) > 0;
       }, 'audit barrier');
       pending.push((async () => await close(f))());
-      await waitFor(() => tableWait('AuditLog'), 'close to park after source lock');
+      let closePid: number | undefined;
+      await waitFor(async () => {
+        if (gate?.holderPid === undefined) return false;
+        const rows = await prisma.$queryRaw<Array<{ pid: number }>>`
+          SELECT l.pid FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+          WHERE l.relation = '"AuditLog"'::regclass AND NOT l.granted
+            AND ${gate.holderPid} = ANY(pg_blocking_pids(l.pid))
+            AND a.query LIKE '%"AuditLog"%'
+          LIMIT 1`;
+        closePid = rows[0]?.pid;
+        return closePid !== undefined;
+      }, 'close to park behind fixture audit barrier');
       pending.push((async () => await execute(f))());
       await waitFor(async () => {
         const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
-          SELECT count(*) AS n FROM pg_stat_activity
-          WHERE wait_event_type = 'Lock' AND query LIKE '%FROM "Term"%' AND query LIKE '%FOR SHARE%'`;
+          SELECT count(*) AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+          WHERE NOT l.granted AND ${closePid} = ANY(pg_blocking_pids(l.pid))
+            AND a.query LIKE '%FROM "Term"%' AND a.query LIKE '%FOR SHARE%'`;
         return Number(rows[0].n) > 0;
       }, 'rollover to wait for source Term');
       gate.release();
@@ -236,12 +286,24 @@ describe('M24-W3a — academic Term lock coordination (real PostgreSQL)', () => 
           return Number(rows[0].n) > 0;
         }, 'enrollment barrier');
         pending.push((async () => await execute(f))());
-        await waitFor(() => tableWait('Enrollment'), 'rollover to park before source writes');
+        let rolloverPid: number | undefined;
+        await waitFor(async () => {
+          if (gate.holderPid === undefined) return false;
+          const rows = await prisma.$queryRaw<Array<{ pid: number }>>`
+            SELECT l.pid FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+            WHERE l.relation = '"Enrollment"'::regclass AND NOT l.granted
+              AND ${gate.holderPid} = ANY(pg_blocking_pids(l.pid))
+              AND a.query LIKE '%"Enrollment"%'
+            LIMIT 1`;
+          rolloverPid = rows[0]?.pid;
+          return rolloverPid !== undefined;
+        }, 'rollover to park behind fixture enrollment barrier');
         pending.push((async () => await close(f))());
         await waitFor(async () => {
           const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
-            SELECT count(*) AS n FROM pg_stat_activity
-            WHERE wait_event_type = 'Lock' AND query LIKE '%FROM "Term"%' AND query LIKE '%FOR UPDATE%'`;
+            SELECT count(*) AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+            WHERE NOT l.granted AND ${rolloverPid} = ANY(pg_blocking_pids(l.pid))
+              AND a.query LIKE '%FROM "Term"%' AND a.query LIKE '%FOR UPDATE%'`;
           return Number(rows[0].n) > 0;
         }, 'source close to wait for rollover');
         gate.release();
@@ -273,10 +335,10 @@ describe('M24-W3a — academic Term lock coordination (real PostgreSQL)', () => 
           return Number(rows[0].n) > 0;
         }, 'rollover row barrier');
         pending.push((async () => await execute(f))());
-        await waitFor(() => tableWait('TermRollover'), 'rollover to park on row lock');
+        await waitFor(() => tableWait('TermRollover', gate.holderPid), 'rollover to park on row lock');
         const targetId = target === 'source' ? f.sourceId : f.destId;
         pending.push((async () => await setCurrent(f, targetId))());
-        await waitFor(advisoryWait, 'set-current to wait for advisory lock');
+        await waitFor(() => advisoryWait(f), 'set-current to wait for fixture advisory lock');
         gate.release();
         await gate.done;
         const [rolled, current] = await Promise.all(pending);
@@ -303,9 +365,9 @@ describe('M24-W3a — academic Term lock coordination (real PostgreSQL)', () => 
         return Number(rows[0].n) > 0;
       }, 'draft barrier');
       pending.push((async () => await draft(f))());
-      await waitFor(() => tableWait('TermRollover'), 'draft to park on insert');
+      await waitFor(() => tableWait('TermRollover', gate.holderPid), 'draft to park on insert');
       pending.push((async () => await setCurrent(f, f.sourceId))());
-      await waitFor(advisoryWait, 'set-current to wait for draft advisory lock');
+      await waitFor(() => advisoryWait(f), 'set-current to wait for draft advisory lock');
       gate.release();
       await gate.done;
       const [created, current] = await Promise.all(pending);
@@ -333,9 +395,9 @@ describe('M24-W3a — academic Term lock coordination (real PostgreSQL)', () => 
           return Number(rows[0].n) > 0;
         }, 'duplicate barrier');
         pending.push((async () => await execute(f))());
-        await waitFor(() => tableWait('TermRollover'), 'first execute to park');
+        await waitFor(() => tableWait('TermRollover', gate.holderPid), 'first execute to park');
         pending.push((async () => await execute(f))());
-        await waitFor(advisoryWait, 'second execute to wait on advisory lock');
+        await waitFor(() => advisoryWait(f), 'second execute to wait on fixture advisory lock');
         gate.release();
         await gate.done;
         const [first, second] = await Promise.all(pending);
@@ -357,16 +419,14 @@ describe('M24-W3a — academic Term lock coordination (real PostgreSQL)', () => 
     try {
       // Both target Terms must be empty at draft time. The populated source
       // fixture is not used here; the domain does not prohibit empty plans.
-      const [a, b] = await Promise.all([
-        prisma.term.create({ data: {
+      const a = await prisma.term.create({ data: {
           collegeId: f.collegeId, academicYearId: f.yearId,
           label: `Opp-A-${suffix}-${seq}`, startsOn: new Date('2039-01-01'), endsOn: new Date('2039-04-30'),
-        } }),
-        prisma.term.create({ data: {
+        } });
+      const b = await prisma.term.create({ data: {
           collegeId: f.collegeId, academicYearId: f.yearId,
           label: `Opp-B-${suffix}-${seq}`, startsOn: new Date('2039-05-01'), endsOn: new Date('2039-08-31'),
-        } }),
-      ]);
+        } });
       expect((await draft(f, b.id, a.id)).status).toBe(201);
       expect((await draft(f, a.id, b.id)).status).toBe(201);
 
@@ -378,9 +438,9 @@ describe('M24-W3a — academic Term lock coordination (real PostgreSQL)', () => 
           return Number(rows[0].n) > 0;
         }, 'opposing rollover barrier');
         pending.push((async () => await execute(f, b.id, b.label))());
-        await waitFor(() => tableWait('TermRollover'), 'first opposing rollover to park');
+        await waitFor(() => tableWait('TermRollover', gate.holderPid), 'first opposing rollover to park');
         pending.push((async () => await execute(f, a.id, a.label))());
-        await waitFor(advisoryWait, 'second opposing rollover to wait on advisory lock');
+        await waitFor(() => advisoryWait(f), 'second opposing rollover to wait on fixture advisory lock');
         gate.release();
         await gate.done;
         const [first, second] = await Promise.all(pending);
@@ -405,30 +465,36 @@ describe('M24-W3a — academic Term lock coordination (real PostgreSQL)', () => 
       // A database-owned row lock parks set-current after its target lock
       // and advisory claim, on the previously current Term.
       let release!: () => void;
+      let holderPid: number | undefined;
+      let setCurrentPid: number | undefined;
       const held = new Promise<void>((resolve) => { release = resolve; });
       const holder = prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT id FROM "Term" WHERE id = ${f.currentId} FOR UPDATE`;
+        const rows = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+        holderPid = rows[0].pid;
         await held;
       }, { timeout: 30_000 });
       try {
-        await waitFor(async () => {
-          const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
-            SELECT count(*) AS n FROM pg_locks WHERE relation = '"Term"'::regclass AND mode = 'RowShareLock' AND granted`;
-          return Number(rows[0].n) > 0;
-        }, 'current row holder');
+        await waitFor(async () => holderPid !== undefined, 'fixture current-Term lock holder');
         pending.push((async () => await setCurrent(f, f.sourceId))());
         await waitFor(async () => {
-          const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
-            SELECT count(*) AS n FROM pg_locks WHERE NOT granted`;
-          return Number(rows[0].n) > 0;
+          const rows = await prisma.$queryRaw<Array<{ pid: number }>>`
+            SELECT l.pid FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+            WHERE NOT l.granted AND ${holderPid} = ANY(pg_blocking_pids(l.pid))
+              AND a.query LIKE '%"Term"%' AND a.query ILIKE '%UPDATE%'
+            LIMIT 1`;
+          setCurrentPid = rows[0]?.pid;
+          return setCurrentPid !== undefined;
         }, 'set-current to wait on previous current Term');
         pending.push((async () => await execute(f))());
-        await waitFor(advisoryWait, 'rollover to wait on set-current');
+        await waitFor(() => advisoryWait(f), 'rollover to wait on fixture advisory lock');
         pending.push((async () => await close(f))());
         await waitFor(async () => {
           const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
-            SELECT count(*) AS n FROM pg_stat_activity
-            WHERE wait_event_type = 'Lock' AND query LIKE '%FROM "Term"%' AND query LIKE '%FOR UPDATE%'`;
+            SELECT count(*) AS n FROM pg_locks l
+            JOIN pg_stat_activity a ON a.pid = l.pid
+            WHERE NOT l.granted AND ${setCurrentPid} = ANY(pg_blocking_pids(l.pid))
+              AND a.query LIKE '%FROM "Term"%' AND a.query LIKE '%FOR UPDATE%'`;
           return Number(rows[0].n) > 0;
         }, 'source close to wait for set-current target');
         release();
