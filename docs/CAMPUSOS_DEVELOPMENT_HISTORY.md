@@ -3870,6 +3870,81 @@ OPEN.**
 *Last updated after M24-W3b (seven lifecycle findings closed; W3a/W3c/W4
 not started; M24 OPEN).*
 
+## M24-W3a — transaction boundary and concurrency hardening
+
+**PARTIAL after `bf16f46`** (N-4 inverse capacity fix). This entry is a
+later reconciliation of W3a work; the W0/W3b observations above remain
+historical records, not a description of the current source. **M24 is
+still OPEN** (W2 partial; W3c N-12 and W4 not started).
+
+**Original N-3 call-site inventory remediated; W3a remains OPEN.** The
+discovery-time "25 of 33" describes 25 actionable
+write methods among 33 guard calls at `5abdbeb`: 27 plain-client calls,
+minus the analytics read guard (N-13, removed in W1 `2785c78`) and the
+`fees.generateInvoices` preflight (already re-asserted with `tx` before
+writing). After W1 there were 32 calls: 26 plain-client calls in 26
+methods, of which 25 were unsafe writes and one was that safe fees
+preflight. The guide's "26" counted methods with plain-client calls, not
+26 actionable defects. All 25 write methods now share the authoritative
+Term lifecycle guard and mutation on one interactive transaction client;
+fees remains already safe. Plain-client guards left in these methods are
+preflights for error precedence. Method-by-method inventory and lock
+ordering are recorded in `M24_PLATFORM_DISCOVERY_DESIGN.md` §29.
+
+Implementation chain (hashes verified in this branch): Batch 1 `65602c8`
+(five existing transactions), Batch 2 `18e3d18` (single-write paths),
+Batch 3 `d6e91c6` (batch-to-interactive conversions), Batch 4 `92e166a`
+(`assignments.update`), N-4 enrollment and N-3 #5 `721f6d9`, timetable
+and N-3 #24 `96e620c`, rollover #2 `3854d02`, assignment submit #13
+`01b0ba5`, and grade #14 `d07f17d`. The commit subjects on some
+environment-managed commits are historical artifacts; the referenced
+file lists and production code, not the subjects, establish their scope.
+
+**N-4 CLOSED** in two steps: `721f6d9` makes concurrent enrollments
+serialize on Term → Section and re-read capacity/ACTIVE count before
+creating or reactivating; `bf16f46` makes `sections.update` use the same
+lock order and an authoritative ACTIVE count before capacity reduction.
+Both retain established 409 `SECTION_FULL` / 400
+`CAPACITY_BELOW_ENROLLMENT` behavior and preflight ordering. The
+real-Postgres `m24-w3a-n4-enrollment-concurrency` suite parks writers
+using observable locks. An enrollment-first reduction race is covered;
+removing the inverse lock/recheck produced **30 ACTIVE enrollments at
+capacity 29** in the prior mutation run. A reduction-first interleaving
+was **not separately forced in a test**; the shared Section lock and
+enroll's authoritative `SECTION_FULL` check protect that order in source.
+
+**N-16b CLOSED** at `96e620c`: `createSlot` and `updateSlot` acquire the
+owning Term `FOR UPDATE` before authoritative conflict reads and
+`tx.timetableSlot.create/update`. The real-Postgres
+`m24-w3a-n16b-timetable-concurrency` suite covers create/create
+`SLOT_CONFLICT` and update/update effective-room `ROOM_CONFLICT`;
+mutation checks without the exclusive Term lock made both conflicting
+writers succeed. Teacher/student conflict detection and cross-term room
+checks remain outside this finding.
+
+**W3a blocker found in the later audit:** `rollover.execute` reads the
+source Term status with `tx.term.findFirstOrThrow` without a lock and then,
+if ACTIVE, conditionally updates source enrollments. Its own comment
+assigns source locking to N-3/W3a. A concurrent source-Term close can
+commit after that read but before the source write. The original 26-method
+call-site inventory did not include this source read, so its successful
+reconciliation does not close this separate dependency. No source code or
+test was changed to address it; a targeted source-lock design and real
+PostgreSQL race test are needed before W3a can be declared CLOSED.
+
+**Verification provenance.** The N-4 inverse implementation run reported
+three consecutive focused passes (3/3 each), related suites 112/112,
+full API regression **886/886 across 67 suites**, typecheck clean,
+Prisma valid, 15 migrations unchanged, healthy Docker services and
+baseline demo identity intact. Those are prior-run results, **not** tests
+rerun for this documentation reconciliation. API/web host builds in that
+run were blocked by pre-existing root-owned `dist`/`.next` EACCES; shared
+build passed. No schema, migration, dependency, Docker, `.alloy`, new
+role/permission, or frontend implementation was part of W3a.
+
+*Last updated after the M24-W3a source and evidence reconciliation;
+W3a PARTIAL (source-Term lock open), W3c/W4 not started, M24 OPEN.*
+
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
   Hardening & Debt Retirement (P2-IDOR-1 file authorization, mail
@@ -3883,9 +3958,11 @@ not started; M24 OPEN).*
   GuardianLink, pending O-2 — not "dead columns").
 - **M24 status**: W0 and W1 COMPLETE; W2 **PARTIAL**; **W3b COMPLETE**
   (N-2, N-11 coverage, N-14, N-15, N-16a, N-17, N-18 closed). N-1 (HIGH)
-  remains CLOSED. **W3a** (N-3, N-4, N-16b), **W3c** (N-12) and **W4** NOT
-  started; the W2 remainder and N-11's retroactive guard (O-5 → M25)
-  remain deferred. M24 is **NOT closed**.
+  remains CLOSED. **W3a PARTIAL** (N-3's original 25 write call sites,
+  N-4 in both directions and N-16b remediated; rollover source-Term lock
+  still open);
+  **W3c** (N-12) and **W4** NOT started; the W2 remainder and N-11's
+  retroactive guard (O-5 → M25) remain deferred. M24 is **NOT closed**.
 - **M23 status**: **M23 COMPLETE AND CLOSED (W0–W4)** — Authorization
   Correctness & Audit Integrity. S-1, S-2 (approved scope), D-1, D-2 and
   D-4 all CLOSED; every remaining finding carries an explicit
@@ -3901,10 +3978,11 @@ not started; M24 OPEN).*
   browser-print; M17 term lifecycle, M16 refunds+accountant, M15
   rollover and M14 payments all remain complete (webhook delivery
   still pending provider-dashboard endpoint registration).
-- **Latest commit**: the M24-W3b lifecycle-integrity commit on branch
+- **Latest code commit at this reconciliation**: `bf16f46` (N-4 inverse
+  capacity race) on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 15 found, database schema up to date
-- **Tests**: **800/800 passing** (58 suites)
+- **Tests**: **886/886 passing** (67 suites; prior N-4 implementation run)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -3913,11 +3991,10 @@ not started; M24 OPEN).*
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13 and
   `docs/M23_PLATFORM_DISCOVERY_DESIGN.md` (current reconciliation)
-- **Next planned milestone**: M24-W3a (locking/concurrency: N-3's 26-site
-  transaction conversion, N-4 capacity, N-16b) and M24-W3c (N-12) are
-  designed and awaiting authorization, followed by W4 close-out. The W2
-  remainder still needs its recorded decisions. Reporting/analytics and
-  CI/lint remain M25 candidates
+- **Next planned milestone**: resolve the W3a rollover source-Term lock
+  blocker, then re-audit W3a. M24-W3c (N-12) has not started, followed by
+  W4 close-out. The W2 remainder still needs its recorded decisions.
+  Reporting/analytics and CI/lint remain M25 candidates.
 
 ## 15. Future Roadmap
 

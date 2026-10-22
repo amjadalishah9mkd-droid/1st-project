@@ -487,6 +487,16 @@ New audit-coverage gaps:
   NEW DEFECT (W3).
   > **NOT addressed in W3b** — N-4 is locking/concurrency work and remains
   > DEFERRED to W3a alongside N-3 and N-16b.
+  > **W3a outcome (later): CLOSED.** `sections.enroll` locks Term then Section,
+  > re-reads capacity and ACTIVE count under the lock, and creates/reactivates
+  > on `tx` (`721f6d9`). The inverse `sections.update` path preserves the
+  > preflight/error order but also locks Term then the tenant-scoped Section
+  > and re-counts ACTIVE enrollments before a reduction (`bf16f46`). The
+  > controlled enrollment-first race fails against the old preflight-only
+  > version (30 ACTIVE with capacity 29); two contenders for one seat are
+  > also tested. Reduction winning first was not tested as a separate
+  > controlled interleaving; the same Section lock and `SECTION_FULL` check
+  > enforce that order. No DB constraint or migration was added.
 - **N-11 — MEDIUM — grade bands retroactively re-grade published results;
   gaps unvalidated.** `exams/exams.service.ts:800-872` deletes and recreates
   all bands with **no term guard and no published-results guard**, and grade
@@ -549,6 +559,18 @@ New audit-coverage gaps:
   cover. A mark, attendance record, assignment, submission, grade, timetable
   slot, enrollment or teaching assignment can therefore be written into an
   already-CLOSED term. NEW DEFECT (W3).
+  > **W3a progress (later): the original N-3 call-site defect is CLOSED.**
+  > The W0 (`5abdbeb`) 33 guard calls were
+  > 27 plain-client calls and 6 already on `tx`. Two plain-client calls were
+  > not actionable N-3 write defects: the pure-read analytics guard (N-13,
+  > removed in W1 `2785c78`) and `fees.generateInvoices`'s preflight
+  > (already re-asserted on `tx` before writing invoices). Thus 25/33
+  > denotes actionable W0 writes, not literally 25 plain-client calls.
+  > After W1 there were 32 calls: 26 plain-client calls across 26 methods,
+  > comprising 25 unsafe methods and the safe fees preflight. The later
+  > guide's "26" counted calls, not unsafe writes. All 25 now have an
+  > authoritative in-transaction guard and mutation; fees retains its
+  > original guarded transaction. See §29 for the method inventory.
 - **N-13 — MEDIUM — term guard misapplied to a read.**
   `exams/exams.service.ts:731` calls `assertTermOpen` in `analytics()`,
   which throws `409 TERM_CLOSED` ("records are read-only") on a pure read.
@@ -698,6 +720,14 @@ N-2, N-3, N-4, N-11, N-13, N-14, N-15, N-17, N-18 above, plus:
   > not conflict on room. **(b) remains DEFERRED to W3a** — the
   > non-transactional `assertNoConflicts` → `create` sequence is
   > concurrency work (N-16b).
+  > **(b) RESOLVED in W3a (`96e620c`).** Both `createSlot` and `updateSlot`
+  > lock the owning Term `FOR UPDATE` before authoritative `tx` conflict
+  > reads and writes. No `FOR SHARE` → `FOR UPDATE` upgrade occurs. Controlled
+  > create/create and update/update races produce `SLOT_CONFLICT` and
+  > effective-room `ROOM_CONFLICT`; without the exclusive Term lock both
+  > contenders succeed in the mutation runs. The documented absence of
+  > teacher/student conflict detection and cross-term room checks remains
+  > outside N-16b.
 - **Verified NO DEFECT:** term ACTIVE⇄CLOSED transitions (tenancy 404 →
   server-authoritative typed confirmation → `FOR UPDATE` → authoritative
   re-read → `isCurrent` check → `updateMany` CAS → in-transaction audit);
@@ -845,6 +875,8 @@ via `assertAllScope`, which refuses OWN/ASSIGNED/CHILD and enforces
 - **No race test** exists for marks, assignments, timetable, enrollment or
   teaching assignments — precisely the 25 call sites N-3 leaves
   unsynchronized, and the capacity path of N-4.
+  **Historical W0 observation:** W3a later added real-Postgres transaction
+  and lock tests for those write families (see §29).
 
 ---
 
@@ -1327,3 +1359,94 @@ No Prisma schema, migration, dependency, Docker, `.alloy`, `money.ts`,
 permission or role change. **No `assertTermOpen` call site was modified**,
 confirming the N-3 26-site transaction conversion was not started. No
 retroactive-regrading guard and no freeze-at-publish behaviour.
+
+---
+
+## 29. M24-W3a progress (transaction boundaries and concurrency)
+
+**W3a NOT CLOSED; M24 remains OPEN.** This later reconciliation does not change
+the historical W0/W3b findings above. Source inspection at `bf16f46` confirms
+each protected write in the original N-3 26-method inventory is in the
+same interactive transaction as its authoritative lifecycle guard.
+Plain-client guard calls that remain are
+preflights for error precedence, not the lock relied upon by the write.
+No nested transaction or out-of-transaction protected business write was
+found in that inventory. However, `rollover.execute`'s **source** Term
+status read has no lock: `rollover.service.ts` reads source status with
+`tx.term.findFirstOrThrow` after claiming the rollover, then conditionally
+updates source enrollments if the status was ACTIVE. Its own comment assigns
+source locking to N-3/W3a. A concurrent close may commit after the source
+status read and before the source write. This is outside the 26-method
+call-site inventory, but is an explicit W3a dependency left unresolved.
+No W3a closure claim is warranted until that path is assessed and protected.
+
+### N-3 inventory and historical count reconciliation
+
+At W0 (`5abdbeb`), `apps/api/src` had **33** guard calls outside the guard
+definitions: 27 on `this.prisma` and 6 on `tx`. The W0 **25/33 actionable**
+figure excludes (1) the analytics *read* guard removed by N-13 in W1
+(`2785c78`) and (2) the `fees.generateInvoices` preflight, which already
+re-asserted on `tx` before creating invoices. After the analytics removal,
+W1 through W3b (`feeaeef`) had **32** calls: 26 plain-client calls in 26
+methods (25 actionable + one safe fees preflight) and 6 on `tx`. The
+architecture guide's "26" described the plain-client method inventory,
+not 26 unsafe writes. Later W3a changes added authoritative `tx` assertions
+and kept many preflights, so the *current* number of calls is not a measure
+of the original defect. The W3a acceptance scope is the **25 unsafe write
+methods**, with fees included as an already-safe inventory control.
+
+| Service | Original plain-client method inventory | W3a evidence |
+|---|---|---|
+| Calendar (1) | `updateTerm` | guard and update on `tx` (`65602c8`) |
+| Rollover (1) | `createDraft` | guard, authoritative reads and draft create on `tx` (`3854d02`) |
+| Sections (6) | `create`, `update`, `enroll`, `unenroll`, `assignTeacher`, `unassignTeacher` | all guarded writes on `tx` (`65602c8`, `18e3d18`, `d6e91c6`, `721f6d9`); enrollment also takes Section lock |
+| Assignments (6) | `create`, `update`, `remove`, `publish`, `submit`, `grade` | all guarded writes on `tx` (`18e3d18`, `92e166a`, `01b0ba5`, `d07f17d`); publish emits only after commit |
+| Attendance (2) | `updateSession`, `saveAttendance` | guard and writes on `tx` (`18e3d18`, `d6e91c6`); absence events post-commit |
+| Exams (6) | `create`, `update`, `publish`, `createPaper`, `updatePaper`, `saveMarks` | guard and writes on `tx` (`65602c8`, `18e3d18`, `d6e91c6`) |
+| Fees (1) | `generateInvoices` preflight | **ALREADY SAFE**: separate in-transaction re-assert before all invoice creates |
+| Timetable (3) | `createSlot`, `updateSlot`, `deleteSlot` | create/update use Term `FOR UPDATE` then guard on `tx`; delete guard and write on `tx` (`65602c8`, `18e3d18`, `96e620c`) |
+
+**Result: 25 fixed / 1 already safe, 0 open in N-3's 26-method inventory.**
+This count does **not** resolve the separate unlocked source-Term read
+called out above.
+The timetable helper's Term `FOR UPDATE` is acquired *before* calling the
+existing `FOR SHARE` guard on the same `tx`; it is not a lock upgrade.
+Fire-and-forget audit calls remain post-commit; existing atomic audit
+calls remain within their original transactions. Existing preflights
+preserve error ordering; they do not replace the transaction guard.
+
+### N-4 and N-16b dispositions
+
+- **N-4 CLOSED** (`721f6d9`, `bf16f46`). Both enrollment and capacity
+  reduction acquire Term then Section and use the locked Section's current
+  capacity/ACTIVE enrollment count for the authoritative decision. The
+  original `SECTION_FULL` (409) and `CAPACITY_BELOW_ENROLLMENT` (400)
+  semantics, including equality at capacity, remain. See
+  `test/m24-w3a-n4-enrollment-concurrency.e2e-spec.ts`: controlled 29/30
+  competing enrollments and enrollment-first reduction both preserve
+  ACTIVE <= capacity. The latter mutation test removed the Section lock
+  and recheck and observed **30 ACTIVE with capacity 29**. There is no
+  separate controlled *reduction-first* interleaving test; the shared
+  Section lock and `SECTION_FULL` check enforce that order in source.
+- **N-16b CLOSED** (`96e620c`). Create and update serialize on the owning
+  Term `FOR UPDATE`, then check same-section overlap/effective-room
+  overlap and write on the same `tx`. The two controlled races in
+  `test/m24-w3a-n16b-timetable-concurrency.e2e-spec.ts` yield one
+  `SLOT_CONFLICT` create and one `ROOM_CONFLICT` update. Removing Term
+  `FOR UPDATE` made both conflicting writers succeed in the mutation run.
+  Teacher/student clash detection and cross-term room checks remain
+  documented limitations outside this finding.
+
+### Verification and remaining scope
+
+W3a's focused suites cover Batch 1–4 and the isolated rollover, submit,
+grade, N-4 and timetable fixes with real PostgreSQL lock barriers and
+mutation checks. The prior N-4 implementation run reported **886/886 API
+tests across 67 suites**, typecheck passing, Prisma valid, **15 migrations
+unchanged**, healthy Docker services, and demo integrity unchanged. These
+are *prior-run results*, not tests rerun for this documentation update.
+The N-4 reduction-first order was not independently forced in a test.
+No migration, schema, dependency, permission, role, route, or UI change was
+required for W3a. **W3c (N-12), W4, and the W2 remainder remain open; M24
+is NOT closed. W3a itself remains OPEN pending source-Term locking in
+`rollover.execute` and a concurrency regression.**

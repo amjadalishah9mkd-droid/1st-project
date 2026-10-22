@@ -411,7 +411,9 @@ Below are the architecturally important ones.
   (`SLOT_CONFLICT`) and room overlap (`ROOM_CONFLICT`); since M24-W3b the room check
   uses the **effective room** `slot.room ?? section.room`, matching how the room is
   resolved elsewhere. Teacher and student clash detection are **[NOT ADDRESSED]** (a
-  documented limitation), and slot creation is not transactional (finding N-16b).
+  documented limitation). Since W3a (`96e620c`), slot creation and updates
+  serialize on the owning Term `FOR UPDATE` and perform authoritative conflict
+  checks and writes in the same transaction; N-16b is **CLOSED**.
 
 ### `fees/` and `payments/`
 - **Files:** `fees/fees.controller.ts`, `fees/fees.service.ts`, `fees/money.ts`,
@@ -1228,17 +1230,27 @@ the plain Prisma client (not a transaction), the little query commits immediatel
 **the lock is released before the caller's write**. A concurrent "close the term"
 could then commit in the gap, and the write lands in a closed term.
 
-> **This is a real, [DOCUMENTED] finding — N-3.** The M24 design records that the
-> guard passes a transaction client at only a few call sites and **26 call sites**
-> across 8 services still pass the plain client. It is **[NOT ADDRESSED]**: N-3 is
-> assigned to the not-yet-executed **M24-W3a**. Verified today: no `assertTermOpen`
-> call site was changed by W3b.
+> **Historical finding — original N-3 call sites remediated in W3a.** At this guide's original
+> W3b inspection, 26 call sites in 26 methods passed the plain client. The
+> W0 design's **25 of 33** refers to actionable writes: 33 total calls,
+> 27 plain-client calls, minus the analytics read guard (N-13, removed in
+> W1) and the already-safe `fees.generateInvoices` preflight. After W1,
+> 32 calls remained (26 plain-client calls, including that safe preflight;
+> six `tx` calls). **25 needed remediation, one was already safe.** W3a
+> now supplies an authoritative in-transaction guard for every protected
+> write; surviving plain-client calls are error-order preflights. The
+> complete inventory and commit evidence are in the M24 design's §29.
 
-**So: CampusOS is not uniformly transaction-safe.** The money paths and term
-transitions are properly locked; several academic write paths are guarded but not
-yet serialized. Related [NOT ADDRESSED] items: **N-4** (enrollment capacity
-read-modify-write with no lock or DB constraint) and **N-16b** (non-transactional
-timetable slot creation).
+**Current W3a progress [VERIFIED from source]:** N-3's 25 affected write
+methods hold the Term lifecycle lock until their transaction commits. N-4
+also protects capacity on both enrollment and capacity reduction, using
+Term → Section locking and an authoritative ACTIVE count. N-16b serializes
+timetable create/update by Term. Fire-and-forget audit remains post-commit;
+W3c and the W2 remainder are separate, still-open work. **W3a is NOT
+CLOSED:** `rollover.execute` reads the source Term status without a lock
+before conditionally writing source enrollments; its source comment defers
+that locking to N-3/W3a. A concurrent source close could invalidate the
+read-only decision. This path needs its own transaction-lock and race review.
 
 ---
 
@@ -1494,7 +1506,7 @@ cross-checked in source:
 | **W1** validation & tenancy (N-1, N-5, N-13, N-25) | COMPLETE (`2785c78`) | `examAnalyticsQuerySchema` present; suite `m24-w1-validation-tenancy` present |
 | **W2** file/session/export | **PARTIAL** (`62cc734`) | N-6/N-23-ordering/N-24 implemented; suite present |
 | **W3b** lifecycle & grade bands | COMPLETE (`feeaeef`) | `BANDS_NOT_CONTIGUOUS`, `sourceIsReadOnly`, `rolloverRow`, `SESSION_HAS_ATTENDANCE`, `sectionRoom` and the ACTIVE-enrollment filter all found in source |
-| **W3a** (N-3, N-4, N-16b) | **NOT STARTED** | no `assertTermOpen` call-site changes; no capacity lock |
+| **W3a** (N-3, N-4, N-16b) | **PARTIAL** (`bf16f46`, latest capacity fix) | 25 N-3 call-site writes protected, fees already safe; N-4 and N-16b closed; source-Term locking in `rollover.execute` still open; see design §29 |
 | **W3c** (N-12) | **NOT STARTED** | scheduler unchanged |
 | **W4** close-out | **NOT STARTED** | M24 not marked closed |
 
@@ -1504,9 +1516,12 @@ cross-checked in source:
   N-8 (college-wide signing model), N-9 (unvalidated `fileUrl`), N-10 (login lookup
   not tenant-scoped; global rate-limit key), N-22 (no orphan reaper),
   N-23 download-half (downloads unaudited), Res-1 (`Resource.fileUrl` not backfilled).
-- **W3a/W3c:** N-3 (26 call sites where the `FOR SHARE` guard is released before the
-  write), N-4 (capacity TOCTOU), N-16b (non-transactional slot create), N-12
-  (unbounded scheduler sweeps, no distributed lock, unbounded background logging).
+- **W3a PARTIAL / W3c OPEN:** N-3's 25 actionable call-site writes (plus one
+  already-safe fees preflight in the 26-method inventory), N-4 (capacity
+  TOCTOU in both directions), and N-16b (timetable create/update) have been
+  remediated. Source-Term locking in `rollover.execute` remains open. N-12 remains
+  **[NOT ADDRESSED]** (unbounded sweeps, no distributed lock, unbounded
+  background logging).
 - **M25:** N-11 **retroactive-regrading guard** and freeze-at-publish (decision O-5);
   reporting/analytics; CI/lint/web test harness (O-H); N-26…N-32; S-3/S-4/S-5; D-3;
   O-A…O-H; T-1…T-6.
@@ -1616,8 +1631,8 @@ These are the places where changes are riskiest. I distinguish clearly between
 |---|---|---|
 | **Authorization** | Two guards + `PolicyService` + a "list-level contract" that requires services to narrow queries themselves. Forgetting to narrow silently over-shares. | N-28 (`DEPARTMENT` scope unused); N-32 (no dedicated suite for `src/access`) |
 | **Tenancy** | 27 of 57 models have no `collegeId`; their boundary depends on remembering the parent predicate. | N-1 (fixed in W1) is exactly this class; N-10 (login lookup) **[NOT ADDRESSED]** |
-| **Transactions / concurrency** | Money paths are locked; several academic write paths are guarded but the lock is released before the write. | **N-3** (26 sites), **N-4** (capacity TOCTOU), **N-16b** — all **[NOT ADDRESSED]** (W3a) |
-| **Term lifecycle & rollover** | `rollover.execute` is one long transaction: lock, CAS claim, two passes, conditional source mutation. Interacts with CLOSED-term rules everywhere. | N-2, N-15 fixed in W3b; source-term read is unlocked by design (locking deferred to W3a) |
+| **Transactions / concurrency** | Money paths and the 25 original N-3 academic call-site writes hold their lifecycle locks through the write; enrollment/capacity and timetable conflicts are serialized. | N-4 and N-16b closed; N-3 call-site inventory remediated, but rollover source-term lock still open in W3a; see design §29 |
+| **Term lifecycle & rollover** | `rollover.execute` is one long transaction: destination lock, CAS claim, two passes, conditional source mutation. Interacts with CLOSED-term rules everywhere. | N-2, N-15 fixed in W3b; source-term status read remains unlocked (W3a blocker) |
 | **File authorization** | Five separable concerns; `purpose` is stored but not used for authorization; grandfathered keys fail open. | **N-7, N-8, N-9, N-22, N-23-download, Res-1** — all **[NOT ADDRESSED]** |
 | **Grade bands vs published results** | Labels resolve at **read** time, so configuration changes are retroactive for live results (finalized snapshots are immune). | N-11 coverage half closed in W3b; **retroactive guard deferred to M25 (O-5)** |
 | **Authentication / session lifecycle** | Access tokens are stateless; refresh families rotate with reuse detection; suspension relies on a fresh DB read per request. | Documented limitations: access tokens survive logout ≤15 min; login timing side channel; in-memory per-process rate limiting |
@@ -1725,5 +1740,5 @@ These are the places where changes are riskiest. I distinguish clearly between
   are the most precise statement of intended behaviour in this repository.
 - Before assuming something is finished, check the footer of
   `docs/CAMPUSOS_DEVELOPMENT_HISTORY.md` and the disposition tables in
-  `docs/M24_PLATFORM_DISCOVERY_DESIGN.md`. **M24 is still OPEN**: W3a, W3c and W4
-  have not been executed, and the W2 remainder is deferred.
+  `docs/M24_PLATFORM_DISCOVERY_DESIGN.md`. **M24 is still OPEN**: W3a is
+  partial; W3c and W4 have not been executed, and the W2 remainder is deferred.
