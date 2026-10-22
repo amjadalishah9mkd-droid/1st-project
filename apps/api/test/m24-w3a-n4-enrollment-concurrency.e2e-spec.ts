@@ -274,6 +274,89 @@ describe("M24-W3a — N-4 + N-3 #5 enrollment transaction integrity", () => {
     }
   }, 180_000);
 
+  it("rejects a capacity reduction after a concurrent enrollment consumes the final seat", async () => {
+    const f = await freshFixture("inverse");
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    class Rollback extends Error {}
+
+    // EXCLUSIVE permits preflight counts but parks the enrollment INSERT.
+    // The enrollment already holds Section FOR UPDATE, so update() can read
+    // the stale 29 preflight count but must wait for that Section row.
+    const parker = prisma
+      .$transaction(
+        async (tx) => {
+          await tx.$executeRawUnsafe('LOCK TABLE "Enrollment" IN EXCLUSIVE MODE');
+          await held;
+          throw new Rollback();
+        },
+        { timeout: 120_000, maxWait: 30_000 },
+      )
+      .catch((error) => {
+        if (!(error instanceof Rollback)) throw error;
+      });
+
+    let enrollment: request.Response | undefined;
+    let reduction: request.Response | undefined;
+    const inFlight: Array<Promise<request.Response>> = [];
+    try {
+      await waitFor(async () => {
+        const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
+          SELECT count(*) AS n FROM pg_locks
+          WHERE relation = '"Enrollment"'::regclass
+            AND mode = 'ExclusiveLock' AND granted`;
+        return Number(rows[0].n) > 0;
+      }, "Enrollment table lock");
+
+      inFlight.push((async () => await enroll(f.sectionId, f.studentIds[29]))());
+      await waitFor(async () => {
+        const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
+          SELECT count(*) AS n FROM pg_locks
+          WHERE relation = '"Enrollment"'::regclass AND NOT granted`;
+        return Number(rows[0].n) > 0;
+      }, "enrollment to park after locking Section");
+
+      inFlight.push((async () =>
+        await http.patch(`/api/v1/sections/${f.sectionId}`).set(auth()).send({ capacity: 29 }))());
+      await waitFor(async () => {
+        const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
+          SELECT count(*) AS n FROM pg_locks WHERE NOT granted`;
+        return Number(rows[0].n) >= 2;
+      }, "capacity reduction to wait for Section");
+
+      release();
+      await parker;
+      [enrollment, reduction] = await Promise.all(inFlight);
+
+      const section = await prisma.section.findUniqueOrThrow({
+        where: { id: f.sectionId },
+        select: { capacity: true },
+      });
+      const activeCount = await prisma.enrollment.count({
+        where: { sectionId: f.sectionId, status: "ACTIVE" },
+      });
+      expect(activeCount).toBeLessThanOrEqual(section.capacity);
+      expect(enrollment.status).toBe(201);
+      expect(reduction.status).toBe(400);
+      expect(reduction.body.error.code).toBe("CAPACITY_BELOW_ENROLLMENT");
+      expect(section.capacity).toBe(30);
+      expect(activeCount).toBe(30);
+    } finally {
+      release();
+      await parker.catch(() => undefined);
+      await Promise.allSettled(inFlight);
+      await prisma.auditLog.deleteMany({
+        where: {
+          targetId: f.sectionId,
+          action: { in: ["sections.updated", "enrollments.created"] },
+        },
+      });
+      await dropFixture(f);
+    }
+  }, 180_000);
+
   async function termLockBlocked(termId: string): Promise<boolean> {
     try {
       await prisma.$transaction(async (tx) => {

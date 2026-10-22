@@ -261,6 +261,27 @@ export class SectionsService {
       // precedence (TERM_CLOSED before CAPACITY_BELOW_ENROLLMENT /
       // DUPLICATE_SECTION_NAME) — dual pattern per `generateInvoices`.
       await this.lifecycle.assertTermOpen(tx, user.collegeId, existing.termId);
+      if (input.capacity !== undefined) {
+        // Match enroll's Term -> Section lock order. The preflight count can
+        // become stale while an enrollment holds this row lock, so decide
+        // capacity only after acquiring it and re-reading the ACTIVE count.
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM "Section"
+          WHERE id = ${id} AND "collegeId" = ${user.collegeId}
+          FOR UPDATE`;
+        if (locked.length === 0) {
+          throw new NotFoundException({ code: 'NOT_FOUND', message: 'Section not found' });
+        }
+        const activeCount = await tx.enrollment.count({
+          where: { sectionId: id, status: 'ACTIVE' },
+        });
+        if (input.capacity < activeCount) {
+          throw new BadRequestException({
+            code: 'CAPACITY_BELOW_ENROLLMENT',
+            message: `Capacity cannot be below the current enrollment (${activeCount})`,
+          });
+        }
+      }
       const row = await tx.section.update({
         where: { id },
         data: { name: input.name, capacity: input.capacity, room: input.room },
