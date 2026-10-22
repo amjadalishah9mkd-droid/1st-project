@@ -1450,3 +1450,31 @@ No migration, schema, dependency, permission, role, route, or UI change was
 required for W3a. **W3c (N-12), W4, and the W2 remainder remain open; M24
 is NOT closed. W3a itself remains OPEN pending source-Term locking in
 `rollover.execute` and a concurrency regression.**
+
+### W3a source-Term coordination implementation (uncommitted; closure review pending)
+
+The above source-Term blocker has now been implemented in the **current
+uncommitted worktree**, not in a numbered commit. A shared transaction-level,
+per-college `pg_advisory_xact_lock` is the first lock taken by
+`rollover.createDraft`, `rollover.execute`, and `calendar.setCurrentTerm`.
+That serializes multi-Term operations before their existing destination/target
+Term and rollover-row locks, including the source-FK path in draft creation.
+Single-Term close/reopen and `updatePlan` retain their existing protocols.
+Within execute, a tenant-scoped source-Term `FOR SHARE` returns the status
+used for `sourceIsReadOnly` and is held through the conditional source
+enrollment writes. A CLOSED source remains usable without rewriting its
+history; optional source close remains post-commit.
+
+`test/m24-w3a-term-coordination.e2e-spec.ts` uses real PostgreSQL lock
+barriers and observed waits: close-first, rollover-first, set-current targeting
+source and destination, draft vs set-current, duplicate execute, opposing
+empty-plan rollovers, and set-current vs close. **8/8** focused tests passed;
+the focused rollover-first test failed when the source `FOR SHARE` was
+temporarily removed, then passed after restoration. Existing related suites
+**97/97 across 7 suites** passed; the full API regression **894/894 across
+68 suites** passed. Typecheck and Prisma validation passed, migrations remain
+15. Host API/web builds still encounter pre-existing root-owned `dist`/`.next`
+permission failures; shared build and runtime health passed. These are
+observed results from this implementation run, not a commit or a formal W3a
+close-out. **W3a remains OPEN pending independent review of the complete
+closure criteria; M24 remains OPEN.**

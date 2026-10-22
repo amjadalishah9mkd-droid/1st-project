@@ -334,6 +334,7 @@ export class CalendarService {
       });
     }
     const updated = await this.prisma.$transaction(async (tx) => {
+      await this.lifecycle.lockCollegeTermOperations(tx, user.collegeId);
       // M17-W1: row-lock the target so set-current serializes against a
       // concurrent close (design §17), then re-check lifecycle state —
       // a CLOSED term can never become current (D-3 corollary).

@@ -109,6 +109,7 @@ export class RolloverService {
     }
 
     const created = await this.prisma.$transaction(async (tx) => {
+      await this.lifecycle.lockCollegeTermOperations(tx, user.collegeId);
       // M24-W3a (N-3 #2): the guard above is only a preflight. This
       // authoritative guard holds the destination Term FOR SHARE through
       // every rollover read and the draft write below, so a close cannot
@@ -477,6 +478,7 @@ export class RolloverService {
 
     const counters = await this.prisma.$transaction(
       async (tx) => {
+        await this.lifecycle.lockCollegeTermOperations(tx, user.collegeId);
         // M17-W1: destination must be open, checked INSIDE the execution
         // transaction (FOR SHARE serializes against a concurrent close).
         await this.lifecycle.assertTermOpen(tx, user.collegeId, toTermId);
@@ -508,14 +510,16 @@ export class RolloverService {
         // (M17 O-3) but is READ-ONLY — the file's own invariant is that
         // "source sections and all historical data stay untouched". The
         // source-enrollment conclusion below is a WRITE to the source
-        // term, so it must not run when the source is closed. The status
-        // is read inside the transaction; no new lock is taken (locking
-        // is N-3 / W3a scope).
-        const sourceTerm = await tx.term.findFirstOrThrow({
-          where: { id: rolloverRow.fromTermId, collegeId: user.collegeId },
-          select: { status: true },
-        });
-        const sourceIsReadOnly = sourceTerm.status === 'CLOSED';
+        // term. Hold FOR SHARE through the source-enrollment writes so a
+        // concurrent close (FOR UPDATE) cannot invalidate this decision.
+        const source = await tx.$queryRaw<Array<{ status: string }>>`
+          SELECT "status" FROM "Term"
+          WHERE id = ${rolloverRow.fromTermId} AND "collegeId" = ${user.collegeId}
+          FOR SHARE`;
+        if (source.length === 0) {
+          throw new NotFoundException({ code: 'NOT_FOUND', message: 'Term not found' });
+        }
+        const sourceIsReadOnly = source[0].status === 'CLOSED';
         const targetSectionBySource = new Map<string, string>();
         const stats = {
           sectionsCreated: 0,

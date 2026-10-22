@@ -3945,6 +3945,22 @@ role/permission, or frontend implementation was part of W3a.
 *Last updated after the M24-W3a source and evidence reconciliation;
 W3a PARTIAL (source-Term lock open), W3c/W4 not started, M24 OPEN.*
 
+**Subsequent W3a implementation (uncommitted, independent closure review
+pending):** A common college-scoped transaction advisory lock is now taken
+before row locks in `rollover.createDraft`, `rollover.execute`, and
+`calendar.setCurrentTerm`. Execute re-reads source Term status under a
+tenant-scoped `FOR SHARE` lock held through the conditional source-enrollment
+writes; CLOSED-source rollover and post-commit optional source close are
+preserved. A real-PostgreSQL suite exercises close-first, rollover-first,
+set-current against both Terms, draft versus set-current, opposing empty-plan
+rollovers, duplicate execution and the current-Term restriction: **8/8**.
+The rollover-first test failed when source `FOR SHARE` was temporarily removed
+and passed after restoration. Related suites **97/97 (7)** and full API
+regression **894/894 (68)** passed; typecheck and Prisma validation passed;
+15 migrations unchanged. Shared build and Docker health passed; host API/web
+builds still fail on pre-existing root-owned artifacts. **No W3a closure
+commit exists; formal W3a and M24 status remain OPEN pending review.**
+
 - **M19 status**: DESIGN/DISCOVERY COMPLETE only —
   `docs/M19_PLATFORM_HARDENING_DESIGN.md` recommends Platform Security
   Hardening & Debt Retirement (P2-IDOR-1 file authorization, mail
@@ -3958,9 +3974,9 @@ W3a PARTIAL (source-Term lock open), W3c/W4 not started, M24 OPEN.*
   GuardianLink, pending O-2 — not "dead columns").
 - **M24 status**: W0 and W1 COMPLETE; W2 **PARTIAL**; **W3b COMPLETE**
   (N-2, N-11 coverage, N-14, N-15, N-16a, N-17, N-18 closed). N-1 (HIGH)
-  remains CLOSED. **W3a PARTIAL** (N-3's original 25 write call sites,
-  N-4 in both directions and N-16b remediated; rollover source-Term lock
-  still open);
+  remains CLOSED. **W3a IMPLEMENTED, REVIEW PENDING** (N-3's original 25
+  write call sites, N-4 in both directions, N-16b, and source-Term locking
+  implemented; no formal closure);
   **W3c** (N-12) and **W4** NOT started; the W2 remainder and N-11's
   retroactive guard (O-5 → M25) remain deferred. M24 is **NOT closed**.
 - **M23 status**: **M23 COMPLETE AND CLOSED (W0–W4)** — Authorization
@@ -3982,7 +3998,7 @@ W3a PARTIAL (source-Term lock open), W3c/W4 not started, M24 OPEN.*
   capacity race) on branch
   `amjad-ali-s/set-up-this-codebase-for-6iTTUe`
 - **Migrations**: 15 found, database schema up to date
-- **Tests**: **886/886 passing** (67 suites; prior N-4 implementation run)
+- **Tests**: **894/894 passing** (68 suites; W3a coordination implementation run)
 - **Typecheck**: clean (api, web, shared)
 - **Docker health**: postgres/api/web all healthy
   (`/api/v1/health` → `database: up`)
@@ -3991,8 +4007,8 @@ W3a PARTIAL (source-Term lock open), W3c/W4 not started, M24 OPEN.*
   FEATURE_DISABLED without env config)
 - **Known technical debt**: see §13 and
   `docs/M23_PLATFORM_DISCOVERY_DESIGN.md` (current reconciliation)
-- **Next planned milestone**: resolve the W3a rollover source-Term lock
-  blocker, then re-audit W3a. M24-W3c (N-12) has not started, followed by
+- **Next planned milestone**: independently review W3a closure evidence.
+  M24-W3c (N-12) has not started, followed by
   W4 close-out. The W2 remainder still needs its recorded decisions.
   Reporting/analytics and CI/lint remain M25 candidates.
 

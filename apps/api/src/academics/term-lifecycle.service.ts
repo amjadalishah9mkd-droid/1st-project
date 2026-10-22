@@ -43,6 +43,11 @@ export class TermLifecycleService {
     private readonly audit: AuditService,
   ) {}
 
+  /** Coordinate multi-Term academic operations before they take any row locks. */
+  async lockCollegeTermOperations(tx: Tx, collegeId: string): Promise<void> {
+    await tx.$queryRaw`SELECT true AS locked FROM pg_advisory_xact_lock(hashtext(${`${collegeId}:academic-terms`}))`;
+  }
+
   /**
    * Reusable CLOSED-term guard (W2 wires the call sites). Term identity
    * must be resolved SERVER-side by the caller (section/exam/structure →
